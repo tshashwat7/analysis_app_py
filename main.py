@@ -1,0 +1,603 @@
+# main.py
+import asyncio
+import os
+import json
+import time
+import datetime
+import math
+import threading
+import concurrent.futures
+from typing import Dict, Any, List, Tuple, Optional
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, Form, Body, Query
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
+import pandas as pd
+import logging
+
+# --- Modular services ---
+from services.data_fetch import (
+    safe_history,
+    save_stocks_list,
+    parse_index_csv,
+    get_price_history,
+    fetch_data
+)
+from services.fundamentals import compute_fundamentals
+from services.indicators import compute_indicators
+from services.signal_engine import (
+    compute_all_profiles, 
+    enrich_hybrid_metrics, 
+    generate_trade_plan,
+    score_value_profile,
+    score_growth_profile,
+    score_quality_profile,
+    score_momentum_profile
+)
+from services.corporate_actions import get_corporate_actions
+from services.summaries import build_all_summaries
+from services.metrics_ext import compute_extended_metrics_sync
+from services.flowchart_helper import build_flowchart_payload, df_hash
+
+
+# --- CACHE WARMER ---
+
+def run_analysis_for_cache(symbol: str):
+    """Synchronous worker function to execute the heavy lifting."""
+    try:
+        run_full_analysis(symbol)
+        logger.debug(f"[WARMER] Successfully warmed cache for {symbol}.")
+    except Exception as e:
+        logger.error(f"[WARMER] Failed to run analysis for {symbol}: {e}")
+
+async def periodic_warmer():
+    """The async loop that schedules the warming tasks."""
+    # Wait a bit after startup before kicking in
+    await asyncio.sleep(10)
+    
+    while True:
+        try:
+            # Get symbols
+            symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST[:20]] 
+            logger.info(f"[WARMER] Starting periodic cache warm for {len(symbols_to_warm)} symbols.")
+            
+            loop = asyncio.get_running_loop()
+            
+            # ### PATCH FIX: Use BACKGROUND_EXECUTOR
+            futures = [
+                loop.run_in_executor(BACKGROUND_EXECUTOR, run_analysis_for_cache, symbol)
+                for symbol in symbols_to_warm
+            ]
+            
+            await asyncio.gather(*futures, return_exceptions=True)
+            logger.info(f"[WARMER] Cycle complete. Sleeping {CACHE_WARMING_INTERVAL_SECONDS}s.")
+            
+        except Exception as e:
+            logger.error(f"[WARMER] Error in loop: {e}")
+        
+        await asyncio.sleep(CACHE_WARMING_INTERVAL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global cache_warmer_task
+    logger.info(f"Starting API Executor ({API_THREADS} threads) and Background Executor ({BG_THREADS} threads)...")
+    
+    # Start background task
+    cache_warmer_task = asyncio.create_task(periodic_warmer())
+    logger.info("Background Cache Warmer started.")
+    
+    yield
+    
+    # Shutdown logic
+    logger.info("Shutting down Executors...")
+    API_EXECUTOR.shutdown(wait=False)
+    BACKGROUND_EXECUTOR.shutdown(wait=False)
+    
+    if cache_warmer_task:
+        cache_warmer_task.cancel()
+        try:
+            await cache_warmer_task
+        except asyncio.CancelledError:
+            logger.info("Background Cache Warmer task successfully cancelled.")
+        except Exception as e:
+            logger.error(f"Error during cache warmer shutdown: {e}")
+
+app = FastAPI(lifespan=lifespan)
+templates = Jinja2Templates(directory="templates")
+
+# --- PYDANTIC MODELS ---
+class AnalyzeRequest(BaseModel):
+    symbol: str
+    index: str = "nifty50"
+
+class QuickScoresRequest(BaseModel):
+    symbols: List[str]
+    index_name: str = "nifty50"
+
+class CorpActionsRequest(BaseModel):
+    tickers: List[str]
+
+logger = logging.getLogger("stock_analyzer")
+logging.basicConfig(level=logging.INFO)
+
+# --- FILES ---
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+NSE_STOCKS_FILE = os.path.join(DATA_DIR, "nse_stocks.json")
+
+# ==============================================================================
+# ### PATCH FIX: SEPARATE EXECUTORS FOR API AND BACKGROUND TASKS
+# ==============================================================================
+# API Executor: Higher thread count for responsive user interface
+API_THREADS = 30 
+API_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=API_THREADS, thread_name_prefix="API_Worker")
+
+# Background Executor: Lower thread count to prevent resource starvation
+BG_THREADS = 5
+BACKGROUND_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=BG_THREADS, thread_name_prefix="BG_Worker")
+
+# Global reference for the warmer task
+cache_warmer_task = None
+CACHE_WARMING_INTERVAL_SECONDS = 15 * 60  # 15 minutes
+
+# --- CACHE HELPERS ---
+SCORE_CACHE: Dict[str, Dict[str, Any]] = {}
+CACHE_LOCK = threading.Lock()
+CACHE_TTL = 60 * 60  # 1 hour
+
+def get_cached(symbol: str):
+    with CACHE_LOCK:
+        entry = SCORE_CACHE.get(symbol)
+        if not entry:
+            return None
+        if time.time() - entry["ts"] > CACHE_TTL:
+            del SCORE_CACHE[symbol]
+            return None
+        return entry["value"]
+
+def set_cached(symbol: str, value: Dict[str, Any]):
+    with CACHE_LOCK:
+        SCORE_CACHE[symbol] = {"value": value, "ts": time.time()}
+
+def get_cached_stocks(index_file: str) -> List[Tuple[str, str]]:
+    if os.path.exists(index_file):
+        try:
+            with open(index_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                out: List[Tuple[str, str]] = []
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and "symbol" in item:
+                            out.append((item["symbol"], item.get("name", item["symbol"])))
+                        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                            out.append((item[0], item[1]))
+                        elif isinstance(item, str):
+                            out.append((item, item))
+                return out
+        except Exception as e:
+            logger.exception("Error reading cached stocks: %s", e)
+            return []
+    return []
+
+# --- GLOBAL STOCK LIST LOADER ---
+ALL_STOCKS_LIST = get_cached_stocks(os.path.join(DATA_DIR, "nifty500.json"))
+if not ALL_STOCKS_LIST:
+    ALL_STOCKS_LIST = get_cached_stocks(NSE_STOCKS_FILE)
+ALL_STOCKS_MAP = {s[0]: s[1] for s in ALL_STOCKS_LIST}
+
+
+# --- CORE ANALYSIS FUNCTIONS ---
+
+def run_full_analysis(symbol: str) -> Dict[str, Any]:
+    """
+    Runs the complete multi-horizon analysis for one stock.
+    SYNCHRONOUS function - meant to be run in an Executor.
+    """
+    analysis_data = {
+        "symbol": symbol,
+        "fundamentals": {},
+        "indicators": {},
+        "full_report": {},
+        "trade_recommendation": {},
+        "meta_scores": {},
+        "macro_trend_status": "N/A",
+        "macro_close": None,
+        "partial_error": False,
+        "error_details": []
+    }
+    horizons = ["intraday", "short_term", "long_term", "multibagger"]
+    
+    # 1. Fundamentals
+    try:
+        analysis_data["fundamentals"] = compute_fundamentals(symbol)
+    except Exception as e:
+        analysis_data["partial_error"] = True
+        analysis_data["error_details"].append(f"Fundamentals Failed: {e}")
+        logger.error(f"[{symbol}] Fundamentals failed: {e}")
+    
+    # 2. Indicators
+    all_indicators = {}
+    analysis_data["raw_indicators_by_horizon"] = {}
+    for h in horizons:
+        try:
+            h_indicators = compute_indicators(symbol, horizon=h)
+            analysis_data["raw_indicators_by_horizon"][h] = h_indicators
+            
+            # 🔧 Overwrite Warning Implementation (Preserved from your code)
+            for key, new_val in h_indicators.items():
+                if key in all_indicators:
+                    old_val = all_indicators[key]
+                    old_v = old_val.get('value')
+                    new_v = new_val.get('value')
+                    # Compare values for debugging warning
+                    if str(old_v) != str(new_v):
+                        logger.debug(f"[{symbol}] WARNING: Overwrote indicator '{key}' from horizon '{h}'! Old value: {old_v}, New value: {new_v}")
+                all_indicators.update(h_indicators)
+            
+        except Exception as e:
+            analysis_data["partial_error"] = True
+            analysis_data["error_details"].append(f"Indicators for {h} Failed: {e}")
+            logger.warning(f"[{symbol}] Failed to compute indicators for horizon '{h}': {e}")
+
+    analysis_data["indicators"] = all_indicators
+    
+    # 3. Hybrids
+    if analysis_data["fundamentals"] and analysis_data["indicators"]:
+        try:
+            hybrids = enrich_hybrid_metrics(analysis_data["fundamentals"], analysis_data["indicators"])
+            analysis_data["fundamentals"].update(hybrids)
+        except Exception as e:
+            analysis_data["error_details"].append(f"Hybrid Metric Calculation Failed: {e}")
+    
+    # 4. Macro Context
+    try:
+        nifty_metric = analysis_data["indicators"].get("nifty_trend_score")
+        if nifty_metric:
+            analysis_data["macro_trend_status"] = nifty_metric.get("desc", "N/A")
+            analysis_data["macro_close"] = nifty_metric.get("value")
+            if not analysis_data["macro_trend_status"] or analysis_data["macro_trend_status"] == "N/A":
+                analysis_data["macro_trend_status"] = "Neutral"
+    except Exception:
+        pass
+
+    # 5. Profile Scores, Meta Scores, Trade Plan
+    if analysis_data["fundamentals"] and analysis_data["indicators"]:
+        try:
+            full_report = compute_all_profiles(symbol, analysis_data["fundamentals"], analysis_data["indicators"])
+            analysis_data["full_report"] = full_report
+            
+            analysis_data["meta_scores"] = {
+                "value": score_value_profile(analysis_data["fundamentals"]),
+                "growth": score_growth_profile(analysis_data["fundamentals"]),
+                "quality": score_quality_profile(analysis_data["fundamentals"]),
+                "momentum": score_momentum_profile(analysis_data["fundamentals"], analysis_data["indicators"])
+            }
+            
+            best_profile = full_report.get("profiles", {}).get(full_report.get("best_fit", "short_term"), {})
+            trade_plan = generate_trade_plan(best_profile, analysis_data["indicators"], analysis_data["macro_trend_status"])
+            analysis_data["trade_recommendation"] = trade_plan
+        
+        except Exception as e:
+            analysis_data["partial_error"] = True
+            analysis_data["error_details"].append(f"Scoring/Trade Plan Failed: {e}")
+            logger.error(f"[{symbol}] Scoring/Trade Plan failed: {e}")
+
+    return analysis_data
+
+
+# --- ENDPOINTS ---
+
+@app.post("/quick_scores")
+async def quick_scores(payload: QuickScoresRequest): 
+    """
+    The Core Endpoint for the Hybrid Dashboard.
+    Receives chunk of symbols, runs analysis on API_EXECUTOR.
+    """
+    symbols = [s.strip().upper() for s in payload.symbols if s.strip()]
+    index_name = payload.index_name
+    
+    results: Dict[str, Any] = {}
+    to_fetch = []
+    
+    for s in symbols:
+        c = get_cached(s)
+        if c:
+            results[s] = {**c, "cached": True}
+        else:
+            to_fetch.append(s)
+            
+    if not to_fetch:
+        return results
+
+    def worker(sym: str):
+        try:
+            # 1. Run Analysis
+            analysis_data = run_full_analysis(sym)
+            
+            # 2. Extract Data
+            best_profile = analysis_data.get("full_report", {}).get("profiles", {}).get(analysis_data.get("full_report", {}).get("best_fit", "short_term"), {})
+            trade_plan = analysis_data.get("trade_recommendation", {})
+            full_rep = analysis_data.get("full_report", {})
+            profiles = full_rep.get("profiles", {})
+
+            final_score = best_profile.get("final_score", 0)
+            confidence = int(final_score * 10) if final_score else 0
+            signal_str = trade_plan.get("signal", "N/A")
+            error_status = analysis_data.get("error_details", [])
+
+            bull_score = 0
+            if "SQUEEZE" in signal_str: bull_score = 95
+            elif "TREND" in signal_str: bull_score = 85
+            elif "DIP" in signal_str: bull_score = 75
+            elif "HOLD" in signal_str: bull_score = 50
+            else: bull_score = 20
+
+            def safe_val(v):
+                if v is None: return None
+                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return None
+                return v
+
+            # 3. Flatten for Grid
+            flat_output = {
+                "symbol": sym,
+                "score": int(final_score * 10) if final_score else 0,
+                "confidence": confidence,
+                "recommendation": best_profile.get("category", "HOLD"),
+                "bull_score": bull_score,
+                "bull_signal": signal_str.replace("_", " "),
+                
+                # Horizon Scores
+                "intra_score": safe_val(profiles.get("intraday", {}).get("final_score")),
+                "short_score": safe_val(profiles.get("short_term", {}).get("final_score")),
+                "long_score": safe_val(profiles.get("long_term", {}).get("final_score")),
+                "multi_score": safe_val(profiles.get("multibagger", {}).get("final_score")),
+                
+                # Macro context
+                "macro_index_name": index_name.upper(),
+                "error_details": "; ".join(error_status) if error_status else ""
+            }
+
+            set_cached(sym, flat_output)
+            return sym, flat_output
+            
+        except Exception as e:
+            logger.exception(f"Worker error {sym}: {e}")
+            return sym, {"symbol": sym, "recommendation": "Error"}
+
+    # ### PATCH FIX: Use API_EXECUTOR for user requests
+    loop = asyncio.get_running_loop()
+    
+    tasks = [
+        loop.run_in_executor(API_EXECUTOR, worker, s)
+        for s in to_fetch
+    ]
+    
+    worker_results = await asyncio.gather(*tasks)
+    
+    for sym, out in worker_results:
+        results[sym] = out
+            
+    return results
+
+@app.get("/load_index/{index_name}")
+async def load_index(index_name: str):
+    json_file = os.path.join(DATA_DIR, f"{index_name}.json")
+    csv_file = os.path.join(DATA_DIR, f"{index_name}.csv")
+
+    stocks = get_cached_stocks(json_file)
+    
+    if not stocks:
+        if os.path.exists(csv_file):
+            logger.info(f"JSON missing for {index_name}. Parsing CSV: {csv_file}")
+            pairs = parse_index_csv(csv_file)
+            if pairs:
+                try:
+                    json_data = [{"symbol": s, "name": n} for s, n in pairs]
+                    with open(json_file, "w", encoding="utf-8") as f:
+                        json.dump(json_data, f, indent=2)
+                    stocks = pairs
+                    logger.info(f"Created {json_file} with {len(stocks)} stocks.")
+                except Exception as e:
+                    logger.error(f"Failed to write JSON {json_file}: {e}")
+        else:
+            logger.warning(f"No JSON or CSV found for {index_name}")
+
+    if not stocks and "nifty" in index_name.lower():
+        stocks = [("RELIANCE.NS","RELIANCE"), ("TCS.NS","TCS")]
+
+    tickers = [s[0] for s in stocks]
+    pairs = {s[0]: s[1] for s in stocks}
+
+    return {
+        "index": index_name, 
+        "count": len(stocks), 
+        "tickers": tickers,
+        "pairs": pairs
+    }
+
+@app.get("/analyze", response_class=HTMLResponse)
+async def analyze_common(request: Request, symbol: str, index: str = "nifty50"):
+    try:
+        # ### PATCH FIX: Run single-stock analysis in API_EXECUTOR to prevent blocking
+        loop = asyncio.get_running_loop()
+        analysis_data = await loop.run_in_executor(API_EXECUTOR, run_full_analysis, symbol)
+        
+        profile_report = analysis_data.get("full_report", {}).get("profiles", {}).get(
+            analysis_data.get("full_report", {}).get("best_fit", "short_term"), {}
+        )
+        analysis_data["profile_report"] = profile_report
+
+        final_score = profile_report.get("final_score", 0)
+        trade_plan = analysis_data.get("trade_recommendation", {})
+        meta_scores = analysis_data.get("meta_scores", {})
+        
+        summary_payload = {
+            **profile_report,
+            "score": final_score * 10,
+            "recommendation": profile_report.get("category", "HOLD"),
+            "bull_signal": trade_plan.get("signal", "N/A"),
+            "macro_trend_status": analysis_data.get("macro_trend_status", "N/A"),
+            "macro_close": analysis_data.get("macro_close"),
+            "macro_index_name": index.upper()
+        }
+        summaries = build_all_summaries(summary_payload)
+
+        context = {
+            "request": request,
+            "symbol": symbol,
+            "error": None,
+            "full_report": analysis_data.get("full_report", {}),
+            "profile_report": profile_report,
+            "fundamentals": analysis_data.get("fundamentals", {}),
+            "indicators": analysis_data.get("indicators", {}),
+            
+            # ✅ Preserved User Logic: Meta scores sanitization
+            "meta_scores": {
+                "value": meta_scores.get("value", 0) or 0,
+                "growth": meta_scores.get("growth", 0) or 0,
+                "quality": meta_scores.get("quality", 0) or 0,
+                "momentum": meta_scores.get("momentum", 0) or 0,
+            },
+            
+            "trade_recommendation": trade_plan,
+            "summaries": summaries,
+            
+            # ✅ Preserved User Logic: Display scores
+            "final_signal": profile_report.get("category", "HOLD"),
+            "bull_signal": trade_plan.get("signal", "N/A"),
+            "total_score": final_score * 10,
+            "confidence": int(final_score * 10),
+            
+            # ✅ Preserved User Logic: Macro vars
+            "macro_index_name": index.upper(),
+            "macro_trend_status": analysis_data.get("macro_trend_status", "N/A"),
+            "macro_close": analysis_data.get("macro_close"),
+            "reasons": [trade_plan.get("reason", "")]
+        }
+        return templates.TemplateResponse("result.html", context)
+
+    except Exception as e:
+        logger.exception(f"Error in analyze_common for {symbol}: {e}")
+        return templates.TemplateResponse("result.html", {
+            "request": request, 
+            "symbol": symbol, 
+            "error": str(e),
+            "indicators": {}, "trade_recommendation": {}, "summaries": {}, 
+            "profile_report": {}, "meta_scores": {}, "full_report": {} 
+        })
+
+@app.post("/analyze", response_class=HTMLResponse)
+async def analyze_post(request: Request, symbol: str = Form(...), index: str = Form("nifty50")):
+    return await analyze_common(request, symbol.strip().upper(), index)
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.post("/corporate_action_summary")
+async def corporate_action_summary(payload: CorpActionsRequest):
+    try:
+        tickers = payload.tickers
+        if not tickers:
+            return JSONResponse({})
+            
+        summary = {}
+        # ### PATCH FIX: Use API_EXECUTOR here too
+        loop = asyncio.get_running_loop()
+        
+        # Wrapper for concurrent executor submission
+        def fetch_acts(t):
+            return t, get_corporate_actions([t], mode="upcoming", lookback_days=7)
+
+        tasks = [
+            loop.run_in_executor(API_EXECUTOR, fetch_acts, t)
+            for t in tickers
+        ]
+        
+        # Wait for results
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for res in results:
+            if isinstance(res, tuple):
+                t, acts = res
+                try:
+                    if acts and acts[0].get("actions"):
+                        valid_action = None
+                        today = datetime.date.today()
+                        for action in acts[0]["actions"]:
+                             ex_date_str = action.get("ex_date")
+                             if ex_date_str:
+                                 try:
+                                     ex_date = datetime.date.fromisoformat(ex_date_str)
+                                     if ex_date >= today:
+                                         valid_action = action
+                                         break 
+                                 except ValueError: pass
+                        
+                        # ✅ Preserved User Logic: Formatting string exactly as before
+                        if valid_action:
+                            a = valid_action
+                            typ = a.get('type','').replace('Upcoming ', '')
+                            amt = a.get('amount', '')
+                            exd = a.get('ex_date', '')
+                            parts = []
+                            if "Dividend" in typ: parts.append("Dividend Announced")
+                            else: parts.append(typ)
+                            if amt: parts.append(f"₹{amt}")
+                            if exd: parts.append(f"(Ex: {exd})")
+                            summary[t] = " ".join(parts)
+
+                except Exception:
+                    pass
+        return JSONResponse(summary)
+    except Exception:
+        return JSONResponse({})
+
+@app.get("/corporate_actions")
+async def corporate_actions(ticker: str):
+    # ### PATCH FIX: Offload to API Executor
+    loop = asyncio.get_running_loop()
+    
+    def _fetch():
+        past = get_corporate_actions([ticker], mode="past", lookback_days=365)
+        upcoming = get_corporate_actions([ticker], mode="upcoming", lookback_days=365)
+        return past, upcoming
+
+    past, upcoming = await loop.run_in_executor(API_EXECUTOR, _fetch)
+    
+    flat = []
+    if past:
+        for item in past:
+            for a in item.get("actions", []):
+                a["_when"] = "past"
+                flat.append(a)
+    if upcoming:
+        for item in upcoming:
+            for a in item.get("actions", []):
+                a["_when"] = "upcoming"
+                flat.append(a)
+    return JSONResponse(flat)
+
+@app.get("/metrics_ext")
+async def metrics_ext_route(ticker: str):
+    return await compute_extended_metrics_sync(ticker)
+
+@app.get("/flowchart", response_class=HTMLResponse)
+async def show_flowchart(request: Request):
+    return templates.TemplateResponse("Stock_Buy-sell_Flowcharts.html", {"request": request})
+
+@app.get("/flowchart_payload")
+async def flowchart_payload(symbol: str, index: str = Query("NIFTY50")):
+    try:
+        # ### PATCH FIX: Heavy payload generation on API Executor
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(API_EXECUTOR, build_flowchart_payload, symbol, index)
+    except Exception as e:
+        return {"error": str(e)}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

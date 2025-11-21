@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+yfinance
+pandas
+pandas_ta
+python-multipart
+jinja2
+yahoo_fin
+requests_html
+nsetools
+nest_asyncio
+world-bank-data

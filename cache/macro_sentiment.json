@@ -1,0 +1,37 @@
+{
+  "timestamp": 1762585506.5746965,
+  "data": {
+    "VIX": {
+      "value": "N/A",
+      "score": 0
+    },
+    "Inflation Rate (%)": {
+      "value": 4.95,
+      "score": 0
+    },
+    "GDP Growth (%)": {
+      "value": 6.48,
+      "score": 0
+    },
+    "Repo Rate (%)": {
+      "value": "N/A",
+      "score": 0
+    },
+    "Crude Oil ($)": {
+      "value": 59.75,
+      "score": 0
+    },
+    "USD/INR": {
+      "value": 88.66,
+      "score": 0
+    },
+    "10Y Bond Yield (%)": {
+      "value": "N/A",
+      "score": 0
+    },
+    "Currency Trend": {
+      "value": "N/A",
+      "score": 0
+    }
+  }
+}

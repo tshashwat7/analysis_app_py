@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Stock Analysis Framework — Complete Metrics Overview</title>
+<style>
+body {font-family: Arial, sans-serif; background: #0d1117; color: #e6edf3; margin: 0; padding: 2rem;}
+h1, h2 {color: #58a6ff;}
+ul {line-height: 1.6;}
+.category {margin-top: 2rem;}
+.summary {background: #161b22; padding: 1rem; border-left: 4px solid #58a6ff; border-radius: 6px; margin-bottom: 2rem;}
+.pass {color: #7ee787; font-weight: bold;}
+.warn {color: #ffa657;}
+.fail {color: #ef4444;}
+
+.metric-value {
+  font-size: 0.85em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  margin-left: 10px;
+  font-weight: 600;
+  min-width: 80px;
+  text-align: center;
+  color: #fff;
+}
+
+.metric-pass { background-color: #2ecc71; }   /* green */
+.metric-warn { background-color: #f1c40f; color: #000; } /* yellow */
+.metric-fail { background-color: #e74c3c; }   /* red */
+
+li::after { content: ""; display: block; clear: both; }
+</style>
+</head>
+
+<body>
+<h1>Comprehensive Stock Evaluation Framework (Full Indicators)</h1>
+<div class="summary">
+<p>This version embeds <strong>all essential and advanced metrics</strong> directly under each category. It defines clear <strong>threshold values</strong> and <strong>signal ranges</strong> for short-term, long-term, and multibagger perspectives.</p>
+</div>
+
+<!-- ========== CORE FLOWCHART SECTIONS ========== -->
+<section class="category">
+<h2>1️⃣ Technical Indicators (Short-Term Trading)</h2>
+<ul>
+  <li><strong>RSI:</strong> <span class="pass">30–40 = Oversold (Buy)</span>, <span class="warn">60–70 = Overbought (Sell)</span>.</li>
+  <li><strong>MACD:</strong> Bullish when signal line crosses above zero; bearish when below.</li>
+  <li><strong>EMA Crossover:</strong> <span class="pass">20 EMA > 50 EMA</span> = short-term bullish.</li>
+  <li><strong>Bollinger Bands:</strong> Price below lower band = rebound signal; above upper = caution.</li>
+  <li><strong>ATR (Volatility):</strong> Use <span class="pass">1.5–2× ATR</span> for stop-loss placement.</li>
+  <li><strong>Volume Spike:</strong> >150% of 20-day average = strong interest confirmation.</li>
+  <li class="subheader">Advanced Technical Signals:</li>
+  <li><strong>Ichimoku Cloud:</strong> Price <span class="pass">above cloud = bullish</span>, <span class="warn">below = bearish</span>.</li>
+  <li><strong>Stochastic Oscillator:</strong> <span class="pass"><20</span> = oversold, <span class="warn">>80</span> = overbought.</li>
+  <li><strong>Relative Volume (RVOL):</strong> <span class="pass">>1.5</span> = increased participation.</li>
+  <li><strong>OBV Divergence:</strong> Confirms price trend when aligned; divergence = reversal alert.</li>
+  <li><strong>Pivot Points / Fibonacci Levels:</strong> Identify natural intraday support/resistance zones.</li>
+</ul>
+</section>
+
+<section class="category">
+<h2>2️⃣ Fundamental Metrics (Long-Term Investment)</h2>
+<ul>
+  <li><strong>P/E Ratio:</strong> <span class="pass"><20</span> = undervalued vs. sector average.</li>
+  <li><strong>PEG Ratio:</strong> <span class="pass"><1</span> = growth at reasonable price.</li>
+  <li><strong>ROE:</strong> <span class="pass">>15%</span> = strong capital efficiency.</li>
+  <li><strong>Debt-to-Equity:</strong> <span class="pass"><1</span> = manageable leverage.</li>
+  <li><strong>Free Cash Flow Growth:</strong> <span class="pass">>10% CAGR</span> over 5 years = healthy trend.</li>
+  <li><strong>Dividend Yield:</strong> <span class="pass">>2%</span> stable; payout ratio <70% preferred.</li>
+  <li><strong>Management Quality:</strong> Promoter holding stable or increasing = confidence signal.</li>
+  <li class="subheader">Deep Fundamental Metrics:</li>
+  <li><strong>EPS Growth Consistency:</strong> <span class="pass">>15% CAGR</span> over 5 years.</li>
+  <li><strong>Interest Coverage Ratio:</strong> <span class="pass">>3</span> = comfortable debt servicing.</li>
+  <li><strong>Operating Cash Flow vs Net Profit:</strong> Should align; divergence = red flag.</li>
+  <li><strong>R&D Intensity:</strong> <span class="pass">>5%</span> of revenue (for tech/pharma sectors).</li>
+  <li><strong>Asset Turnover Ratio:</strong> High = efficient use of assets.</li>
+  <li><strong>Book Value Growth:</strong> Positive and compounding = sustainable fundamentals.</li>
+</ul>
+</section>
+
+<section class="category">
+<h2>3️⃣ Multibagger Identification (High-Growth Potential)</h2>
+<ul>
+  <li><strong>ROIC:</strong> <span class="pass">>15–20%</span> and rising indicates scalability.</li>
+  <li><strong>Earnings Growth:</strong> <span class="pass">>25% YoY</span> for at least 3 years.</li>
+  <li><strong>Promoter Holding:</strong> <span class="pass">>50%</span> and increasing = conviction.</li>
+  <li><strong>Market Cap CAGR:</strong> <span class="pass">>15%</span> over 5 years.</li>
+  <li><strong>TAM Growth:</strong> Industry CAGR <span class="pass">>10%</span>.</li>
+  <li><strong>Debt/Equity:</strong> <span class="pass"><0.5</span> ideal for expansion potential.</li>
+  <li class="subheader">Advanced Multibagger Filters:</li>
+  <li><strong>PEG (Forward):</strong> <span class="pass"><1</span> even on projected growth = attractive.</li>
+  <li><strong>Promoter Pledge:</strong> <span class="pass"><5%</span> = safe zone; rising pledge = red flag.</li>
+  <li><strong>Institutional Ownership Trend:</strong> Increasing over multiple quarters = strong validation.</li>
+  <li><strong>Innovation/R&D Pipeline:</strong> Consistent new products or disruption-ready model.</li>
+  <li><strong>Sector Leadership:</strong> Top 3 market share or fastest growth = competitive moat.</li>
+</ul>
+</section>
+
+<section class="category">
+<h2>4️⃣ Sentiment & Behavioral Factors</h2>
+<ul>
+  <li><strong>VIX:</strong> <span class="pass"><15</span> = calm market, good entry; <span class="warn">>25</span> = high risk.</li>
+  <li><strong>Analyst Ratings:</strong> <span class="pass">>60% Buy</span> recommendations = positive outlook.</li>
+  <li><strong>Fear & Greed Index:</strong> <span class="pass"><30</span> = buy zone; <span class="warn">>70</span> = overheated.</li>
+  <li><strong>Retail Sentiment:</strong> <span class="warn">>65% bullish</span> = contrarian caution.</li>
+  <li class="subheader">Advanced Sentiment Indicators:</li>
+  <li><strong>Put-Call Ratio (PCR):</strong> <span class="pass">0.7–1.0 = neutral</span>; <span class="warn">>1 = oversold</span>, <span class="warn"><0.7 = overbought</span>.</li>
+  <li><strong>Insider Trading Activity:</strong> Increasing insider buying = bullish confidence.</li>
+  <li><strong>Advance-Decline Line (A/D):</strong> Positive divergence confirms market breadth.</li>
+  <li><strong>News/Google Trends:</strong> Spikes in search or coverage = volatility precursor.</li>
+</ul>
+</section>
+
+<section class="category">
+<h2>5️⃣ Macro-Economic Context</h2>
+<ul>
+  <li><strong>GDP Growth:</strong> <span class="pass">>5%</span> = supportive of equity uptrend.</li>
+  <li><strong>Inflation Rate:</strong> <span class="pass"><6%</span> = healthy range for growth.</li>
+  <li><strong>Interest Rate Trend:</strong> Falling = bullish; rising = tightening liquidity.</li>
+  <li><strong>Crude Oil Prices:</strong> <span class="warn">>$90</span> = margin pressure risk.</li>
+  <li class="subheader">Advanced Macro Metrics:</li>
+  <li><strong>Bond Yield vs Equity Spread:</strong> Widening = bullish; narrowing = caution.</li>
+  <li><strong>Currency Trend:</strong> Strong INR = import benefit, weak = export boost.</li>
+  <li><strong>PMI (Purchasing Managers Index):</strong> <span class="pass">>50</span> = expansion, <span class="warn"><50</span> = contraction.</li>
+  <li><strong>Sector Rotation:</strong> Flow into cyclicals = bull onset, defensives = risk aversion.</li>
+</ul>
+</section>
+
+<section class="category">
+<h2>6️⃣ Risk Management (Universal)</h2>
+<ul>
+  <li><strong>Stop-Loss:</strong> 1–2% (intraday), 5–8% (swing), 15–20% (positional).</li>
+  <li><strong>Position Sizing:</strong> Risk ≤2% of total capital per trade.</li>
+  <li><strong>Max Drawdown:</strong> <span class="pass"><20%</span> acceptable for portfolio health.</li>
+  <li class="subheader">Advanced Risk Metrics:</li>
+  <li><strong>Beta:</strong> <span class="pass"><1</span> = stable, <span class="warn">>1.2</span> = aggressive stock.</li>
+  <li><strong>Sharpe Ratio:</strong> <span class="pass">>1</span> = good risk-adjusted return.</li>
+  <li><strong>Sortino Ratio:</strong> <span class="pass">>0.5</span> = acceptable downside-risk efficiency.</li>
+  <li><strong>Correlation Matrix:</strong> Diversify with <span class="pass"><0.5</span> cross-stock correlation.</li>
+  <li><strong>Drawdown Recovery Period:</strong> Shorter = stronger rebound capability.</li>
+</ul>
+</section>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const data = JSON.parse(sessionStorage.getItem("flowData") || "{}");
+  const fc = data.flowchart || {};
+  if (!data.symbol) {
+    alert("No analysis data found. Please run analysis first.");
+    return;
+  }
+
+  // --- Helpers ---
+  const colorForScore = (s) => {
+    if (s >= 8) return "#2ecc71"; // green
+    if (s >= 5) return "#f1c40f"; // yellow
+    return "#e74c3c";             // red
+  };
+
+  const formatVal = (v) => (v === null || v === undefined || v === "N/A") ? "N/A" : v;
+
+  // --- Inject metrics ---
+  document.querySelectorAll("li").forEach(li => {
+    const strongEl = li.querySelector("strong");
+    if (!strongEl) return;
+    const metric = strongEl.textContent.trim().replace(/:$/, "");
+
+    if (fc[metric]) {
+      const { value, score } = fc[metric];
+      const val = formatVal(value);
+      const color = colorForScore(score ?? 0);
+
+      // remove old placeholder
+      li.innerHTML = li.innerHTML.replace(/==========Stock Metrics.*/g, "");
+
+      // add badge
+      const badge = document.createElement("span");
+      badge.classList.add("metric-value");
+      if (score >= 8) badge.classList.add("metric-pass");
+      else if (score >= 5) badge.classList.add("metric-warn");
+      else badge.classList.add("metric-fail");
+
+      badge.textContent = `${val} (Score: ${score ?? 0})`;
+      li.appendChild(badge);
+    }
+  });
+
+  // --- Summary Header ---
+  const summaryDiv = document.querySelector(".summary");
+  if (summaryDiv) {
+    const avgScore = Object.values(fc).reduce((a,b)=>a+(b?.score||0),0)/(Object.keys(fc).length||1);
+    summaryDiv.innerHTML += `
+      <p><strong>${data.symbol}</strong> | Avg Score:
+      <span style="color:${colorForScore(avgScore)}">${avgScore.toFixed(1)}</span>
+      | Index: ${data.index || "N/A"}</p>`;
+  }
+});
+</script>
+</body>
+</html>

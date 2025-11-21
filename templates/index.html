@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>📈 NSE Stock Analyzer (AG Grid)</title>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-grid.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-theme-alpine.css" />
+    
+    <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background: #f4f7f6; }
+        h1 { text-align: center; color: #333; margin-bottom: 20px; }
+        .controls { text-align:center; margin-bottom:12px; }
+        input, button, select { padding:8px 10px; margin:4px; font-size:14px; border: 1px solid #ccc; border-radius: 4px; }
+        button { background: #007bff; color: white; cursor: pointer; }
+        button:disabled { background: #aaa; }
+        
+        #myGrid { 
+            height: 75vh; 
+            width: 100%; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .progress { width:100%; max-width:1200px; margin:8px auto; background:#eee; height:12px; border-radius:8px; overflow:hidden; }
+        .progress-bar { height:100%; width:0%; background:linear-gradient(90deg,#3bbf7f,#2aa06b); transition:width .25s; }
+        .status { text-align:center; margin-top:6px; font-weight:600; }
+
+        /* Cell Styling */
+        .buy-cell { color: #16a34a; font-weight: bold; }
+        .hold-cell { color: #d97706; font-weight: bold; }
+        .sell-cell { color: #dc2626; font-weight: bold; }
+        .ticker-link { color: #2563eb; text-decoration: none; font-weight: 600; }
+        .ticker-link:hover { text-decoration: underline; }
+        
+        /* Score Coloring */
+        .score-buy { color: #16a34a; font-weight: bold; }
+        .score-hold { color: #d97706; font-weight: bold; }
+        .score-sell { color: #dc2626; font-weight: bold; }
+    </style>
+</head>
+
+<body>
+    <h1>📈 NSE Stock Analyzer</h1>
+
+    <div class="controls">
+        <form action="/analyze" method="get" style="display:inline-block;">
+            <input name="symbol" placeholder="Enter ticker (e.g. RELIANCE.NS)" required>
+            <button type="submit">Analyze</button>
+        </form>
+        <br>
+
+        <select id="indexSelect">
+            <option value="nifty50">Nifty 50</option>
+            <option value="nifty100">Nifty 100</option>
+            <option value="niftynext50">Nifty Next 50</option>
+            <option value="nifty500">Nifty 500</option>
+            <option value="midcap150">Midcap 150</option>
+            <option value="smallcap100">Smallcap 100</option>
+            <option value="NSEStock">All Stocks</option>
+        </select>
+        <button id="loadBtn" onclick="loadIndex()">🔄 Load Index</button>
+
+        <br>
+        <button id="startBtn" onclick="startAutoAnalyze()" disabled>Start Auto Analysis</button>
+        <button id="stopBtn" onclick="stopAutoAnalyze()" disabled>Stop</button>
+        <button onclick="gridApi.exportDataAsCsv()">Export CSV</button>
+    </div>
+
+    <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+    <div id="status" class="status">Idle</div>
+
+    <div id="myGrid" class="ag-theme-alpine"></div>
+    
+<script>
+    let gridApi; 
+    let isAutoAnalysisActive = false; // Master switch for Auto-Analysis
+    let isPageAnalyzing = false;      // Lock to prevent self-triggering loops
+    let lastAnalyzedPage = -1;        // Track which page we finished
+
+    // --- 1. Global Helpers ---
+    function setStatus(t){ 
+        const el = document.getElementById("status");
+        if(el) el.innerText = t; 
+    }
+    function setProgress(p){ 
+        const el = document.getElementById("progressBar");
+        if(el) el.style.width = p + "%"; 
+    }
+    
+    // --- 2. Column Definitions ---
+    const columnDefs = [
+        { 
+            field: "symbol", 
+            headerName: "Ticker", 
+            pinned: 'left', 
+            width: 110,
+            cellRenderer: p => `<a href="/analyze?symbol=${p.value}" class="ticker-link" target="_blank">${p.value}</a>` 
+        },
+        { field: "name", headerName: "Company Name", width: 180 },
+        
+        // Scores
+        { 
+            field: "score", headerName: "Score", width: 90, sortable: true, filter: 'agNumberColumnFilter',
+            cellClass: p => p.value >= 70 ? 'score-buy' : p.value < 40 ? 'score-sell' : 'score-hold'
+        },
+        { 
+            field: "confidence", headerName: "Conf %", width: 90, sortable: true, filter: 'agNumberColumnFilter',
+            cellRenderer: params => {
+                const val = params.value || 0;
+                const color = val > 70 ? '#22c55e' : val > 40 ? '#facc15' : '#ef4444';
+                return `<div style="width: 100%; background: #eee; height: 6px; border-radius: 3px; margin-top: 10px;">
+                        <div style="width: ${val}%; background: ${color}; height: 100%; border-radius: 3px;"></div></div>`;
+            }
+        },
+        { 
+            field: "recommendation", headerName: "Rec.", width: 100, sortable: true, filter: true,
+            cellClass: p => p.value === 'BUY' ? 'buy-cell' : p.value === 'SELL' ? 'sell-cell' : 'hold-cell' 
+        },
+        
+        // Timing / Bull Stats
+        { field: "bull_signal", headerName: "Timing Signal", width: 160, sortable: true, filter: true },
+        { field: "bull_score", headerName: "Bull Scr", width: 100, sortable: true, hide: true },
+
+        // Corporate Actions
+        { field: "corp_action", headerName: "Upcoming Event", width: 200, sortable: true, filter: true },
+        
+        // Horizon Scores
+        { 
+            field: "intra_score", headerName: "Intra", width: 90, sortable: true, filter: 'agNumberColumnFilter', 
+            cellClass: p => p.value >= 7.5 ? 'score-buy' : p.value <= 3.5 ? 'score-sell' : 'score-hold'
+        },
+        { 
+            field: "short_score", headerName: "Short", width: 90, sortable: true, filter: 'agNumberColumnFilter',
+            cellClass: p => p.value >= 7.0 ? 'score-buy' : p.value <= 4.0 ? 'score-sell' : 'score-hold'
+        },
+        { 
+            field: "long_score", headerName: "Long", width: 90, sortable: true, filter: 'agNumberColumnFilter',
+            cellClass: p => p.value >= 7.5 ? 'score-buy' : p.value <= 4.0 ? 'score-sell' : 'score-hold'
+        },
+        { 
+            field: "multi_score", headerName: "Multi", width: 90, sortable: true, filter: 'agNumberColumnFilter',
+            cellClass: p => p.value >= 8.0 ? 'score-buy' : p.value <= 4.5 ? 'score-sell' : 'score-hold'
+        },
+    ];
+
+    // --- 3. Grid Options ---
+    const gridOptions = {
+        columnDefs: columnDefs,
+        theme: "legacy",
+        rowData: [],
+        rowModelType: 'clientSide', 
+        pagination: true,
+        paginationPageSize: 50,
+        paginationPageSizeSelector: [20, 50, 100, 500],
+        defaultColDef: { resizable: true, sortable: true, filter: true },
+        getRowId: params => params.data.symbol,
+        
+        // --- CRITICAL: Trigger analysis when page changes ---
+        onPaginationChanged: onPageChange
+    };
+
+    // --- 4. Initialize ---
+    document.addEventListener('DOMContentLoaded', () => {
+        const gridDiv = document.querySelector('#myGrid');
+        gridApi = agGrid.createGrid(gridDiv, gridOptions);
+    });
+
+    // --- 5. Pagination Event Handler (FIXED) ---
+    function onPageChange() {
+        if (isAutoAnalysisActive) {
+            // Only trigger if we are NOT already running an analysis
+            // This prevents the "0/40... 0/30" loop
+            if (!isPageAnalyzing) {
+                const currentPage = gridApi.paginationGetCurrentPage();
+                // Optional: Only re-analyze if we moved to a NEW page
+                if (currentPage !== lastAnalyzedPage) {
+                    analyzeCurrentView();
+                }
+            }
+        }
+    }
+
+    // --- 6. The Smart Analysis Logic ---
+// --- 6. High-Performance Parallel Analysis ---
+// --- 6. High-Speed Single-Batch Analysis ---
+    async function analyzeCurrentView() {
+        if (!gridApi) return;
+        
+        // LOCK: Prevent re-entry
+        if (isPageAnalyzing) return;
+        isPageAnalyzing = true;
+
+        const index_name = document.getElementById("indexSelect").value;
+        
+        // 1. Identify range
+        const pageSize = gridApi.paginationGetPageSize();
+        const currentPage = gridApi.paginationGetCurrentPage();
+        const startRow = currentPage * pageSize;
+        const endRow = startRow + pageSize;
+
+        const symbolsToAnalyze = [];
+        
+        // 2. Collect ALL symbols for this page
+        let currentIndex = 0;
+        gridApi.forEachNodeAfterFilterAndSort((node) => {
+            if (currentIndex >= startRow && currentIndex < endRow) {
+                // Optimization: Only analyze if score is missing
+                if (node.data.score === null || node.data.score === undefined) {
+                    symbolsToAnalyze.push(node.data.symbol);
+                }
+            }
+            currentIndex++;
+        });
+
+        const total = symbolsToAnalyze.length;
+        if (total === 0) {
+            setStatus(`Page ${currentPage + 1} is up to date.`);
+            setProgress(100);
+            lastAnalyzedPage = currentPage;
+            isPageAnalyzing = false; 
+            return;
+        }
+
+        // 3. SINGLE BATCH: Send all symbols in one request
+        // This reduces HTTP overhead and lets the server parallelize efficiently
+        setStatus(`Analyzing ${total} stocks on Page ${currentPage + 1}...`);
+        setProgress(20); // Indicate activity
+
+        try {
+            const resp = await fetch("/quick_scores", {
+                method: "POST",
+                headers: {"Content-Type":"application/json"},
+                body: JSON.stringify({symbols: symbolsToAnalyze, index_name: index_name})
+            });
+            const map = await resp.json();
+            
+            // 4. Bulk Update Grid
+            const updates = [];
+            for(const s of symbolsToAnalyze){
+                if(map[s]){
+                    const node = gridApi.getRowNode(s);
+                    if(node && node.data){
+                        updates.push({ 
+                            ...node.data, 
+                            ...map[s],
+                            name: node.data.name, 
+                            corp_action: node.data.corp_action
+                        }); 
+                    }
+                }
+            }
+            
+            if (updates.length > 0) {
+                gridApi.applyTransaction({ update: updates });
+            }
+            
+            setStatus(`Page ${currentPage + 1} Complete.`);
+            setProgress(100);
+            lastAnalyzedPage = currentPage;
+
+        } catch(err){ 
+            console.error(err);
+            setStatus("Analysis Error");
+        } finally {
+            isPageAnalyzing = false; // Unlock
+        }
+    } // --- 7. Button Handlers ---
+    
+    function startAutoAnalyze(){
+        isAutoAnalysisActive = true;
+        abortFlag = false;
+        document.getElementById("startBtn").disabled = true;
+        document.getElementById("stopBtn").disabled = false;
+        document.getElementById("startBtn").innerText = "Auto-Analysis: ON";
+        
+        // Reset tracking so we can force-analyze current page
+        lastAnalyzedPage = -1; 
+        analyzeCurrentView();
+    }
+
+    function stopAutoAnalyze(){ 
+        isAutoAnalysisActive = false; 
+        abortFlag = true; 
+        document.getElementById("startBtn").disabled = false;
+        document.getElementById("stopBtn").disabled = true;
+        document.getElementById("startBtn").innerText = "Start Auto Analysis";
+        setStatus("Auto-Analysis Stopped.");
+        setProgress(0);
+    }
+
+    // --- 8. Load Index ---
+    async function loadIndex(){
+        const idx = document.getElementById("indexSelect").value;
+        setStatus(`Loading ${idx.toUpperCase()} tickers...`);
+        setProgress(0);
+        document.getElementById("loadBtn").disabled = true;
+        
+        if(isAutoAnalysisActive) stopAutoAnalyze();
+
+        try {
+            const res = await fetch(`/load_index/${idx}`);
+            const j = await res.json();
+            
+            if(j.error) {
+                setStatus(`Error: ${j.error}`);
+                document.getElementById("loadBtn").disabled = false;
+                return;
+            }
+
+            const rowData = j.tickers.map(t => ({
+                symbol: t,
+                name: j.pairs ? j.pairs[t] : t,
+                score: null, 
+                recommendation: "--",
+                bull_signal: "--",
+                corp_action: ""
+            }));
+            
+            gridApi.setGridOption('rowData', rowData);
+            
+            // Reset state
+            lastAnalyzedPage = -1;
+            setProgress(100);
+            setStatus(`Loaded ${rowData.length} tickers. Ready to analyze.`);
+            document.getElementById("startBtn").disabled = false;
+            
+            populateCorporateActions(j.tickers);
+
+        } catch(err){
+            console.error(err);
+            setStatus("Failed to load index");
+        }
+        document.getElementById("loadBtn").disabled = false;
+    }
+    
+    // --- 9. Corporate Actions ---
+    async function populateCorporateActions(tickers) {
+        if (!tickers || tickers.length === 0) return;
+        const chunk = tickers.slice(0, 50); 
+        try {
+            const res = await fetch('/corporate_action_summary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tickers: chunk })
+            });
+            const summary = await res.json();
+            if (!summary) return;
+
+            const rowsToUpdate = [];
+            for (const [sym, info] of Object.entries(summary)) {
+                if (info && info !== "-") {
+                    const node = gridApi.getRowNode(sym);
+                    if(node && node.data){
+                        rowsToUpdate.push({
+                            ...node.data,
+                            corp_action: info 
+                        });
+                    }
+                }
+            }
+            if(rowsToUpdate.length > 0) {
+                gridApi.applyTransaction({ update: rowsToUpdate });
+            }
+        } catch (e) { console.error(e); }
+    }
+</script>
+</body>
+</html>
