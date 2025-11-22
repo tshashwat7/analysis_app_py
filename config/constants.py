@@ -316,28 +316,32 @@ FUNDAMENTAL_ALIAS_MAP = {
 FUNDAMENTAL_FIELD_CANDIDATES = {
     # Income Statement
     "revenue": [
-        "Total Revenue", "Revenue", "totalRevenue", "Sales", "Net Sales", "Operating Revenue"
+        "Total Revenue", "Revenue", "totalRevenue", "Sales", "Net Sales", "Operating Revenue",
+        "Total Sales", "Gross Sales"
     ],
     "net_income": [
-        "Net Income", "netIncome", "NetIncome", "Profit After Tax", "Net Profit"
+        "Net Income", "netIncome", "NetIncome", "Profit After Tax", "Net Profit", 
+        "Profit", "PAT", "Net Loss", "Net Income Common Stockholders"
     ],
     "operating_income": [
-        "Operating Income", "EBIT", "Ebit", "Operating Profit", "OperatingProfit"
+        "Operating Income", "EBIT", "Ebit", "Operating Profit", "OperatingProfit", 
+        "Profit from Operations"
     ],
     "ebit": [
-        "EBIT", "Ebit", "Operating Income", "Operating Profit"
+        "EBIT", "Ebit", "Operating Income", "Operating Profit", "Profit from Operations"
     ],
     "ebitda": [
-        "EBITDA", "Ebitda", "Operating Profit Before Depreciation"
+        "EBITDA", "Ebitda", "Operating Profit Before Depreciation", "Normalized EBITDA"
     ],
     "cogs": [
         "Cost Of Revenue", "Cost of Goods Sold", "COGS", "Total Expenses", "Operating Expense"
     ],
     "interest_expense": [
-        "Interest Expense", "Interest And Debt Expense", "Finance Cost", "Interest"
+        "Interest Expense", "Interest And Debt Expense", "Finance Cost", "Interest", 
+        "Total Interest Expense"
     ],
     "tax_expense": [
-        "Income Tax Expense", "Tax Provision", "Total Tax Expense"
+        "Income Tax Expense", "Tax Provision", "Total Tax Expense", "Tax"
     ],
     "pre_tax_income": [
         "Pretax Income", "Income Before Tax", "Income Before Tax Expense", "PretaxProfit"
@@ -347,13 +351,6 @@ FUNDAMENTAL_FIELD_CANDIDATES = {
     "total_assets": [
         "Total Assets", "totalAssets", "Assets"
     ],
-    "total_liabilities": [
-        "Total Liabilities", "totalLiab", "Liabilities"
-    ],
-    "total_equity": [
-        "Total Stockholders Equity", "totalStockholdersEquity",
-        "Shareholders Equity", "Total Equity", "Equity"
-    ],
     "current_assets": [
         "Total Current Assets", "totalCurrentAssets", "Current Assets", "currentAssets"
     ],
@@ -361,21 +358,38 @@ FUNDAMENTAL_FIELD_CANDIDATES = {
         "Total Current Liabilities", "totalCurrentLiabilities", "Current Liabilities", "currentLiabilities"
     ],
     "cash_equivalents": [
-        "Cash And Cash Equivalents", "cashAndCashEquivalents", "Cash", "Cash Balance"
+        "Cash And Cash Equivalents", "cashAndCashEquivalents", "Cash", "Cash Balance",
+        "Cash & Equivalents", "Cash & Bank Balances"
     ],
-    "total_debt": [
-        "Total Debt", "totalDebt", "Long Term Debt", "longTermDebt", "Borrowings"
+    "total_liabilities" : [
+        "Total Liabilities", "Total Current Liabilities", "Liabilities", "Total Liab"
+    ],
+    "total_equity" : [
+        "Total Equity", "Total Stockholders Equity", "totalStockholdersEquity", "Shareholders Equity", 
+        "Equity", "Stockholders Equity", "Shareholder Equity", "Total Common Equity", 
+        "Total Stockholder Equity", "Shareholder's funds", "Total shareholders' funds"
+    ],
+    "total_debt" : [
+        "Total Debt", "totalDebt", "Long Term Debt", "Short Long Term Debt", 
+        "Long Term Borrowings", "Short Term Borrowings", "Debt", "Borrowings"
+    ],
+
+    "pure_borrowings" : [
+        "Short Term Borrowings", "ShortTermBorrowings", "Short Term Debt", "ShortTermDebt", 
+        "Long Term Borrowings", "LongTermBorrowings", "Long Term Debt", "LongTermDebt", 
+        "Borrowings", "borrowings"
     ],
 
     # Cash Flow Statement
     "ocf": [
-        "Total Cash From Operating Activities", "totalCashFromOperatingActivities", "Operating Cash Flow"
+        "Total Cash From Operating Activities", "totalCashFromOperatingActivities", "Operating Cash Flow",
+        "Cash Flow From Operating Activities"
     ],
     "capex": [
         "Capital Expenditures", "capitalExpenditures", "CapEx", "Purchase Of Fixed Assets"
     ],
     "free_cash_flow": [
-        "Free Cash Flow", "freeCashflow", "freeCashFlow"
+        "Free Cash Flow", "freeCashflow", "freeCashFlow", "FCF", "Free Cash Flow (FCF)"
     ],
 
     # Other metrics / ratios
@@ -387,13 +401,16 @@ FUNDAMENTAL_FIELD_CANDIDATES = {
         "EPS", "Diluted EPS", "Basic EPS", "Earnings Per Sare", "eps"
     ],
     "shares_outstanding": [
-        "Basic Average Shares", "Shares Outstanding", "Weighted Average Shares"
+        "Basic Average Shares", "Shares Outstanding", "Weighted Average Shares", "Shares"
     ],
     "gross_profit": [
         "Gross Profit", "GrossIncome"
     ],
     "market_cap": [
-        "marketCap", "Market Capitalization", "market_cap"
+        "marketCap", "Market Capitalization", "market_cap", "Market Cap"
+    ],
+    "book_value": [
+        "bookValue", "Book Value", "Book value per share"
     ],
     "dividend": [
         "Dividends Paid", "dividendRate", "Cash Dividends Paid"
@@ -412,7 +429,7 @@ FUNDAMENTAL_FIELD_CANDIDATES = {
     "quarterly_growth": ["earningsQuarterlyGrowth", "revenueQuarterlyGrowth"],
     "short_interest": ["shortRatio", "sharesPercentSharesOut", "shortPercentOfFloat"],
     "trend_strength": [],
-    }
+}
 
 SECTOR_PE_AVG = {
     "Technology": 58.7,

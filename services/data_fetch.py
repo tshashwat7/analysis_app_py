@@ -347,6 +347,62 @@ def _clamp(v, a, b):
 # -----------------------------
 # Metric normalizer & wrapper
 # -----------------------------
+def normalize_shares(shares_value: Any) -> Optional[float]:
+    """Return shares as raw integer (not crores). If small (<1e7) assume value given in crores and convert."""
+    try:
+        if shares_value is None: return None
+        s = float(shares_value)
+    except Exception:
+        return None
+    # heuristics: if shares less than 10 million, it's probably given in crores (e.g., 10.5 -> 10.5 cr)
+    # Typical Nifty 50 companies have shares > 1 Cr.
+    if 0 < s < 1e7:
+        return s * 1e7
+    return s
+
+def normalize_currency_value(val: Any, unit_hint: str = None) -> Optional[float]:
+    """
+    Simple normalizer: if val is string with commas or suffix like 'Cr' or ' crore', parse it.
+    Return numeric rupees (raw).
+    """
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).replace(",", "").strip().lower()
+    try:
+        if not s: return None
+        # handle common suffixes
+        if s.endswith("cr") or "crore" in s:
+            num = float(s.replace("cr", "").replace("crore", "").strip())
+            return num * 1e7
+        if s.endswith("mn") or "m" in s:
+            num = float(s.replace("mn", "").replace("m", "").strip())
+            return num * 1e6
+        if s.endswith("b") or "bn" in s:
+            num = float(s.replace("bn", "").replace("b", "").strip())
+            return num * 1e9
+        return float(s)
+    except Exception:
+        return None
+
+def safe_info_normalized(key: str, info: dict):
+    """Wrapper around safe_info that normalizes typical values like sharesOutstanding, marketCap, bookValue etc."""
+    # Use internal safe_get or simple dict get, assuming info is a dict
+    val = info.get(key)
+    
+    if key in ("sharesOutstanding", "shares_outstanding"):
+        return normalize_shares(val)
+    if key in ("marketCap", "market_cap", "enterpriseValue"):
+        return normalize_currency_value(val)
+    if key in ("bookValue", "book_value"):
+        try:
+            return float(val) if val is not None else None
+        except:
+            return None
+    
+    # Fallback to standard safe_float for other keys
+    return safe_float(val)
 
 def _normalize_single_metric(d: Dict[str, Any], metric_name: str) -> Dict[str, Any]:
     out = dict(d) if isinstance(d, dict) else {"value": d}

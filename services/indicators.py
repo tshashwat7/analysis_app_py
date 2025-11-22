@@ -24,13 +24,29 @@ from config.constants import GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, QUALITY_WEIGHTS, 
 from services.data_fetch import (
     get_benchmark_data,
     safe_float,
-    _retry,
-    normalize_ratio,
-    safe_history,
-    fetch_data,
     _wrap_calc,
-    get_history_for_horizon
+    get_history_for_horizon,
+    _safe_get_raw_float
 )
+
+# ========================================================
+# 🚀 PERFORMANCE OPTIMIZER: SAFE SLICING
+# ========================================================
+MIN_ROWS_FOR_ACCURACY = 400  # 200 DMA + 200 warm-up periods
+
+def _slice_for_speed(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Slices the DataFrame to the most recent N rows to speed up pandas_ta.
+    Calculations on 5000 rows vs 400 rows is ~10x faster.
+    We keep 400 rows to ensure 200 DMA and recursive indicators (EMA/RSI) are accurate.
+    """
+    if df is None or df.empty:
+        return df
+    
+    if len(df) > MIN_ROWS_FOR_ACCURACY:
+        # Take the last N rows
+        return df.iloc[-MIN_ROWS_FOR_ACCURACY:].copy()
+    return df
 
 # Defensive attempt to mark wrappers created by _wrap_calc
 try:
@@ -72,7 +88,6 @@ def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
                 "value": round(rsi_val, 2), 
                 "score": score, 
                 "desc": zone,
-                # 🆕 NEW: Add the full series for reuse
                 "full_series": rsi_series.to_dict() 
             }
         }
@@ -1900,12 +1915,11 @@ def compute_indicators(
             # MACD always runs on "short_term" (daily) data
             try:
                 df_macd = get_history_for_horizon(symbol, "short_term")
-                if df_macd.empty:
-                    raise ValueError("MACD data (short_term) is empty")
-                
-                # Call the standalone compute_macd function
-                macd_results = compute_macd(df_macd)
-                indicators.update(macd_results)
+                if not df_macd.empty:
+                    # 🚀 FIX 1: Slice MACD data explicitly here
+                    df_macd_sliced = _slice_for_speed(df_macd)
+                    macd_results = compute_macd(df_macd_sliced)
+                    indicators.update(macd_results)
             except Exception as e:
                 logger.warning(f"[{symbol}] MACD bundle failed: {e}")
             continue # Move to next metric
@@ -1927,9 +1941,10 @@ def compute_indicators(
                 df_piv = get_history_for_horizon(symbol, piv_horizon)
                 
                 if not df_piv.empty:
+                    # Note: Pivot function needs previous day, so slicing to 400 is safe
                     piv_results = compute_pivot_points(df_piv)
                     indicators.update(piv_results)
-                    indicators["_pivot_done"] = True # Mark as done
+                    indicators["_pivot_done"] = True
             except Exception as e:
                 logger.warning(f"[{symbol}] Pivot bundle failed: {e}")
 
@@ -1952,8 +1967,10 @@ def compute_indicators(
         if data_horizon != "special":
             try:
                 df_local = get_history_for_horizon(symbol, data_horizon)
-                if df_local is None or df_local.empty:
-                    raise ValueError(f"DF for horizon '{data_horizon}' is empty")
+                if df_local is not None:
+                    df_local = _slice_for_speed(df_local)
+                elif df_local is None or df_local.empty:
+                    raise ValueError(f"DF for horizon '{data_horizon}' is None")
             except Exception as e:
                 logger.warning(f"[{symbol}] Failed to get DF for metric '{metric_key}' (horizon '{data_horizon}'): {e}")
                 continue # Skip metric if data is bad
@@ -1965,6 +1982,9 @@ def compute_indicators(
         if "benchmark_df" in sig.parameters:
             try:
                 benchmark_df = get_benchmark_data(data_horizon)
+                # 🚀 FIX 3: Slicing logic for Benchmark DF (Applied here)
+                if benchmark_df is not None and not benchmark_df.empty:
+                    benchmark_df = _slice_for_speed(benchmark_df)
             except Exception as e:
                  logger.warning(f"[{symbol}] Failed to get Benchmark DF for metric '{metric_key}': {e}")
 
