@@ -40,35 +40,44 @@ flowchart_mapping = {
     "Relative Volume (RVOL)": ("quick_score", None, "Relative Volume (RVOL)"),
     "OBV Divergence": ("quick_score", None, "OBV Divergence"),
     "Pivot Points / Fibonacci Levels": ("quick_score", None, "Entry Price (Confirm)"),
-
     # 2️⃣ FUNDAMENTAL METRICS
     "P/E Ratio": ("fundamentals", None, "Valuation (P/E)"),
     "PEG Ratio": ("fundamentals", None, "PEG Ratio"),
     "ROE": ("fundamentals", None, "Return on Equity (ROE)"),
     "Debt-to-Equity": ("fundamentals", None, "Debt to Equity"),
-    "Free Cash Flow Growth": ("fundamentals", None, "FCF Yield (%)"),  # you don't have CAGR yet
+    "Free Cash Flow Growth": (
+        "fundamentals",
+        None,
+        "FCF Yield (%)",
+    ),  # you don't have CAGR yet
     "Dividend Yield": ("fundamentals", None, "Dividend Yield"),
     "Management Quality": ("extended", None, "Promoter Holding (%)"),
     "EPS Growth Consistency": ("extended", None, "EPS Growth Consistency (5Y CAGR)"),
     "Interest Coverage Ratio": ("fundamentals", None, "Interest Coverage"),
-    "Operating Cash Flow vs Net Profit": ("extended", None, "Operating CF vs Net Profit"),
+    "Operating Cash Flow vs Net Profit": (
+        "extended",
+        None,
+        "Operating CF vs Net Profit",
+    ),
     "R&D Intensity": ("extended", None, "R&D Intensity (%)"),
     "Asset Turnover Ratio": ("fundamentals", None, "Asset Turnover Ratio"),
     "Book Value Growth": ("fundamentals", None, "Price to Book (P/B)"),
-
     # 3️⃣ MULTIBAGGER IDENTIFICATION
-    "ROIC": ("fundamentals", None, "ROIC (%)"), 
+    "ROIC": ("fundamentals", None, "ROIC (%)"),
     "Earnings Growth": ("fundamentals", None, "Net Profit Qtr Growth YoY %"),
     "Promoter Holding": ("extended", None, "Promoter Holding (%)"),
     "Market Cap CAGR": ("extended", None, "Market Cap CAGR"),
     "TAM Growth": ("extended", None, "TAM Growth"),
     "Debt/Equity": ("fundamentals", None, "Debt to Equity"),
-    "PEG (Forward)": ("fundamentals", None, "PEG Ratio"),  # fallback since no Forward P/E
+    "PEG (Forward)": (
+        "fundamentals",
+        None,
+        "PEG Ratio",
+    ),  # fallback since no Forward P/E
     "Promoter Pledge": ("extended", None, "Promoter Pledge"),
     "Institutional Ownership Trend": ("extended", None, "Institutional Ownership (%)"),
     "Innovation/R&D Pipeline": ("extended", None, "R&D Intensity (%)"),
     "Sector Leadership": ("fundamentals", None, "Sector"),
-
     # 4️⃣ SENTIMENT & BEHAVIORAL FACTORS
     "VIX": ("extended", None, "VIX (Volatility Index)"),
     "Analyst Ratings": ("extended", None, "Analyst Ratings"),
@@ -78,17 +87,19 @@ flowchart_mapping = {
     "Insider Trading Activity": ("extended", None, "Insider Trading Activity"),
     "Advance-Decline Line (A/D)": ("extended", None, "Advance-Decline Line (A/D)"),
     "News/Google Trends": ("extended", None, "News/Google Trends"),
-
     # 5️⃣ MACRO-ECONOMIC CONTEXT
     "GDP Growth": ("extended", None, "GDP Growth (%)"),
     "Inflation Rate": ("extended", None, "Inflation Rate (%)"),
     "Interest Rate Trend": ("extended", None, "Repo Rate (%)"),  # from macro_sentiment
     "Crude Oil Prices": ("extended", None, "Crude Oil ($)"),
-    "Bond Yield vs Equity Spread": ("extended", None, "10Y Bond Yield (%)"),  # macro proxy
+    "Bond Yield vs Equity Spread": (
+        "extended",
+        None,
+        "10Y Bond Yield (%)",
+    ),  # macro proxy
     "Currency Trend": ("extended", None, "Currency Trend (USD/INR)"),
     "PMI": ("extended", None, "PMI"),
     "Sector Rotation": ("payload", None, "index"),
-
     # 6️⃣ RISK MANAGEMENT
     "Stop-Loss": ("quick_score", None, "Suggested SL (2xATR)"),
     "Position Sizing": ("payload", None, None),
@@ -102,7 +113,7 @@ flowchart_mapping = {
 
 TECHNICAL_WEIGHTS = {
     "rsi": 1.0,
-    "macd_cross": 1.0, 
+    "macd_cross": 1.0,
     "macd_hist_z": 0.8,
     "price_vs_200dma_pct": 1.0,
     "adx": 1.0,
@@ -113,10 +124,10 @@ TECHNICAL_WEIGHTS = {
     "bb_low": 0.4,
     "bb_width": 0.3,
     "entry_confirm": 0.5,
-    "dma_20_50_cross": 0.8, 
+    "dma_20_50_cross": 0.8,
     "dma_200_slope": 0.8,
-    "ichi_cloud": 1.0, 
-    "obv_div": 0.6, 
+    "ichi_cloud": 1.0,
+    "obv_div": 0.6,
     "atr_14": 0.8,
     "vol_spike_ratio": 0.5,
     "rel_strength_nifty": 0.6,
@@ -196,7 +207,6 @@ TECHNICAL_METRIC_MAP = {
     "support_1": "Support 1 (Fib)",
     "support_2": "Support 2 (Fib)",
     "support_3": "Support 3 (Fib)",
-    
     # --- New Timing Indicators ---
     "psar_trend": "Parabolic SAR Trend",
     "psar_level": "PSAR Level",
@@ -211,7 +221,17 @@ TECHNICAL_METRIC_MAP = {
     "hv_20": "Historical Volatility (20D)",
 }
 
-
+CORE_TECHNICAL_SETUP_METRICS = [
+        "rsi", 
+        "ema_20", 
+        "ema_200", 
+        "bb_high", 
+        "bb_low", 
+        "ttm_squeeze", 
+        "atr_14",          # Needed for Stop Loss
+        "price_action",    # Good context
+        "volatility_quality" # Needed for Confidence Score
+    ]
 # -------------------------
 # Updated fundamental weights (short keys)
 # -------------------------
@@ -222,29 +242,24 @@ FUNDAMENTAL_WEIGHTS = {
     "peg_ratio": 0.03,
     "fcf_yield": 0.05,
     "dividend_yield": 0.03,
-
     # --- Profitability / Returns (25%) ---
     "roe": 0.10,
     "roce": 0.07,
     "roic": 0.08,
-
     # --- Leverage / Liquidity (15%) ---
     "de_ratio": 0.05,
     "interest_coverage": 0.05,
     "current_ratio": 0.03,
     "ocf_vs_profit": 0.02,
-
     # --- Efficiency / Quality (20%) ---
     "asset_turnover": 0.04,
     "piotroski_f": 0.07,
     "r_d_intensity": 0.04,
     "earnings_stability": 0.05,
-
     # --- Growth (15%) ---
     "eps_growth_5y": 0.06,
     "fcf_growth_3y": 0.05,
     "market_cap_cagr": 0.04,
-
     # --- Ownership / Market Sentiment (5%) ---
     "promoter_holding": 0.015,
     "institutional_ownership": 0.015,
@@ -300,10 +315,10 @@ FUNDAMENTAL_ALIAS_MAP = {
     "quarterly_growth": "Quarterly Growth (EPS/Rev)",
     "short_interest": "Short Interest",
     "trend_strength": "Trend Strength (EMA 50/200)",
-    "net_profit_margin": "Net Profit Margin (%)", 
-    "operating_margin": "Operating Margin (%)",  
-    "ebitda_margin": "EBITDA Margin (%)",     
-    "pe_vs_sector": "P/E vs Sector Avg",     
+    "net_profit_margin": "Net Profit Margin (%)",
+    "operating_margin": "Operating Margin (%)",
+    "ebitda_margin": "EBITDA Margin (%)",
+    "pe_vs_sector": "P/E vs Sector Avg",
     "dividend_payout": "Dividend Payout (%)",
     "yield_vs_avg": "Yield vs 5Y Avg",
     "revenue_growth_5y": "Revenue Growth (5Y CAGR)",
@@ -316,113 +331,182 @@ FUNDAMENTAL_ALIAS_MAP = {
 FUNDAMENTAL_FIELD_CANDIDATES = {
     # Income Statement
     "revenue": [
-        "Total Revenue", "Revenue", "totalRevenue", "Sales", "Net Sales", "Operating Revenue",
-        "Total Sales", "Gross Sales"
+        "Total Revenue",
+        "Revenue",
+        "totalRevenue",
+        "Sales",
+        "Net Sales",
+        "Operating Revenue",
+        "Total Sales",
+        "Gross Sales",
     ],
     "net_income": [
-        "Net Income", "netIncome", "NetIncome", "Profit After Tax", "Net Profit", 
-        "Profit", "PAT", "Net Loss", "Net Income Common Stockholders"
+        "Net Income",
+        "netIncome",
+        "NetIncome",
+        "Profit After Tax",
+        "Net Profit",
+        "Profit",
+        "PAT",
+        "Net Loss",
+        "Net Income Common Stockholders",
     ],
     "operating_income": [
-        "Operating Income", "EBIT", "Ebit", "Operating Profit", "OperatingProfit", 
-        "Profit from Operations"
+        "Operating Income",
+        "EBIT",
+        "Ebit",
+        "Operating Profit",
+        "OperatingProfit",
+        "Profit from Operations",
     ],
     "ebit": [
-        "EBIT", "Ebit", "Operating Income", "Operating Profit", "Profit from Operations"
+        "EBIT",
+        "Ebit",
+        "Operating Income",
+        "Operating Profit",
+        "Profit from Operations",
     ],
     "ebitda": [
-        "EBITDA", "Ebitda", "Operating Profit Before Depreciation", "Normalized EBITDA"
+        "EBITDA",
+        "Ebitda",
+        "Operating Profit Before Depreciation",
+        "Normalized EBITDA",
     ],
     "cogs": [
-        "Cost Of Revenue", "Cost of Goods Sold", "COGS", "Total Expenses", "Operating Expense"
+        "Cost Of Revenue",
+        "Cost of Goods Sold",
+        "COGS",
+        "Total Expenses",
+        "Operating Expense",
     ],
     "interest_expense": [
-        "Interest Expense", "Interest And Debt Expense", "Finance Cost", "Interest", 
-        "Total Interest Expense"
+        "Interest Expense",
+        "Interest And Debt Expense",
+        "Finance Cost",
+        "Interest",
+        "Total Interest Expense",
     ],
-    "tax_expense": [
-        "Income Tax Expense", "Tax Provision", "Total Tax Expense", "Tax"
-    ],
+    "tax_expense": ["Income Tax Expense", "Tax Provision", "Total Tax Expense", "Tax"],
     "pre_tax_income": [
-        "Pretax Income", "Income Before Tax", "Income Before Tax Expense", "PretaxProfit"
+        "Pretax Income",
+        "Income Before Tax",
+        "Income Before Tax Expense",
+        "PretaxProfit",
     ],
-
     # Balance Sheet
-    "total_assets": [
-        "Total Assets", "totalAssets", "Assets"
-    ],
+    "total_assets": ["Total Assets", "totalAssets", "Assets"],
     "current_assets": [
-        "Total Current Assets", "totalCurrentAssets", "Current Assets", "currentAssets"
+        "Total Current Assets",
+        "totalCurrentAssets",
+        "Current Assets",
+        "currentAssets",
     ],
     "current_liabilities": [
-        "Total Current Liabilities", "totalCurrentLiabilities", "Current Liabilities", "currentLiabilities"
+        "Total Current Liabilities",
+        "totalCurrentLiabilities",
+        "Current Liabilities",
+        "currentLiabilities",
     ],
     "cash_equivalents": [
-        "Cash And Cash Equivalents", "cashAndCashEquivalents", "Cash", "Cash Balance",
-        "Cash & Equivalents", "Cash & Bank Balances"
+        "Cash And Cash Equivalents",
+        "cashAndCashEquivalents",
+        "Cash",
+        "Cash Balance",
+        "Cash & Equivalents",
+        "Cash & Bank Balances",
     ],
-    "total_liabilities" : [
-        "Total Liabilities", "Total Current Liabilities", "Liabilities", "Total Liab"
+    "total_liabilities": [
+        "Total Liabilities",
+        "Total Current Liabilities",
+        "Liabilities",
+        "Total Liab",
     ],
-    "total_equity" : [
-        "Total Equity", "Total Stockholders Equity", "totalStockholdersEquity", "Shareholders Equity", 
-        "Equity", "Stockholders Equity", "Shareholder Equity", "Total Common Equity", 
-        "Total Stockholder Equity", "Shareholder's funds", "Total shareholders' funds"
+    "total_equity": [
+        "Total Equity",
+        "Total Stockholders Equity",
+        "totalStockholdersEquity",
+        "Shareholders Equity",
+        "Equity",
+        "Stockholders Equity",
+        "Shareholder Equity",
+        "Total Common Equity",
+        "Total Stockholder Equity",
+        "Shareholder's funds",
+        "Total shareholders' funds",
     ],
-    "total_debt" : [
-        "Total Debt", "totalDebt", "Long Term Debt", "Short Long Term Debt", 
-        "Long Term Borrowings", "Short Term Borrowings", "Debt", "Borrowings"
+    "total_debt": [
+        "Total Debt",
+        "totalDebt",
+        "Long Term Debt",
+        "Short Long Term Debt",
+        "Long Term Borrowings",
+        "Short Term Borrowings",
+        "Debt",
+        "Borrowings",
     ],
-
-    "pure_borrowings" : [
-        "Short Term Borrowings", "ShortTermBorrowings", "Short Term Debt", "ShortTermDebt", 
-        "Long Term Borrowings", "LongTermBorrowings", "Long Term Debt", "LongTermDebt", 
-        "Borrowings", "borrowings"
+    "pure_borrowings": [
+        "Short Term Borrowings",
+        "ShortTermBorrowings",
+        "Short Term Debt",
+        "ShortTermDebt",
+        "Long Term Borrowings",
+        "LongTermBorrowings",
+        "Long Term Debt",
+        "LongTermDebt",
+        "Borrowings",
+        "borrowings",
     ],
-
     # Cash Flow Statement
     "ocf": [
-        "Total Cash From Operating Activities", "totalCashFromOperatingActivities", "Operating Cash Flow",
-        "Cash Flow From Operating Activities"
+        "Total Cash From Operating Activities",
+        "totalCashFromOperatingActivities",
+        "Operating Cash Flow",
+        "Cash Flow From Operating Activities",
     ],
     "capex": [
-        "Capital Expenditures", "capitalExpenditures", "CapEx", "Purchase Of Fixed Assets"
+        "Capital Expenditures",
+        "capitalExpenditures",
+        "CapEx",
+        "Purchase Of Fixed Assets",
     ],
     "free_cash_flow": [
-        "Free Cash Flow", "freeCashflow", "freeCashFlow", "FCF", "Free Cash Flow (FCF)"
+        "Free Cash Flow",
+        "freeCashflow",
+        "freeCashFlow",
+        "FCF",
+        "Free Cash Flow (FCF)",
     ],
-
     # Other metrics / ratios
     "rd_expense": [
-        "Research And Development", "Research Development", "Research and Development Expense",
-        "R&D", "Rnd"
+        "Research And Development",
+        "Research Development",
+        "Research and Development Expense",
+        "R&D",
+        "Rnd",
     ],
-    "eps": [
-        "EPS", "Diluted EPS", "Basic EPS", "Earnings Per Sare", "eps"
-    ],
+    "eps": ["EPS", "Diluted EPS", "Basic EPS", "Earnings Per Sare", "eps"],
     "shares_outstanding": [
-        "Basic Average Shares", "Shares Outstanding", "Weighted Average Shares", "Shares"
+        "Basic Average Shares",
+        "Shares Outstanding",
+        "Weighted Average Shares",
+        "Shares",
     ],
-    "gross_profit": [
-        "Gross Profit", "GrossIncome"
-    ],
-    "market_cap": [
-        "marketCap", "Market Capitalization", "market_cap", "Market Cap"
-    ],
-    "book_value": [
-        "bookValue", "Book Value", "Book value per share"
-    ],
-    "dividend": [
-        "Dividends Paid", "dividendRate", "Cash Dividends Paid"
-    ],
-    "fcf_yield": [
-        "Free Cash Flow Yield", "fcfYield"
-    ],
+    "gross_profit": ["Gross Profit", "GrossIncome"],
+    "market_cap": ["marketCap", "Market Capitalization", "market_cap", "Market Cap"],
+    "book_value": ["bookValue", "Book Value", "Book value per share"],
+    "dividend": ["Dividends Paid", "dividendRate", "Cash Dividends Paid"],
+    "fcf_yield": ["Free Cash Flow Yield", "fcfYield"],
     "promoter_holding": [
-        "heldPercentInsiders", "insiderPercent", "insidersPercent", "Insider Ownership"
+        "heldPercentInsiders",
+        "insiderPercent",
+        "insidersPercent",
+        "Insider Ownership",
     ],
     "institutional_ownership": [
-        "heldPercentInstitutions", "institutionPercent", "institutionsPercent", "Institutional Ownership"
+        "heldPercentInstitutions",
+        "institutionPercent",
+        "institutionsPercent",
+        "Institutional Ownership",
     ],
     "dividend_yield": ["dividendYield"],
     "analyst_rating": ["recommendations", "recommendationKey", "recommendationMean"],
@@ -442,96 +526,125 @@ SECTOR_PE_AVG = {
 }
 
 HORIZON_PROFILE_MAP = {
-
     # ============================
     #  INTRADAY PROFILE
     # ============================
     "intraday": {
         "metrics": {
             # --- Core directional bias & volatility ---
-            "vwap_bias": 0.18,            # VWAP-based intraday trend direction
-            "price_action": 0.15,         # Candlestick structure / closing strength
-            "supertrend_signal": 0.00,    # Trend alignment on short frame
-            "stoch_cross": 0.00,          # Momentum exhaustion / entry zone
-            "macd_histogram": 0.00,       # Intraday momentum intensity
-            "rsi_slope": 0.00,            # Strength of RSI momentum turn
-
+            "vwap_bias": 0.18,  # VWAP-based intraday trend direction
+            "price_action": 0.15,  # Candlestick structure / closing strength
+            "supertrend_signal": 0.00,  # Trend alignment on short frame
+            "stoch_cross": 0.00,  # Momentum exhaustion / entry zone
+            "macd_histogram": 0.00,  # Intraday momentum intensity
+            "rsi_slope": 0.00,  # Strength of RSI momentum turn
             # --- Liquidity & volatility context ---
-            "vol_spike_ratio": 0.08,      # Relative volume compared to mean
-            "rvol": 0.05,                 # Confirmation of active participation
-            "bb_percent_b": 0.05,         # Position in Bollinger Band (overbought/oversold)
-            "adx": 0.05,                  # Trend presence confirmation
-            "gap_percent": 0.0,           # <-- REMOVED (set to 0, it's a filter not a score)
+            "vol_spike_ratio": 0.08,  # Relative volume compared to mean
+            "rvol": 0.05,  # Confirmation of active participation
+            "bb_percent_b": 0.05,  # Position in Bollinger Band (overbought/oversold)
+            "adx": 0.05,  # Trend presence confirmation
+            "gap_percent": 0.0,  # <-- REMOVED (set to 0, it's a filter not a score)
             "ichi_cloud": 0.02,
             "momentum_strength": 0.24,
             "volatility_quality": 0.15,
-
         },
         "penalties": {
-            "atr_pct": {"operator": "<", "value": 0.75, "penalty": 0.5},            # Avoid ultra-low volatility days
-            "rvol": {"operator": "<", "value": 0.8, "penalty": 0.3},                # Avoid dead volume setups
+            "atr_pct": {
+                "operator": "<",
+                "value": 0.75,
+                "penalty": 0.5,
+            },  # Avoid ultra-low volatility days
+            "rvol": {
+                "operator": "<",
+                "value": 0.8,
+                "penalty": 0.3,
+            },  # Avoid dead volume setups
             "bb_width": {"operator": "<", "value": 3.0, "penalty": 0.2},
-            "gap_percent": {"operator": "<", "value": 1.0, "penalty": 0.4},  # <-- Kept as a penalty
+            "gap_percent": {
+                "operator": "<",
+                "value": 1.0,
+                "penalty": 0.4,
+            },  # <-- Kept as a penalty
             "nifty_trend_score": {"operator": "<", "value": 4, "penalty": 0.3},
         },
         "thresholds": {"buy": 7.5, "hold": 5.5, "sell": 3.5},
-        "notes": "Momentum, liquidity and volatility-driven scalping framework. Ideal for 5–15 min setups."
+        "notes": "Momentum, liquidity and volatility-driven scalping framework. Ideal for 5–15 min setups.",
     },
-
-
     # ============================
     #  SHORT-TERM PROFILE
     # ============================
     "short_term": {
         "metrics": {
-# --- NEW Composites (Priority) ---
-        "trend_strength": 0.20,      
-        "momentum_strength": 0.05,  
-        "volatility_quality": 0.10, 
-
-        # --- Remaining Core Technicals (Must Keep) ---
-        "macd_cross": 0.10,          
-        "dma_20_50_cross": 0.08,
-        "price_vs_200dma_pct": 0.05,
-        "reg_slope": 0.05,
-        "psar_trend": {"weight": 0.05, "direction": "normal"},
-        "ttm_squeeze": {"weight": 0.05, "direction": "normal"},
-
-        # --- RESTORED FUNDAMENTAL / HYBRID CONTEXT ---
-        "quarterly_growth": 0.05,    
-        "analyst_rating": 0.04,      
-        "fcf_yield": 0.03,           
-        "pe_vs_sector": 0.03,        
-        "nifty_trend_score": 0.04,
-        
-        # --- RESTORED VOLUME/FLOW CONTEXT ---
-        "cmf_signal": 0.05,
-        "obv_div": 0.05,
-        "rvol": 0.05,
-        "bb_percent_b": 0.05,
-        "ps_ratio": {"weight": 0.03, "direction": "invert"},
-        
-        # --- CLEANUP (Set to 0.0) ---
-        "supertrend_signal": 0.00,
-        "adx": 0.00,
-        "rsi_slope": 0.00,
-        "bb_width": 0.00,
+            # --- NEW Composites (Priority) ---
+            "trend_strength": 0.20,
+            "momentum_strength": 0.05,
+            "volatility_quality": 0.10,
+            # --- Remaining Core Technicals (Must Keep) ---
+            "macd_cross": 0.10,
+            "dma_20_50_cross": 0.08,
+            "price_vs_200dma_pct": 0.05,
+            "reg_slope": 0.05,
+            "psar_trend": {"weight": 0.05, "direction": "normal"},
+            "ttm_squeeze": {"weight": 0.05, "direction": "normal"},
+            # --- RESTORED FUNDAMENTAL / HYBRID CONTEXT ---
+            "quarterly_growth": 0.05,
+            "analyst_rating": 0.04,
+            "fcf_yield": 0.03,
+            "pe_vs_sector": 0.03,
+            "nifty_trend_score": 0.04,
+            # --- RESTORED VOLUME/FLOW CONTEXT ---
+            "cmf_signal": 0.05,
+            "obv_div": 0.05,
+            "rvol": 0.05,
+            "bb_percent_b": 0.05,
+            "ps_ratio": {"weight": 0.03, "direction": "invert"},
+            # --- CLEANUP (Set to 0.0) ---
+            "supertrend_signal": 0.00,
+            "adx": 0.00,
+            "rsi_slope": 0.00,
+            "bb_width": 0.00,
         },
         "penalties": {
-            "days_to_earnings": {"operator": "<", "value": 7, "penalty": 1.0},      # Avoid pre-earnings risk
-            "bb_percent_b": {"operator": ">", "value": 0.95, "penalty": 0.3},       # Avoid overextended zones
-            "beta": {"operator": ">", "value": 1.8, "penalty": 0.1},                # Avoid extreme volatility
-            "52w_position": {"operator": ">", "value": 85, "penalty": 0.15},        # Avoid extended highs
-            "adx": {"operator": "<", "value": 20, "penalty": 0.3},                  # Weak trend = penalty
-            "vol_spike_ratio": {"operator": "<", "value": 1.2, "penalty": 0.2},     # Avoid dead-volume setups
+            "days_to_earnings": {
+                "operator": "<",
+                "value": 7,
+                "penalty": 1.0,
+            },  # Avoid pre-earnings risk
+            "bb_percent_b": {
+                "operator": ">",
+                "value": 0.95,
+                "penalty": 0.3,
+            },  # Avoid overextended zones
+            "beta": {
+                "operator": ">",
+                "value": 1.8,
+                "penalty": 0.1,
+            },  # Avoid extreme volatility
+            "52w_position": {
+                "operator": ">",
+                "value": 85,
+                "penalty": 0.15,
+            },  # Avoid extended highs
+            "adx": {
+                "operator": "<",
+                "value": 20,
+                "penalty": 0.3,
+            },  # Weak trend = penalty
+            "vol_spike_ratio": {
+                "operator": "<",
+                "value": 1.2,
+                "penalty": 0.2,
+            },  # Avoid dead-volume setups
             "price_vs_200dma_pct": {"operator": "<", "value": 0, "penalty": 0.4},
-            "short_interest": {"operator": ">", "value": 10.0, "penalty": 0.2} # <-- ADDED (Risk flag)
+            "short_interest": {
+                "operator": ">",
+                "value": 10.0,
+                "penalty": 0.2,
+            },  # <-- ADDED (Risk flag)
         },
         "thresholds": {"buy": 7.0, "hold": 5.5, "sell": 4.0},
-        "notes": "Catalyst-driven swing trades combining trend continuation, volume expansion, and short-term growth signals."
+        "notes": "Catalyst-driven swing trades combining trend continuation, volume expansion, and short-term growth signals.",
     },
-
-
     # ============================
     #  LONG-TERM PROFILE
     # ============================
@@ -549,11 +662,10 @@ HORIZON_PROFILE_MAP = {
             "piotroski_f": 0.05,
             "promoter_holding": 0.05,
             "dividend_yield": 0.05,
-            "dividend_payout": 0.05, # <-- Renamed key to match fundamentals.py
+            "dividend_payout": 0.05,  # <-- Renamed key to match fundamentals.py
             "earnings_stability": 0.05,
             "current_ratio": 0.04,
             "de_ratio": 0.04,
-
             # --- Trend confirmations (technical + hybrid) ---
             "price_vs_200dma_pct": 0.05,
             "dma_200_slope": 0.04,
@@ -566,16 +678,22 @@ HORIZON_PROFILE_MAP = {
             "fcf_yield": {"operator": "<", "value": 2, "penalty": 0.3},
             "roe": {"operator": "<", "value": 10, "penalty": 0.3},
             "price_vs_200dma_pct": {"operator": "<", "value": 0, "penalty": 0.4},
-            "dividend_payout": {"operator": ">", "value": 80.0, "penalty": 0.3}, # <-- Renamed key
+            "dividend_payout": {
+                "operator": ">",
+                "value": 80.0,
+                "penalty": 0.3,
+            },  # <-- Renamed key
             "beta": {"operator": ">", "value": 1.5, "penalty": 0.15},
             "promoter_pledge": {"operator": ">", "value": 15.0, "penalty": 0.2},
-            "ocf_vs_profit": {"operator": "<", "value": 0.8, "penalty": 0.4} # <-- ADDED (Critical Quality check)
+            "ocf_vs_profit": {
+                "operator": "<",
+                "value": 0.8,
+                "penalty": 0.4,
+            },  # <-- ADDED (Critical Quality check)
         },
         "thresholds": {"buy": 7.5, "hold": 6.0, "sell": 4.0},
-        "notes": "Quality + stability + compounding trend structure. Ideal for multi-month positional holdings."
+        "notes": "Quality + stability + compounding trend structure. Ideal for multi-month positional holdings.",
     },
-
-
     # ============================
     #  MULTIBAGGER PROFILE
     # ============================
@@ -592,14 +710,17 @@ HORIZON_PROFILE_MAP = {
             "market_cap_cagr": 0.06,
             "promoter_holding": 0.05,
             "piotroski_f": 0.05,
-            "earnings_stability": 0.04,          # Prevent over-cyclicals
+            "earnings_stability": 0.04,  # Prevent over-cyclicals
             "rel_strength_nifty": 0.04,
             "dma_200_slope": 0.04,
-            "fundamental_momentum": 0.04,        # Hybrid: accelerating fundamental growth
-            "fcf_yield_vs_volatility": 0.04,     # Hybrid: cash flow stability vs volatility
+            "fundamental_momentum": 0.04,  # Hybrid: accelerating fundamental growth
+            "fcf_yield_vs_volatility": 0.04,  # Hybrid: cash flow stability vs volatility
             "institutional_ownership": 0.03,
             "quarterly_growth": 0.03,
-            "ocf_vs_profit": {"weight": 0.06, "direction": "normal"} # <-- ADDED (Cash flow check)
+            "ocf_vs_profit": {
+                "weight": 0.06,
+                "direction": "normal",
+            },  # <-- ADDED (Cash flow check)
         },
         "penalties": {
             "peg_ratio": {"operator": ">", "value": 2.0, "penalty": 0.3},
@@ -607,22 +728,26 @@ HORIZON_PROFILE_MAP = {
             "de_ratio": {"operator": ">", "value": 1.0, "penalty": 0.2},
             "52w_position": {"operator": ">", "value": 85, "penalty": 0.2},
             "market_cap": {"operator": ">", "value": 5e11, "penalty": 0.3},
-            "market_cap_floor": {"operator": "<", "value": 5e9, "penalty": 0.3}, # <-- ADDED (Liquidity floor)
+            "market_cap_floor": {
+                "operator": "<",
+                "value": 5e9,
+                "penalty": 0.3,
+            },  # <-- ADDED (Liquidity floor)
             "roe": {"operator": "<", "value": 12, "penalty": 0.2},
             "rel_strength_nifty": {"operator": "<", "value": 0, "penalty": 0.3},
             "institutional_ownership": {"operator": ">", "value": 85, "penalty": 0.3},
             "quarterly_growth": {"operator": "<", "value": 3, "penalty": 0.2},
-            "promoter_pledge": {"operator": ">", "value": 10.0, "penalty": 0.3}
+            "promoter_pledge": {"operator": ">", "value": 10.0, "penalty": 0.3},
         },
         "thresholds": {"buy": 8.0, "hold": 6.5, "sell": 4.5},
-        "notes": "High-growth, high-efficiency compounding opportunities with strong sponsor alignment and volatility-adjusted quality."
-    }
+        "notes": "High-growth, high-efficiency compounding opportunities with strong sponsor alignment and volatility-adjusted quality.",
+    },
 }
 HORIZON_FETCH_CONFIG = {
-    "intraday":  {"period": "5d",  "interval": "15m"},
-    "short_term": {"period": "3mo", "interval": "1d"},
-    "long_term":  {"period": "2y",  "interval": "1wk"},
-    "multibagger": {"period": "5y", "interval": "1mo"}
+    "intraday": {"period": "5d", "interval": "15m", "label":"Intraday"},
+    "short_term": {"period": "3mo", "interval": "1d", "label": "Short Term"},
+    "long_term": {"period": "2y", "interval": "1wk", "label": "Long Term"},
+    "multibagger": {"period": "5y", "interval": "1mo", "label": "Multibagger"},
 }
 
 
@@ -639,7 +764,10 @@ QUALITY_WEIGHTS = {
     # Lower is better
     "de_ratio": {"weight": 1.0, "direction": "invert"},
     "promoter_pledge": {"weight": 1.0, "direction": "normal"},
-    "roe_stability": {"weight": 0.10, "direction": "invert"}, # Lower standard deviation = higher score (invert)
+    "roe_stability": {
+        "weight": 0.10,
+        "direction": "invert",
+    },  # Lower standard deviation = higher score (invert)
     "volatility_quality": {"weight": 0.10, "direction": "normal"},
 }
 GROWTH_WEIGHTS = {
@@ -647,7 +775,7 @@ GROWTH_WEIGHTS = {
     "revenue_growth_5y": {"weight": 1.0, "direction": "normal"},
     "quarterly_growth": {"weight": 1.0, "direction": "normal"},
     "fcf_growth_3y": {"weight": 1.0, "direction": "normal"},
-    "market_cap_cagr": {"weight": 1.0, "direction": "normal"}
+    "market_cap_cagr": {"weight": 1.0, "direction": "normal"},
 }
 VALUE_WEIGHTS = {
     # Lower is better
@@ -657,62 +785,90 @@ VALUE_WEIGHTS = {
     "pe_vs_sector": {"weight": 1.0, "direction": "invert"},
     # Higher is better
     "fcf_yield": {"weight": 1.0, "direction": "normal"},
-    "dividend_yield": {"weight": 1.0, "direction": "normal"}
+    "dividend_yield": {"weight": 1.0, "direction": "normal"},
 }
-MOMENTUM_WEIGHTS = {# 🆕 CORE COMPOSITES (PRIORITY)
-    "momentum_strength": {"weight": 0.30, "direction": "normal"}, # RSI, MACD, Stoch Bundle
-    "trend_strength": {"weight": 0.40, "direction": "normal"},    # ADX, EMA Slope, ST Bundle
-    "volatility_quality": {"weight": 0.10, "direction": "normal"},# New Volatility Setup Score
-
+MOMENTUM_WEIGHTS = {  # 🆕 CORE COMPOSITES (PRIORITY)
+    "momentum_strength": {
+        "weight": 0.30,
+        "direction": "normal",
+    },  # RSI, MACD, Stoch Bundle
+    "trend_strength": {
+        "weight": 0.40,
+        "direction": "normal",
+    },  # ADX, EMA Slope, ST Bundle
+    "volatility_quality": {
+        "weight": 0.10,
+        "direction": "normal",
+    },  # New Volatility Setup Score
     # CONTEXTUAL/HYBRID MOMENTUM (MUST KEEP)
     "vwap_bias": {"weight": 0.05, "direction": "normal"},
     "price_action": {"weight": 0.05, "direction": "normal"},
-    "nifty_trend_score": {"weight": 0.05, "direction": "normal"}, # Macro Context
-    "52w_position": {"weight": 0.05, "direction": "normal"},     # Hybrid/Sentiment Context
-    
+    "nifty_trend_score": {"weight": 0.05, "direction": "normal"},  # Macro Context
+    "52w_position": {"weight": 0.05, "direction": "normal"},  # Hybrid/Sentiment Context
     # ⚠️ CONTEXTUAL/VOLUME (MUST KEEP)
-    "rvol": {"weight": 0.00, "direction": "normal"}, # Weight mass moved to composite, keep key for context
-    "obv_div": {"weight": 0.00, "direction": "normal"}, # Weight mass moved to composite, keep key for context
-    
+    "rvol": {
+        "weight": 0.00,
+        "direction": "normal",
+    },  # Weight mass moved to composite, keep key for context
+    "obv_div": {
+        "weight": 0.00,
+        "direction": "normal",
+    },  # Weight mass moved to composite, keep key for context
     "psar_trend": {"weight": 0.00, "direction": "normal"},
     "ttm_squeeze": {"weight": 0.00, "direction": "normal"},
-
 }
 
-MACRO_INDEX_TICKERS = {
-    "nifty50": "^NSEI",       # Nifty 50 Index (Primary Benchmark)
-    "nifty100": "^NIFTY100.NS",
-    "niftynext50": "^NIFTYNEXT50.NS",
-    "nifty500": "^NIFTY500.NS",
-    "midcap150": "^NIFTYMCAP150.NS",
-    "default": "^NSEI" # Default fallback
+INDEX_TICKERS = {
+    # Broad Market Indices (Comprehensive Coverage)
+    "nifty50": "^NSEI",  # Nifty 50 Index (Primary Benchmark)
+    "nifty100": "^NIFTY100.NS",  # Top 100 stocks
+    "niftynext50": "^NIFTYNEXT50.NS",  # Top 51-100 stocks
+    "nifty500": "^NIFTY500.NS",  # Top 500 stocks (Wide Coverage)
+    "midcap150": "^NIFTYMCAP150.NS",  # Mid-cap segment
+    "smallcap100": "^NIFTYSCAP100.NS",  # Small-cap segment
+    "smallcap250": "^NIFTYSCAP250.NS",  # Broader small-cap coverage
+    "microcap250": "^NIFTYMICROCAP250.NS",  # Micro-cap segment
+    # Sectoral Indices (Industry-specific Insight)
+    "niftybank": "^NSEBANK.NS",  # Banking sector
+    "niftyit": "^CNXIT.NS",  # Information Technology sector
+    "niftypharma": "^CNXPHARMA.NS",  # Pharmaceutical sector
+    "niftyfmcg": "^CNXFMCG.NS",  # Fast Moving Consumer Goods sector
+    "niftyauto": "^CNXAUTO.NS",  # Automotive sector
+    "niftyrealty": "^CNXREALTY.NS",  # Realty sector
+    "niftyinfra": "^CNXINFRA.NS",  # Infrastructure sector
+    # Bombay Stock Exchange (BSE) Indices
+    "sensex": "^BSESN",  # BSE Sensex (BSE Benchmark)
+    "bsemidcap": "^BSEMC.BO",  # BSE Mid-cap segment
+    "bsesmallcap": "^BSESC.BO",  # BSE Small-cap segment
+    # Default fallback
+    "default": "^NSEI",
 }
 
 ENABLE_VOLATILITY_QUALITY = True
 
 # 1. Trend Strength Analyzer Thresholds (Based on ADX Score)
 TREND_THRESH = {
-    "weak_floor": 20.0,      
-    "moderate_floor": 25.0,  
+    "weak_floor": 20.0,
+    "moderate_floor": 25.0,
     "strong_floor": 40.0,
-    "di_spread_strong": 20.0 # DI+ vs DI- spread for high momentum trend
+    "di_spread_strong": 20.0,  # DI+ vs DI- spread for high momentum trend
 }
 
 # 2. Volatility Regime Bands (Used by Volatility Quality composite score)
 VOL_BANDS = {
     # Absolute volatility levels (percent)
     "low_vol_ceiling": 1.0,  # Below 1.0% ATR/HV is considered very low/tight
-    "moderate_vol_ceiling": 2.5, # Below 2.5% ATR/HV is standard swing/high-quality
-    "high_vol_floor": 4.0    # Above 4.0% ATR/HV is considered highly volatile/risky
+    "moderate_vol_ceiling": 2.5,  # Below 2.5% ATR/HV is standard swing/high-quality
+    "high_vol_floor": 4.0,  # Above 4.0% ATR/HV is considered highly volatile/risky
 }
 
 # 3. Momentum Slopes Thresholds
 RSI_SLOPE_THRESH = {
-    "acceleration_floor": 0.05, # Slope > 0.05 (bullish acceleration)
-    "deceleration_ceiling": -0.05 # Slope < -0.05 (bearish deceleration)
+    "acceleration_floor": 0.05,  # Slope > 0.05 (bullish acceleration)
+    "deceleration_ceiling": -0.05,  # Slope < -0.05 (bearish deceleration)
 }
 
 MACD_MOMENTUM_THRESH = {
-    "acceleration_floor": 0.5, # MACD Histogram Z-Score > 0.5
-    "deceleration_ceiling": -0.5 # MACD Histogram Z-Score < -0.5
+    "acceleration_floor": 0.5,  # MACD Histogram Z-Score > 0.5
+    "deceleration_ceiling": -0.5,  # MACD Histogram Z-Score < -0.5
 }

@@ -6,8 +6,12 @@ Signal Engine v3 Phase-4 Final
 - Adds Advanced Volatility Quality composite (toggleable)
 - Removes redundant composite calculations in compute_all_profiles
 - Keeps all previous hybrids, scoring, penalties, and trade-plan logic
+- Implements Priority-Based Setup Classification with Context
+- Fixes Squeeze False Positives
+- Adds Deep Pullback (50EMA) Support
+- Distinguishes Trend Dips vs Counter-Trend Reversals
+- 3-Factor Confidence Model with VWAP Fallback & Macro Sensitivity
 
-Drop-in replacement for your existing signal_engine module (adjust import path if needed).
 """
 
 from typing import Dict, Any, Optional, Tuple, List
@@ -15,38 +19,23 @@ import math
 import statistics
 import operator
 import logging
+from datetime import datetime
 
 from config.constants import MACD_MOMENTUM_THRESH, RSI_SLOPE_THRESH, TREND_THRESH, VOL_BANDS
 from services.data_fetch import _safe_float, _safe_get_raw_float
 
-# Import constants; ENABLE_VOLATILITY_QUALITY may be defined there. Fallback to False.
+# Import constants; ENABLE_VOLATILITY_QUALITY fallback
 try:
     from config.constants import (
-        HORIZON_PROFILE_MAP,
-        VALUE_WEIGHTS,
-        GROWTH_WEIGHTS,
-        QUALITY_WEIGHTS,
-        MOMENTUM_WEIGHTS,
-        ENABLE_VOLATILITY_QUALITY,
+        HORIZON_PROFILE_MAP, VALUE_WEIGHTS, GROWTH_WEIGHTS, 
+        QUALITY_WEIGHTS, MOMENTUM_WEIGHTS, ENABLE_VOLATILITY_QUALITY
     )
 except Exception:
-    # Fallbacks if config.constants missing or constant not present
-    try:
-        from config.constants import (
-            HORIZON_PROFILE_MAP,
-            VALUE_WEIGHTS,
-            GROWTH_WEIGHTS,
-            QUALITY_WEIGHTS,
-            MOMENTUM_WEIGHTS,
-        )
-    except Exception:
-        # Minimal placeholders if constants module cannot be imported;
-        # this preserves importability for unit tests but you should replace with your real constants module.
-        HORIZON_PROFILE_MAP = {}
-        VALUE_WEIGHTS = {}
-        GROWTH_WEIGHTS = {}
-        QUALITY_WEIGHTS = {}
-        MOMENTUM_WEIGHTS = {}
+    HORIZON_PROFILE_MAP = {}
+    VALUE_WEIGHTS = {}
+    GROWTH_WEIGHTS = {}
+    QUALITY_WEIGHTS = {}
+    MOMENTUM_WEIGHTS = {}
     ENABLE_VOLATILITY_QUALITY = False
 
 logger = logging.getLogger(__name__)
@@ -288,7 +277,6 @@ def compute_trend_strength(indicators: Dict[str, Any]) -> Dict[str, Any]:
         logger.debug("Trend strength compute error: %s", e)
         return {"raw": None, "value": None, "score": None, "desc": "err", "alias": "trend_strength", "source": "composite"}
 
-
 def compute_momentum_strength(indicators: Dict[str, Any]) -> Dict[str, Any]:
     try:
         rsi = _safe_get_raw_float(indicators.get("rsi"))
@@ -344,7 +332,6 @@ def compute_momentum_strength(indicators: Dict[str, Any]) -> Dict[str, Any]:
         logger.debug("Momentum compute error: %s", e)
         return {"raw": None, "value": None, "score": None, "desc": "err", "alias": "momentum_strength", "source": "composite"}
 
-
 def compute_roe_stability(fundamentals: Dict[str, Any]) -> Dict[str, Any]:
     try:
         history = fundamentals.get("roe_history")
@@ -376,10 +363,6 @@ def compute_roe_stability(fundamentals: Dict[str, Any]) -> Dict[str, Any]:
         logger.debug("ROE stability error: %s", e)
         return {"raw": None, "value": None, "score": None, "desc": "err", "alias": "roe_stability", "source": "composite"}
 
-
-# -------------------------
-# Volatility Quality (Advanced Model - Option C)
-# -------------------------
 def compute_volatility_quality(indicators: Dict[str, Any]) -> Dict[str, Any]:
     """
     Advanced volatility quality composite (0-10).
@@ -726,6 +709,156 @@ def compute_all_profiles(ticker: str, fundamentals: Dict[str, Any], indicators: 
 # -------------------------
 # Trade plan (unchanged from v3, includes T1/T2 handling previously added)
 # -------------------------
+
+def classify_setup(indicators: Dict[str, Any]) -> str:
+    """
+    Determines trading setup using a Priority Queue system.
+    Evaluates ALL conditions and picks the highest-priority match.
+    """
+    # 1. Extract Metrics
+    close = _safe_float(indicators.get("Price", {}).get("value"))
+    ema20 = _safe_float(indicators.get("20 EMA", {}).get("value"))
+    ema50 = _safe_float(indicators.get("50 EMA", {}).get("value"))
+    ema200 = _safe_float(indicators.get("200 EMA", {}).get("value"))
+    bb_upper = _safe_float(indicators.get("BB High", {}).get("value"))
+    rsi = _safe_float(indicators.get("RSI", {}).get("value"))
+    macd_hist = _safe_float(indicators.get("MACD Histogram (Raw Momentum)", {}).get("value"))
+    squeeze = str(indicators.get("ttm_squeeze", {}).get("value") or "").lower().strip()
+    rvol = _safe_float(indicators.get("Relative Volume (RVOL)", {}).get("value"))
+    
+    if not close: return "GENERIC"
+
+    # 2. Define Candidates List: (Priority, SetupName)
+    candidates = []
+
+    # --- A. MOMENTUM BREAKOUT (Priority: 100) ---
+    # Strict: Price High + High RSI + Volume Expansion
+    if (bb_upper and close >= (bb_upper * 0.98) and 
+        (rsi and rsi > 60) and 
+        (rvol and rvol > 1.2)):
+        candidates.append((100, "MOMENTUM_BREAKOUT"))
+
+    # --- B. VOLATILITY SQUEEZE (Priority: 90) ---
+    # Strict String Match (Fixes Issue 3)
+    if squeeze in ["squeeze on", "on", "squeeze_on"]:
+        candidates.append((90, "VOLATILITY_SQUEEZE"))
+
+    # --- C. PULLBACKS (Priority: 70-75) ---
+    # Context: Must be in Long-Term Uptrend (Above 200 EMA)
+    if ema200 and close > ema200:
+        # 1. Shallow Pullback (Priority 75) - Dip to 20 EMA zone
+        if ema20 and (ema20 * 0.97) <= close <= (ema20 * 1.01):
+            candidates.append((75, "TREND_PULLBACK"))
+        
+        # 2. Deep Pullback (Priority 70) - Dip to 50 EMA zone (Fix Issue 1)
+        elif ema50 and (ema50 * 0.97) <= close <= (ema50 * 1.01):
+            candidates.append((70, "DEEP_PULLBACK"))
+
+    # --- D. OVERSOLD BOUNCE (Priority: 60 vs 30) ---
+    # Context: Panic Selling (RSI < 30 + High Volume)
+    if (rsi and rsi < 30 and (rvol and rvol > 1.3)):
+        # High Quality: Oversold in Uptrend (Buy the Dip) - Fix Issue 2
+        if ema200 and close > ema200:
+            candidates.append((60, "OVERSOLD_IN_UPTREND"))
+        # Risky: Oversold in Downtrend (Falling Knife)
+        else:
+            candidates.append((30, "OVERSOLD_REVERSAL"))
+
+    # --- E. TREND FOLLOWING (Priority: 40) ---
+    # Strict: Price > 20EMA AND Momentum Confirmations (Fix Issue 4)
+    if (ema20 and close > ema20 and 
+        (rsi and rsi > 50) and 
+        (macd_hist and macd_hist > 0)):
+        candidates.append((40, "TREND_FOLLOWING"))
+
+    # --- F. DEFAULT ---
+    candidates.append((10, "NEUTRAL / CHOPPY"))
+
+    # 3. Pick Winner
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+# 🚀 FINAL: 3-FACTOR CONFIDENCE MODEL
+# ==============================================================================
+
+def calculate_setup_confidence(indicators: Dict[str, Any], 
+                               trend_strength: float, 
+                               macro_trend_status: str = "N/A",
+                               setup_type: str = "GENERIC") -> int:
+    """
+    Calculates a weighted confidence score (0-100%) with proper fallbacks.
+    """
+    # Extract Helpers
+    close = _safe_float(indicators.get("Price", {}).get("value"))
+    ema20 = _safe_float(indicators.get("20 EMA", {}).get("value"))
+    ema50 = _safe_float(indicators.get("50 EMA", {}).get("value"))
+    ema200 = _safe_float(indicators.get("200 EMA", {}).get("value"))
+    
+    # Fix Issue 5: VWAP Fallback
+    vwap = _safe_float(indicators.get("VWAP", {}).get("value"))
+    if vwap is None or vwap == 0:
+        vwap = ema20 # Use 20 EMA as proxy for intraday average control
+        
+    rsi_slope = _safe_float(indicators.get("RSI Slope", {}).get("value")) 
+    macd_hist = _safe_float(indicators.get("MACD Histogram (Raw Momentum)", {}).get("value"))
+    rvol = _safe_float(indicators.get("Relative Volume (RVOL)", {}).get("value"))
+    obv_div = str(indicators.get("OBV Divergence", {}).get("value") or "").lower()
+
+    # --- COMPONENT A: TREND CONFIDENCE (Max 40) ---
+    trend_score = 0
+    if close and ema200 and close > ema200: trend_score += 15   # Long-term alignment
+    if close and ema50 and close > ema50: trend_score += 10     # Mid-term alignment
+    if trend_strength and trend_strength > 25: trend_score += 15 # ADX Strength
+    trend_score = min(40, trend_score)
+
+    # --- COMPONENT B: MOMENTUM CONFIDENCE (Max 40) ---
+    mom_score = 0
+    if macd_hist and macd_hist > 0: mom_score += 15             # Momentum Positive
+    if close and vwap and close > vwap: mom_score += 10         # Buyers in control
+    if rsi_slope and rsi_slope > 0: mom_score += 10             # Momentum Accelerating
+    # Volatility Quality Bonus
+    vol_qual = _safe_float(indicators.get("volatility_quality", {}).get("value"))
+    if vol_qual and vol_qual > 6: mom_score += 5
+    mom_score = min(40, mom_score)
+
+    # --- COMPONENT C: VOLUME CONFIDENCE (Max 20) ---
+    vol_score = 0
+    if rvol and rvol > 1.0: vol_score += 10
+    if rvol and rvol > 2.0: vol_score += 5
+    if "confirm" in obv_div or "bull" in obv_div: vol_score += 5
+    vol_score = min(20, vol_score)
+
+    # --- TOTAL RAW SCORE ---
+    # Formula: 40% Trend + 40% Momentum + 20% Volume
+    total_conf = trend_score + mom_score + vol_score
+
+    # --- MACRO & BIAS ADJUSTMENTS ---
+    # Fix Issue 6: Expanded Bearish Keywords
+    macro = (macro_trend_status or "").lower()
+    is_bearish_macro = any(x in macro for x in ["bear", "down", "corrective", "distribution", "weak"])
+    
+    if is_bearish_macro:
+        # If macro is weak, punish bullish setups
+        if setup_type in ["MOMENTUM_BREAKOUT", "TREND_FOLLOWING", "VOLATILITY_SQUEEZE"]:
+            total_conf *= 0.85  # -15% Penalty
+
+    # Setup Boost (Feedback Loop)
+    boost_map = {
+        "MOMENTUM_BREAKOUT": 1.10,
+        "TREND_PULLBACK": 1.07,
+        "DEEP_PULLBACK": 1.05,
+        "OVERSOLD_IN_UPTREND": 1.05,
+        "VOLATILITY_SQUEEZE": 1.05,
+        "OVERSOLD_REVERSAL": 0.90 # Penalty for counter-trend
+    }
+    boost = boost_map.get(setup_type, 1.0)
+    
+    final_conf = int(total_conf * boost)
+    return min(100, max(0, final_conf))
+
+
+
+
 def generate_trade_plan(profile_report: Dict[str, Any],
                         indicators: Dict[str, Any],
                         macro_trend_status: str = "N/A") -> Dict[str, Any]:
@@ -747,14 +880,30 @@ def generate_trade_plan(profile_report: Dict[str, Any],
     s2 = _safe_float(indicators.get("support_2", {}).get("value") if isinstance(indicators.get("support_2"), dict) else indicators.get("support_2"))
     s3 = _safe_float(indicators.get("support_3", {}).get("value") if isinstance(indicators.get("support_3"), dict) else indicators.get("support_3"))
 
+# --- NEW: Run Advanced Logic ---
+    setup_type = classify_setup(indicators)
+    ts_val = _safe_float(indicators.get("trend_strength", {}).get("value"))
+    setup_conf = calculate_setup_confidence(indicators, ts_val, macro_trend_status, setup_type)
+    
+    loggable_data = {
+        "type": setup_type,
+        "confidence": setup_conf,
+        "timestamp": datetime.now().isoformat(),
+        "trend_score": ts_val,
+        "macro": macro_trend_status
+    }
+
     plan = {
         "signal": "NO_TRADE",
+        "setup_type": setup_type,       
+        "setup_confidence": setup_conf, 
+        "log_data": loggable_data,
         "reason": "Analysis Inconclusive",
-        "entry": price,
+        "entry": price, # Fallback
         "stop_loss": None,
         "targets": {"t1": None, "t2": None},
+        "rr_ratio": 0,
         "move_stop_to_breakeven_after_t1": False,
-        "rr_ratio": None,
         "execution_hints": {}
     }
 

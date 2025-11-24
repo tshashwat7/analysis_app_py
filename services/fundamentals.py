@@ -281,10 +281,6 @@ def calc_profit_growth_3y(t, unifier: DataUnifier = None):
     profit_series = unifier.find_series(FIELD.get("net_income", []), fin)
     
     if profit_series.empty:
-        g = unifier.get(["earningsGrowth", "revenueGrowth"])
-        if g:
-            pct = g * 100 if abs(g) < 5 else g
-            return {"raw": pct, "value": f"{pct:.1f}%", "score": 5, "desc": "Yahoo Est"}
         return None
 
     valid = profit_series.dropna().astype(float)[::-1] # Oldest -> Newest
@@ -399,19 +395,30 @@ def calc_roce(t, unifier: DataUnifier = None):
     
     # 2. Fetch Components
     ebit = pick_value_by_key(fin, FIELD.get("ebit", []), col_fin)
+    
+    # 2. Denominator: Capital Employed
+    # Formula: Total Assets - Current Liabilities
     assets = pick_value_by_key(bs, FIELD.get("total_assets", []), col_bs)
     cliab = pick_value_by_key(bs, FIELD.get("current_liabilities", []), col_bs)
     
-    if ebit is not None and assets is not None and cliab is not None:
-        cap = assets - cliab
-        if cap > 0:
-            roce = (ebit / cap) * 100.0
-            score = 10 if roce >= 20 else 7 if roce >= 12 else 3
-            return {"raw": roce, "value": f"{roce:.2f}%", "score": score, "desc": f"ROCE {roce:.2f}%"}
+    # 3. Adjustment: Subtract Cash (Screener Logic)
+    cash = pick_value_by_key(bs, FIELD.get("cash_equivalents", []), col_bs) or 0
+    # Also subtract Short Term Investments if possible
+    st_inv = pick_value_by_key(bs, ["Short Term Investments", "OtherShortTermInvestments"], col_bs) or 0
 
-    # Fallback
+    if ebit and assets and cliab:
+        # Capital Employed = (Assets - Current Liab) - Cash - ST Investments
+        cap_employed = (assets - cliab) - cash - st_inv
+        
+        if cap_employed > 0:
+            roce = (ebit / cap_employed) * 100.0
+            score = 10 if roce >= 20 else 7 if roce >= 15 else 3
+            return {"raw": roce, "value": f"{roce:.2f}%", "score": score, "desc": f"ROCE {roce:.2f}%"}
+            
+    # Fallback to Yahoo if raw calculation fails
     roce = unifier.get(["returnOnCapitalEmployed", "roce"])
-    if roce: return {"raw": roce, "value": f"{roce:.2f}%", "score": 5, "desc": "ROCE (Yahoo)"}
+    if roce: 
+        return {"raw": roce * 100 if roce < 1 else roce, "value": f"{roce:.2f}%", "score": 5, "desc": "ROCE (Yahoo)"}
     return None
 
 @_wrap_calc("roic")
@@ -1074,7 +1081,11 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
     penalty_reasons = []
     
     ph_entry = fundamentals.get("promoter_holding")
-    if ph_entry and ph_entry.get("raw", 0) < 10:
+    # Only penalize if we are SURE it's low (e.g., > 0 but < 10). 
+    # If it is exactly 0 or None, assume data missing to avoid false negatives.
+    raw_ph = ph_entry.get("raw", 0) if ph_entry else 0
+    
+    if raw_ph and 0 < raw_ph < 10:  # Changed condition
         market_penalty += 0.5
         penalty_reasons.append("Low Promoter Holding")
         

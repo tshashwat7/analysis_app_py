@@ -20,7 +20,7 @@ import inspect
 logger = logging.getLogger(__name__)
 
 # Shared helpers from your project (assumed present)
-from config.constants import GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, QUALITY_WEIGHTS, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
+from config.constants import CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, QUALITY_WEIGHTS, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
 from services.data_fetch import (
     get_benchmark_data,
     safe_float,
@@ -152,30 +152,20 @@ def compute_adx(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
         if adx_df is None or adx_df.empty:
             raise ValueError("ADX DataFrame empty")
 
-        # 🆕 FIX: Define all column names before lookup
+        # FIX: Do this lookup ONCE
         adx_col = next((c for c in adx_df.columns if "adx" in c.lower()), None)
         di_plus_col = next((c for c in adx_df.columns if "dmp" in c.lower() or "di+" in c.lower()), None)
         di_minus_col = next((c for c in adx_df.columns if "dmn" in c.lower() or "di-" in c.lower()), None)
 
         if adx_col is None:
-            raise ValueError(f"ADX column missing. Found columns: {list(adx_df.columns)}")
+            raise ValueError(f"ADX column missing. Found: {list(adx_df.columns)}")
 
         adx_val = safe_float(adx_df[adx_col].iloc[-1])
+        di_plus_val = safe_float(adx_df[di_plus_col].iloc[-1]) if di_plus_col else None
+        di_minus_val = safe_float(adx_df[di_minus_col].iloc[-1]) if di_minus_col else None
+
         if adx_val is None:
             raise ValueError("ADX value invalid")
-        
-        adx_val = safe_float(adx_df[adx_col].iloc[-1])
-        di_plus_val = safe_float(adx_df[di_plus_col].iloc[-1]) if di_plus_col else None
-        di_minus_val = safe_float(adx_df[di_minus_col].iloc[-1]) if di_minus_col else None
-
-
-        adx_col = next((c for c in adx_df.columns if "adx" in c.lower()), None)
-        di_plus_col = next((c for c in adx_df.columns if "dmp" in c.lower() or "di+" in c.lower()), None)
-        di_minus_col = next((c for c in adx_df.columns if "dmn" in c.lower() or "di-" in c.lower()), None)
-
-        adx_val = safe_float(adx_df[adx_col].iloc[-1])
-        di_plus_val = safe_float(adx_df[di_plus_col].iloc[-1]) if di_plus_col else None
-        di_minus_val = safe_float(adx_df[di_minus_col].iloc[-1]) if di_minus_col else None
 
         if adx_val < 20:
             score, trend = 0, "Weak / Range-bound"
@@ -1394,44 +1384,38 @@ def compute_psar(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
             raise ValueError("Missing OHLC data for Parabolic SAR")
 
-        # Use pandas_ta to calculate PSAR
         psar_df = ta.psar(df["High"], df["Low"], df["Close"])
         if psar_df is None or psar_df.empty:
             raise ValueError("PSAR calculation failed")
 
-        # Get the latest values
-        # 'PSARl' is the long/buy signal line, 'PSARs' is the short/sell line
-        # 'PSARaf' is the acceleration factor, 'PSARr' is the reversal column (1 or -1)
-        psar_level = safe_float(psar_df.iloc[-1]["PSARl"])
-        if psar_level is None:
-            psar_level = safe_float(psar_df.iloc[-1]["PSARs"])
-            
-        # The 'PSARr' column (reversal) is 1 for bullish, -1 for bearish
-        psar_trend_val = safe_float(psar_df.iloc[-1]["PSARr"])
-        
-        if psar_level is None or psar_trend_val is None:
-            raise ValueError("PSAR values are NaN")
+        # FIX: Dynamically find columns starting with PSARl (long) and PSARs (short)
+        # pandas_ta names them like PSARl_0.02_0.2
+        col_l = next((c for c in psar_df.columns if c.startswith("PSARl")), None)
+        col_s = next((c for c in psar_df.columns if c.startswith("PSARs")), None)
+        col_r = next((c for c in psar_df.columns if c.startswith("PSARr")), None) # Reversal
 
-        if psar_trend_val > 0:
+        # Get values safely
+        val_l = safe_float(psar_df[col_l].iloc[-1]) if col_l else None
+        val_s = safe_float(psar_df[col_s].iloc[-1]) if col_s else None
+        
+        # The level is whichever one is active (not NaN), or fallback
+        psar_level = val_l if val_l is not None else val_s
+        
+        trend_val = safe_float(psar_df[col_r].iloc[-1]) if col_r else 0
+
+        if psar_level is None:
+            raise ValueError("PSAR level is NaN")
+
+        if trend_val > 0:
             signal, score = "Bullish", 10
         else:
             signal, score = "Bearish", 0
-
         return {
-            "psar_trend": {
-                "value": signal,
-                "score": score,
-                "desc": f"PSAR Trend is {signal}"
-            },
-            "psar_level": {
-                "value": round(psar_level, 2),
-                "score": 0,
-                "desc": f"PSAR Trailing Stop: {round(psar_level, 2)}"
-            }
+            "psar_trend": { "value": signal, "score": score, "desc": f"PSAR Trend is {signal}" },
+            "psar_level": { "value": round(psar_level, 2), "score": 0, "desc": f"PSAR Trailing Stop: {round(psar_level, 2)}" }
         }
 
     return _wrap_calc(_inner, "Parabolic SAR")
-
 
 #
 # --- ADD THIS NEW FUNCTION TO indicators.py ---
@@ -1851,7 +1835,8 @@ def compute_indicators(
     symbol: str,
     df_hash: str = None, # df_hash and benchmark_hash are now unused but kept for cache key
     benchmark_hash: str = None,
-    horizon: str = "short_term"
+    horizon: str = "short_term",
+    benchmark_symbol: str = "^NSEI"
 ) -> Dict[str, Dict[str, Any]]:
 
     logger.info(f"[CACHE] computing indicators for {symbol} (horizon={horizon})")
@@ -1873,8 +1858,7 @@ def compute_indicators(
     profile_metrics.extend(list(QUALITY_WEIGHTS.keys()))
     
     # Get unique list
-    profile_metrics = list(set(profile_metrics))
-    
+    profile_metrics = list(set(profile_metrics + CORE_TECHNICAL_SETUP_METRICS))    
     indicators: Dict[str, Dict[str, Any]] = {}
     
     # 2. This cache is CRITICAL.
@@ -1981,7 +1965,7 @@ def compute_indicators(
         sig = inspect.signature(fn)
         if "benchmark_df" in sig.parameters:
             try:
-                benchmark_df = get_benchmark_data(data_horizon)
+                benchmark_df = get_benchmark_data(data_horizon, benchmark_symbol=benchmark_symbol)
                 # 🚀 FIX 3: Slicing logic for Benchmark DF (Applied here)
                 if benchmark_df is not None and not benchmark_df.empty:
                     benchmark_df = _slice_for_speed(benchmark_df)
@@ -2038,10 +2022,22 @@ def compute_indicators(
     # 9. Add technical_score (from the old, simple logic)
     # Your signal_engine doesn't use this, but we'll keep it for compatibility
     try:
-        indicators["technical_score"] = compute_technical_score(indicators)
+        raw_score = compute_technical_score(indicators)
+        indicators["technical_score"] = {
+            "value": raw_score, 
+            "score": 0, 
+            "desc": "Aggregate Technical Score",
+            "alias": "Technical Score"
+        }
+        indicators["Horizon"] = {"value": horizon, "score": 0, "desc": "Horizon setting"}
     except Exception as e:
         logger.warning("[%s] Failed computing technical_score: %s", symbol, e)
-        indicators["technical_score"] = 0
+        indicators["technical_score"] = {
+            "value": -1, 
+            "score": 0, 
+            "desc": "Aggregate Technical Score",
+            "alias": "Technical Score"
+        }
 
     return indicators
 

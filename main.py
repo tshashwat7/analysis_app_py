@@ -18,6 +18,7 @@ import pandas as pd
 import logging
 
 # --- Modular services ---
+from config.constants import INDEX_TICKERS
 from services.data_fetch import (
     safe_history,
     save_stocks_list,
@@ -82,6 +83,7 @@ async def periodic_warmer():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    build_smart_index_map()
     global cache_warmer_task
     logger.info(f"Starting API Executor ({API_THREADS} threads) and Background Executor ({BG_THREADS} threads)...")
     
@@ -147,6 +149,39 @@ CACHE_WARMING_INTERVAL_SECONDS = 15 * 60  # 15 minutes
 SCORE_CACHE: Dict[str, Dict[str, Any]] = {}
 CACHE_LOCK = threading.Lock()
 CACHE_TTL = 60 * 60  # 1 hour
+STOCK_TO_INDEX_MAP: Dict[str, str] = {}
+
+def build_smart_index_map():
+    global STOCK_TO_INDEX_MAP
+    
+    priority_files = [
+        "NSEStock",
+        "niftyauto", "niftybank", "niftyfmcg", "niftyinfra", 
+        "niftyit", "niftypharma", "niftyrealty",
+        "nifty500", 
+        "smallcap250", 
+        "microcap250", 
+        "smallcap100", 
+        "midcap150", 
+        "niftynext50",
+        "nifty100",
+        # 5. The Gold Standard (Overwrites everything else)
+        "nifty50" 
+    ]
+    
+    for filename in priority_files:
+        # Ensure the file actually exists before trying to load
+        filepath = os.path.join(DATA_DIR, f"{filename}.json")
+        
+        # (Optional: If you only have .csv for some, you might need to parse_index_csv here 
+        # or ensure your load_index logic converts them to JSON first. 
+        # The get_cached_stocks helper usually handles JSON reading.)
+        if os.path.exists(filepath):
+            stocks = get_cached_stocks(filepath) 
+            for symbol, _ in stocks:
+                STOCK_TO_INDEX_MAP[symbol.strip().upper()] = filename
+
+    logger.info(f"[INIT] Smart Index Map built for {len(STOCK_TO_INDEX_MAP)} symbols.")
 
 def get_cached(symbol: str):
     with CACHE_LOCK:
@@ -191,7 +226,7 @@ ALL_STOCKS_MAP = {s[0]: s[1] for s in ALL_STOCKS_LIST}
 
 # --- CORE ANALYSIS FUNCTIONS ---
 
-def run_full_analysis(symbol: str) -> Dict[str, Any]:
+def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any]:
     """
     Runs the complete multi-horizon analysis for one stock.
     SYNCHRONOUS function - meant to be run in an Executor.
@@ -209,7 +244,21 @@ def run_full_analysis(symbol: str) -> Dict[str, Any]:
         "error_details": []
     }
     horizons = ["intraday", "short_term", "long_term", "multibagger"]
+    # --- SMART LOGIC STARTS HERE ---
     
+    # 1. Check if we need to auto-detect the index
+    # (If user selected "All Stocks", "Nifty 500", or "Default", we try to find a better fit)
+    target_index = index_name
+    clean_sym = symbol.strip().upper()
+    
+    if index_name in ["NSEStock", "default", "nifty500"]:
+        smart_index = STOCK_TO_INDEX_MAP.get(clean_sym)
+        if smart_index:
+            target_index = smart_index
+
+    # 2. Convert Index Name -> Ticker Symbol (e.g., "smallcap100" -> "^CNXSC")
+    bench_symbol = INDEX_TICKERS.get(target_index, INDEX_TICKERS["default"])
+
     # 1. Fundamentals
     try:
         analysis_data["fundamentals"] = compute_fundamentals(symbol)
@@ -223,7 +272,7 @@ def run_full_analysis(symbol: str) -> Dict[str, Any]:
     analysis_data["raw_indicators_by_horizon"] = {}
     for h in horizons:
         try:
-            h_indicators = compute_indicators(symbol, horizon=h)
+            h_indicators = compute_indicators(symbol, horizon=h, benchmark_symbol=bench_symbol)
             analysis_data["raw_indicators_by_horizon"][h] = h_indicators
             
             # 🔧 Overwrite Warning Implementation (Preserved from your code)
@@ -314,20 +363,21 @@ async def quick_scores(payload: QuickScoresRequest):
 
     def worker(sym: str):
         try:
-            # 1. Run Analysis
-            analysis_data = run_full_analysis(sym)
+            # 1. Run Analysis (With the Index Logic Fix)
+            analysis_data = run_full_analysis(sym, index_name)
             
             # 2. Extract Data
-            best_profile = analysis_data.get("full_report", {}).get("profiles", {}).get(analysis_data.get("full_report", {}).get("best_fit", "short_term"), {})
-            trade_plan = analysis_data.get("trade_recommendation", {})
             full_rep = analysis_data.get("full_report", {})
             profiles = full_rep.get("profiles", {})
-
+            best_profile = profiles.get(full_rep.get("best_fit", "short_term"), {})
+            trade_plan = analysis_data.get("trade_recommendation", {})
+            indicators = analysis_data.get("indicators", {}) # Need this for Price
+            
             final_score = best_profile.get("final_score", 0)
             confidence = int(final_score * 10) if final_score else 0
             signal_str = trade_plan.get("signal", "N/A")
             error_status = analysis_data.get("error_details", [])
-
+            # Bull Score Logic
             bull_score = 0
             if "SQUEEZE" in signal_str: bull_score = 95
             elif "TREND" in signal_str: bull_score = 85
@@ -340,15 +390,37 @@ async def quick_scores(payload: QuickScoresRequest):
                 if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return None
                 return v
 
+            # --- PHASE 1 INJECTION START: Extract R:R and SL Distance ---
+            rr = trade_plan.get("rr_ratio")
+            entry_val = trade_plan.get("entry")
+            sl_val = trade_plan.get("stop_loss")
+            
+            # Calculate SL Distance % (Visual Aid)
+            # We use 'Price' from indicators, or fallback to 'entry'
+            current_price = indicators.get("Price", {}).get("value")
+            if not current_price: current_price = entry_val
+
+            sl_dist_str = "-"
+            if current_price and sl_val and current_price > 0:
+                dist = abs(current_price - sl_val) / current_price * 100
+                sl_dist_str = f"{dist:.1f}%"
+            # --- PHASE 1 INJECTION END ---
+
             # 3. Flatten for Grid
             flat_output = {
                 "symbol": sym,
                 "score": int(final_score * 10) if final_score else 0,
                 "confidence": confidence,
-                "recommendation": best_profile.get("category", "HOLD"),
+                "recommendation": (best_profile.get("category", "HOLD") +"--"+ best_profile.get("profile", "")),
                 "bull_score": bull_score,
                 "bull_signal": signal_str.replace("_", " "),
                 
+                # --- NEW COLUMNS FOR GRID ---
+                "rr_ratio": rr if rr else 0,
+                "entry_trigger": entry_val if entry_val else 0,
+                "sl_dist": sl_dist_str,
+                # ----------------------------
+
                 # Horizon Scores
                 "intra_score": safe_val(profiles.get("intraday", {}).get("final_score")),
                 "short_score": safe_val(profiles.get("short_term", {}).get("final_score")),
@@ -367,7 +439,7 @@ async def quick_scores(payload: QuickScoresRequest):
             logger.exception(f"Worker error {sym}: {e}")
             return sym, {"symbol": sym, "recommendation": "Error"}
 
-    # ### PATCH FIX: Use API_EXECUTOR for user requests
+    # ### KEEPING YOUR ROBUST WORKER LOGIC
     loop = asyncio.get_running_loop()
     
     tasks = [
@@ -419,19 +491,34 @@ async def load_index(index_name: str):
     }
 
 @app.get("/analyze", response_class=HTMLResponse)
-async def analyze_common(request: Request, symbol: str, index: str = "nifty50"):
+async def analyze_common(request: Request, symbol: str, index: str = "nifty50", horizon: str = None):
     try:
-        # ### PATCH FIX: Run single-stock analysis in API_EXECUTOR to prevent blocking
+        # 1. Trigger the analysis
         loop = asyncio.get_running_loop()
-        analysis_data = await loop.run_in_executor(API_EXECUTOR, run_full_analysis, symbol)
-        
-        profile_report = analysis_data.get("full_report", {}).get("profiles", {}).get(
-            analysis_data.get("full_report", {}).get("best_fit", "short_term"), {}
+        analysis_data = await loop.run_in_executor(
+            API_EXECUTOR, 
+            run_full_analysis, 
+            symbol, 
+            index
         )
+        full_report = analysis_data.get("full_report", {})
+        # 2. Determine Active Horizon
+        if horizon and horizon in full_report.get("profiles", {}):
+            selected_profile_name = horizon
+        else:
+            selected_profile_name = full_report.get("best_fit", "short_term")
+            
+        # 3. Get the specific data for that profile
+        profile_report = full_report.get("profiles", {}).get(selected_profile_name, {})
         analysis_data["profile_report"] = profile_report
 
+        # ... (Prepare standard summaries/scores variables) ...
+        trade_plan = generate_trade_plan(
+            profile_report, 
+            analysis_data.get("indicators", {}), 
+            analysis_data.get("macro_trend_status", "N/A")
+        )
         final_score = profile_report.get("final_score", 0)
-        trade_plan = analysis_data.get("trade_recommendation", {})
         meta_scores = analysis_data.get("meta_scores", {})
         
         summary_payload = {
@@ -445,33 +532,29 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50"):
         }
         summaries = build_all_summaries(summary_payload)
 
+        # 4. PASS 'selected_horizon' TO TEMPLATE
         context = {
             "request": request,
             "symbol": symbol,
+            "current_index": index,
+            "selected_horizon": selected_profile_name, 
             "error": None,
-            "full_report": analysis_data.get("full_report", {}),
+            "full_report": full_report,
             "profile_report": profile_report,
             "fundamentals": analysis_data.get("fundamentals", {}),
             "indicators": analysis_data.get("indicators", {}),
-            
-            # ✅ Preserved User Logic: Meta scores sanitization
             "meta_scores": {
                 "value": meta_scores.get("value", 0) or 0,
                 "growth": meta_scores.get("growth", 0) or 0,
                 "quality": meta_scores.get("quality", 0) or 0,
                 "momentum": meta_scores.get("momentum", 0) or 0,
             },
-            
             "trade_recommendation": trade_plan,
             "summaries": summaries,
-            
-            # ✅ Preserved User Logic: Display scores
             "final_signal": profile_report.get("category", "HOLD"),
             "bull_signal": trade_plan.get("signal", "N/A"),
             "total_score": final_score * 10,
             "confidence": int(final_score * 10),
-            
-            # ✅ Preserved User Logic: Macro vars
             "macro_index_name": index.upper(),
             "macro_trend_status": analysis_data.get("macro_trend_status", "N/A"),
             "macro_close": analysis_data.get("macro_close"),
@@ -485,8 +568,12 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50"):
             "request": request, 
             "symbol": symbol, 
             "error": str(e),
-            "indicators": {}, "trade_recommendation": {}, "summaries": {}, 
-            "profile_report": {}, "meta_scores": {}, "full_report": {} 
+            "full_report": {"profiles": {}},
+            "indicators": {},
+            "fundamentals": {},
+            "summaries": {},
+            "trade_recommendation": {},
+            "selected_horizon": "short_term"
         })
 
 @app.post("/analyze", response_class=HTMLResponse)

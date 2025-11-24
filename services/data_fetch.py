@@ -559,11 +559,11 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
         return pd.DataFrame()
 
 
-def get_benchmark_data(horizon: str = "short_term", auto_adjust: bool = True) -> pd.DataFrame:
-    BENCHMARK_SYMBOL = "^NSEI"
+def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NSEI", auto_adjust: bool = True) -> pd.DataFrame:
     cfg = HORIZON_FETCH_CONFIG.get(horizon, HORIZON_FETCH_CONFIG.get("short_term", {}))
     period, interval = cfg.get("period", "3mo"), cfg.get("interval", "1d")
-    key = _get_cache_key(BENCHMARK_SYMBOL, period, interval)
+    # Update Cache Key to use the SYMBOL, not just the horizon
+    key = _get_cache_key(benchmark_symbol, period, interval)
 
     with CACHE_LOCK:
         entry = GLOBAL_OHLC_CACHE.get(key)
@@ -574,7 +574,7 @@ def get_benchmark_data(horizon: str = "short_term", auto_adjust: bool = True) ->
                     return entry["df"].copy()
 
     try:
-        df = safe_history(BENCHMARK_SYMBOL, period=period, interval=interval, auto_adjust=auto_adjust)
+        df = safe_history(benchmark_symbol, period=period, interval=interval, auto_adjust=auto_adjust)
         if df is None or getattr(df, "empty", True):
             return pd.DataFrame()
 
@@ -582,7 +582,7 @@ def get_benchmark_data(horizon: str = "short_term", auto_adjust: bool = True) ->
             GLOBAL_OHLC_CACHE[key] = {"df": df.copy(), "ts": time.time(), "interval": interval}
         return df
     except Exception as e:
-        logger.error(f"[{BENCHMARK_SYMBOL}] Final benchmark fetch error: {e}")
+        logger.error(f"[{benchmark_symbol}] Final benchmark fetch error: {e}")
         return pd.DataFrame()
 
 

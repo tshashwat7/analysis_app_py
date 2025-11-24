@@ -92,7 +92,8 @@
     }
     
     // --- 2. Column Definitions ---
-    const columnDefs = [
+const columnDefs = [
+        // 1. Ticker (Pinned Left)
         { 
             field: "symbol", 
             headerName: "Ticker", 
@@ -100,51 +101,89 @@
             width: 110,
             cellRenderer: p => `<a href="/analyze?symbol=${p.value}" class="ticker-link" target="_blank">${p.value}</a>` 
         },
-        { field: "name", headerName: "Company Name", width: 180 },
-        
-        // Scores
+        { field: "name", headerName: "Company Name", width: 160 },
+
+        // 2. NEW: Alignment (Confluence) Column
+        // Shows 3 dots for Intra/Short/Long scores. 
+        // Green dot = Score > 7. Grey dot = Score < 7.
+        {
+            headerName: "Align",
+            width: 90,
+            cellRenderer: params => {
+                if (!params.data) return '';
+                
+                // Logic: Threshold is 7.0 for a "Good" score
+                const i = (params.data.intra_score || 0) >= 7;
+                const s = (params.data.short_score || 0) >= 7;
+                const l = (params.data.long_score || 0)  >= 7;
+                
+                const dot = (active) => `<span style="font-size:16px; margin:0 2px; color:${active ? '#22c55e' : '#e5e7eb'};">●</span>`;
+                
+                // Tooltip shows the exact numbers on hover
+                const tip = `Intra: ${params.data.intra_score || '-'} | Short: ${params.data.short_score || '-'} | Long: ${params.data.long_score || '-'}`;
+                
+                return `<div title="${tip}" style="cursor:help; letter-spacing: -2px;">${dot(i)}${dot(s)}${dot(l)}</div>`;
+            }
+        },
+
+        // 3. Overall Score
         { 
             field: "score", headerName: "Score", width: 90, sortable: true, filter: 'agNumberColumnFilter',
             cellClass: p => p.value >= 70 ? 'score-buy' : p.value < 40 ? 'score-sell' : 'score-hold'
         },
+
+        // 4. Recommendation (Buy/Sell/Hold)
+        { 
+            field: "recommendation", headerName: "Rec.", width: 100, sortable: true, filter: true,
+            cellClass: p => p.value === 'BUY' ? 'buy-cell' : p.value === 'SELL' ? 'sell-cell' : 'hold-cell' 
+        },
+
+        // 5. NEW: R:R Ratio (Actionable)
+        { 
+            field: "rr_ratio", headerName: "R:R", width: 80, sortable: true, filter: 'agNumberColumnFilter',
+            cellClass: p => p.value >= 2.0 ? 'buy-cell' : 'hold-cell',
+            valueFormatter: p => p.value ? p.value + "R" : "-"
+        },
+
+        // 6. NEW: Risk % (Distance to Stop Loss)
+        { 
+            field: "sl_dist", headerName: "Risk %", width: 90, 
+            cellStyle: { 'color': '#dc2626', 'font-weight': '500' }
+        },
+
+        // 7. Timing Signal (Styled with Badges)
+        { 
+            field: "bull_signal", headerName: "Signal", width: 150, sortable: true, filter: true,
+            cellRenderer: p => {
+                const val = p.value || "";
+                if (val.includes("SQUEEZE")) return `<span style="background:#d1fae5; color:#065f46; padding:2px 6px; border-radius:4px; font-size:12px;">🚀 ${val}</span>`;
+                if (val.includes("TREND")) return `<span style="background:#dbeafe; color:#1e40af; padding:2px 6px; border-radius:4px; font-size:12px;">📈 ${val}</span>`;
+                if (val.includes("DIP")) return `<span style="background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; font-size:12px;">📉 ${val}</span>`;
+                return val;
+            }
+        },
+
+        // 8. Confidence Bar
         { 
             field: "confidence", headerName: "Conf %", width: 90, sortable: true, filter: 'agNumberColumnFilter',
             cellRenderer: params => {
                 const val = params.value || 0;
                 const color = val > 70 ? '#22c55e' : val > 40 ? '#facc15' : '#ef4444';
-                return `<div style="width: 100%; background: #eee; height: 6px; border-radius: 3px; margin-top: 10px;">
+                return `<div style="width: 100%; background: #eee; height: 6px; border-radius: 3px; margin-top: 15px;">
                         <div style="width: ${val}%; background: ${color}; height: 100%; border-radius: 3px;"></div></div>`;
             }
         },
-        { 
-            field: "recommendation", headerName: "Rec.", width: 100, sortable: true, filter: true,
-            cellClass: p => p.value === 'BUY' ? 'buy-cell' : p.value === 'SELL' ? 'sell-cell' : 'hold-cell' 
-        },
-        
-        // Timing / Bull Stats
-        { field: "bull_signal", headerName: "Timing Signal", width: 160, sortable: true, filter: true },
-        { field: "bull_score", headerName: "Bull Scr", width: 100, sortable: true, hide: true },
 
-        // Corporate Actions
-        { field: "corp_action", headerName: "Upcoming Event", width: 200, sortable: true, filter: true },
-        
-        // Horizon Scores
-        { 
-            field: "intra_score", headerName: "Intra", width: 90, sortable: true, filter: 'agNumberColumnFilter', 
-            cellClass: p => p.value >= 7.5 ? 'score-buy' : p.value <= 3.5 ? 'score-sell' : 'score-hold'
-        },
-        { 
-            field: "short_score", headerName: "Short", width: 90, sortable: true, filter: 'agNumberColumnFilter',
-            cellClass: p => p.value >= 7.0 ? 'score-buy' : p.value <= 4.0 ? 'score-sell' : 'score-hold'
-        },
-        { 
-            field: "long_score", headerName: "Long", width: 90, sortable: true, filter: 'agNumberColumnFilter',
-            cellClass: p => p.value >= 7.5 ? 'score-buy' : p.value <= 4.0 ? 'score-sell' : 'score-hold'
-        },
-        { 
-            field: "multi_score", headerName: "Multi", width: 90, sortable: true, filter: 'agNumberColumnFilter',
-            cellClass: p => p.value >= 8.0 ? 'score-buy' : p.value <= 4.5 ? 'score-sell' : 'score-hold'
-        },
+        // 9. Company Name
+
+        // 10. Horizon Scores (Hidden by default, but available for the 'Align' column logic)
+        { field: "intra_score", hide: true },
+        { field: "short_score", hide: true },
+        { field: "long_score", hide: true },
+        { field: "multi_score", hide: true },
+
+        // 11. Corporate Actions
+        { field: "corp_action", headerName: "Upcoming Event", width: 180, sortable: true, filter: true },
     ];
 
     // --- 3. Grid Options ---
@@ -158,7 +197,13 @@
         paginationPageSizeSelector: [20, 50, 100, 500],
         defaultColDef: { resizable: true, sortable: true, filter: true },
         getRowId: params => params.data.symbol,
-        
+        defaultColDef: { 
+            resizable: true, 
+            sortable: true, 
+            filter: true,
+            flex: 1,        // <--- Makes columns auto-size to fill width
+            minWidth: 80,   // <--- Prevents columns from crushing too small
+        },
         // --- CRITICAL: Trigger analysis when page changes ---
         onPaginationChanged: onPageChange
     };

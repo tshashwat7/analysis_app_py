@@ -53,6 +53,7 @@
   font-size: 0.85rem;
   color: #444;
 }
+body { padding-bottom: 80px; } 
 </style>
 </head>
 <body>
@@ -81,6 +82,30 @@
         <span class="badge orange fs-6 px-3">Short-Term: {{ bull_signal }}</span>
       {% endif %}
     {% endif %}
+
+    <div class="d-flex justify-content-center gap-2 my-3">
+<div class="d-flex justify-content-center gap-2 my-3">
+      {% if full_report and full_report.profiles %}
+          {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
+            {% set profile_data = full_report.profiles[pname] %}
+            
+            {% if profile_data %}
+                {% set p_score = profile_data.final_score | default(0) %}
+                
+                {% set is_active = (selected_horizon == pname) %}
+                
+                <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ pname }}" 
+                   class="btn btn-sm {{ 'btn-primary' if is_active else 'btn-outline-secondary' }}">
+                   {{ pname | replace('_', ' ') | title }}
+                   <span class="badge bg-white text-dark ms-1">{{ p_score | round(1) }}</span>
+                </a>
+            {% endif %}
+          {% endfor %}
+      {% else %}
+          <div class="text-muted small">Scores unavailable due to analysis error.</div>
+      {% endif %}
+    </div>
+    </div>
   </div>
 
 
@@ -92,8 +117,9 @@
 
   <div>
     <strong>Confidence:</strong>
-    <span class="confidence-bar">
-      <!-- static width for PDF compatibility -->
+    <span class="confidence-bar" 
+          title="Base: {{ profile_report.base_score }} | Penalties: -{{ (profile_report.penalty_total * 10)|round(1) }}" 
+          style="cursor: help;">
       <span id="confidence-fill" class="confidence-fill" style="width: {{ confidence | default(0) }}%;"></span>
     </span>
     <span class="conf-text" id="conf-text">{{ confidence | default(0) }}%</span>
@@ -128,30 +154,130 @@ while "entry_price_used" answers “At what price will I assume entry once confi
       </div>
     </div>
   </div> -->
-  <div class="col">
-        <div class="card h-100">
-          <h5 class="section-title">📌 Trade Plan</h5>
-          {% set tr = trade_recommendation %}
-          
-          {% if "BUY" in tr.signal %}
-            <span class="badge green fs-6 mb-2">Signal: {{ tr.signal | replace("_", " ") }}</span>
-          {% elif "HOLD" in tr.signal %}
-            <span class="badge orange fs-6 mb-2">Signal: Hold / Wait</span>
-          {% else %}
-            <span class="badge red fs-6 mb-2">Signal: No Trade</span>
-          {% endif %}
-          
-          <ul class="small mb-0">
-            <li><b>Entry:</b> {{ "₹" ~ tr.entry if tr.entry else 'N/A' }}</li>
-            <li><b>Stop-Loss:</b> {{ "₹" ~ tr.stop_loss if tr.stop_loss else 'N/A' }}</li>
-            <li><b>Target:</b> {{ "₹" ~ tr.target if tr.target else 'N/A' }}</li>
-            <li><b>R/R Ratio:</b> {{ tr.rr_ratio if tr.rr_ratio else 'N/A' }}</li>
-          </ul>
-          <div class="summary-box summary-compact">
-            <b>Reason:</b> {{ tr.reason | default('N/A') }}
-          </div>
+    <!-- Score Breakdown -->
+    
+    <div class="col">
+      <div class="card h-100">
+        <h5 class="section-title">🧮 Score Calculation ({{ selected_horizon | title }})</h5>
+        <ul class="list-group list-group-flush small">
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            Base Score
+            <span class="fw-bold">{{ profile_report.base_score | round(2) }}</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            Penalties Applied
+            <span class="fw-bold text-danger">-{{ (profile_report.penalty_total * 10) | round(2) }}</span>
+          </li>
+          <li class="list-group-item d-flex justify-content-between align-items-center bg-light">
+            <strong>Final Score</strong>
+            <span class="fw-bold fs-5">{{ profile_report.final_score | round(2) }} / 10</span>
+          </li>
+        </ul>
+      <div class="summary-box summary-compact mt-2">
+        This score is specific to the <b>{{ selected_horizon | replace('_', ' ') | title }}</b> profile.
+      </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card h-100">
+        <h5 class="section-title">🏆 Top Drivers</h5>
+        <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+          <table class="table table-sm small mb-0 table-hover">
+            <thead class="table-light">
+              <tr><th>Metric</th><th>Val</th><th>Score</th></tr>
+            </thead>
+            <tbody>
+              {% for key, score in profile_report.metric_details|dictsort(false, 'value')|reverse %}
+                {% if loop.index <= 8 %}
+                <tr>
+                  <td>{{ key | replace('_', ' ') | title }}</td>
+                  <td>
+                    {% set ind_val = indicators.get(key, {}).get('value') %}
+                    {% set fund_val = fundamentals.get(key, {}).get('value') %}
+                    {{ ind_val if ind_val else (fund_val if fund_val else '-') }}
+                  </td>
+                  <td>
+                      {% if score >= 8 %}<span class="text-success fw-bold">{{ score }}</span>
+                      {% elif score <= 3 %}<span class="text-danger fw-bold">{{ score }}</span>
+                      {% else %}<span class="text-muted">{{ score }}</span>{% endif %}
+                  </td>
+                </tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
       </div>
+    </div>
+
+    <div class="col">
+      <div class="card h-100">
+        <h5 class="section-title">⚠️ Risk Penalties</h5>
+        {% if profile_report.applied_penalties %}
+          <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+            <table class="table table-sm small mb-0">
+              <thead class="table-light"><tr><th>Risk</th><th>Condition</th><th>Hit</th></tr></thead>
+              <tbody>
+                {% for p in profile_report.applied_penalties %}
+                <tr>
+                  <td class="text-danger fw-bold" style="font-size: 0.85rem;">{{ p.metric | replace('_', ' ') | title }}</td>
+                  <td style="font-size: 0.8rem;">{{ p.raw }} {{ p.op }} {{ p.value }}</td>
+                  <td class="text-danger fw-bold">-{{ (p.penalty * 10) | round(1) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="d-flex align-items-center justify-content-center h-75 text-success">
+            <div>✅ No Active Penalties</div>
+          </div>
+        {% endif %}
+      </div>
+  </div>
+<div class="col">
+  <div class="card h-100">
+    <h5 class="section-title">📌 Trade Plan New</h5>
+    
+    <div class="mb-3">
+      {% set tr = trade_recommendation %}
+      {% if "BUY" in tr.signal %}
+        <span class="badge bg-success fs-6">Signal: {{ tr.signal | replace("_", " ") }}</span>
+      {% elif "HOLD" in tr.signal %}
+        <span class="badge bg-warning text-dark fs-6">Signal: Hold / Wait</span>
+      {% else %}
+        <span class="badge bg-danger fs-6">Signal: No Trade</span>
+      {% endif %}
+
+      {% if tr.setup_type and tr.setup_type != "GENERIC" %}
+        {% set st = tr.setup_type %}
+        {% set badge_color = 'primary' %} {% if 'SQUEEZE' in st %} {% set badge_color = 'info text-dark' %} {% elif 'BREAKOUT' in st %} {% set badge_color = 'primary' %} {% elif 'PULLBACK' in st %} {% set badge_color = 'success' %} {% elif 'OVERSOLD' in st %} {% set badge_color = 'warning text-dark' %} {% endif %}
+        
+        <span class="badge bg-{{ badge_color }} fs-6 ms-1" title="Detected Setup Pattern">
+          ⚡ {{ st | replace('_', ' ') | title }}
+        </span>
+      {% endif %}
+
+      {% if tr.setup_confidence %}
+        <span class="badge bg-light text-dark border fs-6 ms-1" title="Algorithm Confidence (0-100%)">
+          🎯 Conf: {{ tr.setup_confidence }}%
+        </span>
+      {% endif %}
+    </div>
+    
+    <ul class="small mb-0 list-unstyled">
+      <li class="mb-1"><b>Entry Zone:</b> <span class="text-primary fw-bold">{{ "₹" ~ tr.entry if tr.entry else 'N/A' }}</span></li>
+      <li class="mb-1"><b>Stop-Loss:</b> <span class="text-danger fw-bold">{{ "₹" ~ tr.stop_loss if tr.stop_loss else 'N/A' }}</span></li>
+      <li class="mb-1"><b>Target:</b> <span class="text-success fw-bold">{{ "₹" ~ tr.targets.t1 if tr.targets.t1 else 'N/A' }}</span></li>
+      <li><b>R/R Ratio:</b> {{ tr.rr_ratio if tr.rr_ratio else 'N/A' }}</li>
+    </ul>
+    
+    <div class="summary-box summary-compact mt-2">
+      <b>Logic:</b> {{ tr.reason | default('N/A') }}
+    </div>
+  </div>
+</div>
 
   <!-- Risk & Execution -->
   <div class="col">
@@ -269,92 +395,63 @@ while "entry_price_used" answers “At what price will I assume entry once confi
         </div>
       </div>
 
-  <!-- Score Breakdown -->
-<div class="col">
-        <div class="card h-100">
-          <h5 class="section-title">📈 Final Score Calculation</h5>
-          {% set report = profile_report %}
-          <ul class="small mb-0">
-            <li>Base Score: <b>{{ report.base_score | round(2) }}</b></li>
-            <li>Penalty Total: <span style="color: #dc3545;"><b>-{{ report.penalty_total * 10 | round(2) }}</b></span></li>
-            <li style="border-top: 1px solid #eee; padding-top: 5px; margin-top: 5px;">
-                Final Score: <b style="font-size: 1.1rem;">{{ report.final_score | round(2) }} / 10</b>
-            </li>
-          </ul>
-           <div class="summary-box summary-compact">
-            {{ summaries.score | default("The Final Score is the Base Score minus any applied penalties.") }}
-          </div>
-        </div>
-      </div>
 
-      <div class="col">
-        <div class="card h-100">
-          <h5 class="section-title">🎯 Key Scoring Metrics</h5>
-          {% set metrics = profile_report.metric_details %}
-          {% if metrics %}
-            <ul class="small mb-0" style="max-height: 150px; overflow-y: auto;">
-              {% for key, score in metrics.items() %}
-                <li>{{ key }}: (Score: {{ score | round(1) }})</li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <p class="small text-muted">No scoring metrics were applied.</p>
-          {% endif %}
-           <div class="summary-box summary-compact">
-            These are the weighted metrics from the '<b>{{ profile_report.profile }}</b>' profile used to calculate the Base Score.
-          </div>
+    <!-- Actionable Risk Metrics -->
+    <div class="col">
+      <div class="card h-100">
+        <h5 class="section-title">⚠️ Actionable Risk</h5>
+        <ul class="small mb-0">
+          <li><b>ATR (14):</b> {{ indicators.get('ATR (14)', {}).get('value') | default('N/A') }}</li>
+          <li><b>2×ATR SL:</b> ₹{{ indicators.get('Suggested SL (2xATR)', {}).get('value') | default('N/A') }}</li>
+        </ul>
+        <div class="summary-box summary-compact">
+          {{ summaries.actionable_risk }}
         </div>
-      </div>
-
-      <div class="col">
-        <div class="card h-100">
-          <h5 class="section-title">⚠️ Penalties & Warnings</h5>
-          {% set penalties = profile_report.applied_penalties %}
-          {% if penalties %}
-            <ul class="small mb-0" style="color: #dc3545; max-height: 150px; overflow-y: auto;">
-              {% for p in penalties %}
-                <li>
-                  <b>{{ p.metric }}</b>
-                  <span style="color: #555;">(Is {{ p.op }} {{ p.value }})</span>
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <p class="small text-muted">No penalties applied.</p>
-          {% endif %}
-           <div class="summary-box summary-compact">
-            These warnings are subtracted from the Base Score to create the Final Score.
-          </div>
-        </div>
-      </div>
-
-  <!-- Actionable Risk Metrics -->
-  <div class="col">
-    <div class="card h-100">
-      <h5 class="section-title">⚠️ Actionable Risk</h5>
-      <ul class="small mb-0">
-        <li><b>ATR (14):</b> {{ indicators.get('ATR (14)', {}).get('value') | default('N/A') }}</li>
-        <li><b>2×ATR SL:</b> ₹{{ indicators.get('Suggested SL (2xATR)', {}).get('value') | default('N/A') }}</li>
-      </ul>
-      <div class="summary-box summary-compact">
-        {{ summaries.actionable_risk }}
       </div>
     </div>
-  </div>
 
-  <!-- Reasons & Remarks -->
-  <div class="col-md-6">
-    <div class="card h-100">
-      <h5 class="section-title">🧠 Reasons & Remarks</h5>
-
-      <!-- existing reasons list -->
-      {% if reasons %}
-        <ul class="small mb-0">{% for r in reasons %}<li>{{ r }}</li>{% endfor %}</ul>
-      {% else %}
-        <div class="small text-muted">No specific reasons available.</div>
-      {% endif %}
+    <!-- Reasons & Remarks -->
+    <div class="col-md-6">
+      <div class="card h-100">
+        <h5 class="section-title">🧠 Tactical Hints</h5>
+{% if trade_recommendation.execution_hints %}
+      <div class="mt-3 p-2 bg-light border rounded small">
+        <h6 class="fw-bold text-secondary mb-2" style="font-size: 0.85rem;">
+          ⚡ Execution Strategy
+        </h6>
+        <ul class="mb-0 ps-3 text-muted">
+          {% if trade_recommendation.targets.t1 %}
+          <li class="mb-1">
+            <span class="fw-bold text-dark">Target 1 (₹{{ trade_recommendation.targets.t1 }}):</span> 
+            {{ trade_recommendation.execution_hints.t1_desc }}
+          </li>
+          {% endif %}
+          
+          {% if trade_recommendation.targets.t2 %}
+          <li class="mb-1">
+            <span class="fw-bold text-dark">Target 2 (₹{{ trade_recommendation.targets.t2 }}):</span> 
+            {{ trade_recommendation.execution_hints.t2_desc }}
+          </li>
+          {% endif %}
+          
+          {% if trade_recommendation.move_stop_to_breakeven_after_t1 %}
+          <li class="text-primary fw-bold mt-2">
+            🛡️ Rule: Move Stop-Loss to Breakeven as soon as Target 1 is hit.
+          </li>
+          {% endif %}
+        </ul>
+      </div>
+      
+    {% else %}
+      <div class="mt-3 p-2 bg-light border rounded small text-center text-muted">
+        <i class="bi bi-hourglass-split"></i> 
+        No actionable setup for <b>{{ selected_horizon | replace('_', ' ') | title }}</b>.
+        <br>
+        Current Status: <b>{{ trade_recommendation.signal | replace('_', ' ') }}</b>
+      </div>
+    {% endif %}
+      </div>
     </div>
-  </div>
 
   <div class="col-md-6">
     <div class="card h-100">
@@ -383,57 +480,111 @@ while "entry_price_used" answers “At what price will I assume entry once confi
 <!-- =======  Detailed Analytics Grid with Color Badges  ======= -->
 <div class="row row-cols-1 row-cols-md-2 g-3 mt-3">
 
-<div class="col">
+  <div class="col">
     <div class="card h-100">
-      <h3 class="section-title">💹 Fundamental Score Breakdown</h3>
-      <table>
-        <thead><tr><th>Metric</th><th>Value</th><th>Score</th></tr></thead>
-        <tbody>
-          {% for k, v in fundamentals.items() %}
-            {% if v is mapping %} 
-              {% set val = (v.score | default(0)) | int %} 
-              {% if val >= 7 %}
-                {% set badge_class = 'green' %}
-              {% elif val >= 4 %}
-                {% set badge_class = 'orange' %}
-              {% else %}
-                {% set badge_class = 'red' %}
-              {% endif %}
-              <tr>
-                <td>{{ v.alias if v.alias is defined else k }}</td>
-                <td>{{ (v.value if v.value is defined else v['value']) | default('N/A') }}</td>
-                <td><span class="badge {{ badge_class }}">{{ val }}</span></td>
-              </tr>
-            {% endif %} {% endfor %}
-        </tbody>
-      </table>
+      <h3 class="section-title">💹 Fundamental Breakdown</h3>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover small mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Metric</th>
+              <th>Value</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for k, v in fundamentals.items() %}
+              {% if v is mapping %} 
+                {% set val = (v.score | default(0)) | int %}
+                
+                {% set is_used = (k in profile_report.metric_details) %}
+                
+                <tr class="{{ 'table-active' if is_used else '' }}">
+                  <td>
+                    {% if is_used %}
+                      <span title="Used in {{ selected_horizon }} Score">🎯</span>
+                    {% else %}
+                      <span style="opacity:0.3">⚪</span>
+                    {% endif %}
+                    
+                    <span class="{{ 'fw-bold' if is_used else 'text-muted' }}">
+                      {{ v.alias if v.alias is defined else (k | replace('_', ' ') | title) }}
+                    </span>
+                  </td>
+                  
+                  <td class="{{ 'fw-bold' if is_used else '' }}">
+                    {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
+                  </td>
+                  
+                  <td>
+                    {% if val >= 7 %}
+                      <span class="badge bg-success">{{ val }}</span>
+                    {% elif val >= 4 %}
+                      <span class="badge bg-warning text-dark">{{ val }}</span>
+                    {% else %}
+                      <span class="badge bg-danger">{{ val }}</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %} 
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
   <div class="col">
     <div class="card h-100">
       <h3 class="section-title">📊 Technical Indicators</h3>
-      <table>
-        <thead><tr><th>Indicator</th><th>Value</th><th>Score</th></tr></thead>
-        <tbody>
-          {% for k, v in indicators.items() %}
-            {% if v is mapping %} 
-              {% set val = (v.score | default(0)) | int %} 
-              {% if val >= 7 %}
-                {% set badge_class = 'green' %}
-              {% elif val >= 4 %}
-                {% set badge_class = 'orange' %}
-              {% else %}
-                {% set badge_class = 'red' %}
-              {% endif %}
-              <tr>
-                <td>{{ v.alias if v.alias is defined else k }}</td>
-                <td>{{ (v.value if v.value is defined else v['value']) | default('N/A') }}</td>
-                <td><span class="badge {{ badge_class }}">{{ val }}</span></td>
-              </tr>
-            {% endif %} {% endfor %}
-        </tbody>
-      </table>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover small mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Indicator</th>
+              <th>Value</th>
+              <th>Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for k, v in indicators.items() %}
+              {% if v is mapping %} 
+                {% set val = (v.score | default(0)) | int %}
+                
+                {% set is_used = (k in profile_report.metric_details) %}
+                
+                <tr class="{{ 'table-active' if is_used else '' }}">
+                  <td>
+                    {% if is_used %}
+                      <span title="Used in {{ selected_horizon }} Score">🎯</span>
+                    {% else %}
+                      <span style="opacity:0.3">⚪</span>
+                    {% endif %}
+                    
+                    <span class="{{ 'fw-bold' if is_used else 'text-muted' }}">
+                      {{ v.alias if v.alias is defined else (k | replace('_', ' ') | title) }}
+                    </span>
+                  </td>
+                  
+                  <td class="{{ 'fw-bold' if is_used else '' }}">
+                    {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
+                  </td>
+                  
+                  <td>
+                    {% if val >= 7 %}
+                      <span class="badge bg-success">{{ val }}</span>
+                    {% elif val >= 4 %}
+                      <span class="badge bg-warning text-dark">{{ val }}</span>
+                    {% else %}
+                      <span class="badge bg-danger">{{ val }}</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endif %} 
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -486,6 +637,112 @@ while "entry_price_used" answers “At what price will I assume entry once confi
 
   {% endif %}
 </div>
+<!-- pjase 3 -->
+<div class="fixed-bottom bg-white border-top shadow-lg p-2" style="z-index: 1050;">
+  <div class="container">
+    <div class="row align-items-center">
+      
+      <div class="col-4 col-md-3">
+        <label class="small text-muted fw-bold mb-0" style="font-size: 0.75rem;">RISK (₹)</label>
+        <div class="input-group input-group-sm">
+          <input type="number" id="riskInput" class="form-control fw-bold" value="2000" step="500" oninput="calcSize()">
+        </div>
+      </div>
+
+      <div class="col-4 col-md-3 text-center border-start border-end">
+        <small class="text-muted d-block" style="font-size: 0.7rem;">BUY QTY</small>
+        <span id="qtyDisplay" class="fw-bold fs-4 text-primary" style="line-height: 1;">0</span>
+        <small class="text-muted d-block" style="font-size: 0.7rem;">SHARES</small>
+      </div>
+
+      <div class="col-4 col-md-3 text-center">
+        <small class="text-muted d-block" style="font-size: 0.7rem;">CAPITAL REQ.</small>
+        <span id="capitalDisplay" class="fw-bold text-dark">₹0</span>
+      </div>
+
+      <div class="col-md-3 d-none d-md-block text-end">
+        <div class="form-check form-switch d-inline-block text-start bg-light rounded ps-5 pe-2 py-1 border">
+          <input class="form-check-input" type="checkbox" id="paperTradeCheck" onchange="toggleTradeState(this)" style="cursor: pointer;">
+          <label class="form-check-label small fw-bold" for="paperTradeCheck" style="cursor: pointer;">Mark Active</label>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// --- Phase 3 Logic: Sizing & State ---
+
+// 1. Get Logic Variables safely from Backend
+const entryPrice = parseFloat("{{ trade_recommendation.entry | default(0) }}");
+const stopLoss = parseFloat("{{ trade_recommendation.stop_loss | default(0) }}");
+
+// 2. Get Current Profile Name (e.g., "Intraday", "short_term")
+const rawHorizon = "{{ selected_horizon }}";
+const horizonLabel = rawHorizon
+
+
+function calcSize() {
+  const riskAmt = parseFloat(document.getElementById('riskInput').value) || 0;
+  
+  if (entryPrice > 0 && stopLoss > 0 && entryPrice !== stopLoss) {
+    const riskPerShare = Math.abs(entryPrice - stopLoss);
+    const qty = Math.floor(riskAmt / riskPerShare);
+    const capital = Math.round(qty * entryPrice);
+
+    document.getElementById('qtyDisplay').innerText = qty;
+    document.getElementById('capitalDisplay').innerText = formatCurrency(capital);
+  } else {
+    document.getElementById('qtyDisplay').innerText = "-";
+    document.getElementById('capitalDisplay').innerText = "-";
+  }
+}
+function formatCurrency(num) {
+    return '₹' + num.toLocaleString('en-IN');
+}
+
+// 3. Context-Aware Toggle Logic
+function toggleTradeState(el) {
+  // Key is specific to THIS horizon (e.g., ..._intraday)
+  const key = "trade_active_{{ symbol }}_{{ selected_horizon }}";
+  const label = el.nextElementSibling;
+  
+  if (el.checked) {
+    localStorage.setItem(key, "true");
+    // Dynamic Message: "Intraday Running"
+    label.innerText = `${horizonLabel} Running`; 
+    label.classList.add("text-success");
+  } else {
+    localStorage.removeItem(key);
+    // Dynamic Message: "Mark Intraday"
+    label.innerText = `Mark ${horizonLabel}`;
+    label.classList.remove("text-success");
+  }
+}
+
+// 4. Init on Load
+window.addEventListener('DOMContentLoaded', () => {
+  calcSize(); 
+  
+  const key = "trade_active_{{ symbol }}_{{ selected_horizon }}";
+  const el = document.getElementById('paperTradeCheck');
+  
+  // Set initial label text based on Horizon
+  if (el) {
+      const label = el.nextElementSibling;
+      
+      if(localStorage.getItem(key) === "true") {
+          el.checked = true;
+          label.innerText = `${horizonLabel} Running`;
+          label.classList.add("text-success");
+      } else {
+          label.innerText = `Mark ${horizonLabel}`;
+          label.classList.remove("text-success");
+      }
+  }
+});
+</script>
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
