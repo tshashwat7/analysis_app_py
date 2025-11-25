@@ -1,8 +1,9 @@
 import os
-from datetime import datetime
+import datetime
 from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, Text, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+
 
 # 1. Setup SQLite
 DB_DIR = "data"
@@ -55,7 +56,7 @@ class SignalCache(Base):
     
     # Detailed breakdown (Stored as JSON string)
     horizon_scores = Column(JSON)    # {"intra": 7.5, "long": 4.0}
-    updated_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.datetime.now())
 
 class TradeLog(Base):
     """
@@ -66,7 +67,7 @@ class TradeLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String, index=True)
     horizon = Column(String)         # Which profile triggered this?
-    entry_time = Column(DateTime, default=datetime.now)
+    entry_time = Column(DateTime, default=datetime.datetime.now())
     
     entry_price = Column(Float)
     stop_loss = Column(Float)
@@ -75,6 +76,18 @@ class TradeLog(Base):
     status = Column(String, default="OPEN") # OPEN, CLOSED
     notes = Column(Text, nullable=True)
 
+class FundamentalCache(Base):
+    """
+    Stores raw fundamental data as a JSON blob.
+    Replaces the need for 1700+ individual .json files.
+    """
+    __tablename__ = "fundamental_cache"
+
+    symbol = Column(String, primary_key=True, index=True)
+    # SQLite natively supports JSON in recent versions, but SQLAlchemy handles serialization
+    data = Column(JSON) 
+    updated_at = Column(DateTime, default=datetime.datetime.now())
+    
 # 3. Create Tables
 def init_db():
     Base.metadata.create_all(bind=engine)

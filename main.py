@@ -7,6 +7,7 @@ import datetime
 import math
 import threading
 import concurrent.futures
+import multiprocessing
 from typing import Dict, Any, List, Tuple, Optional
 from contextlib import asynccontextmanager
 
@@ -41,7 +42,18 @@ from services.corporate_actions import get_corporate_actions
 from services.summaries import build_all_summaries
 from services.metrics_ext import compute_extended_metrics_sync
 from services.flowchart_helper import build_flowchart_payload, df_hash
+from sqlalchemy.orm import Session
+from services.db import SessionLocal, SignalCache, init_db
 
+init_db()
+
+# Dependency to get DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 # --- CACHE WARMER ---
 
@@ -54,32 +66,37 @@ def run_analysis_for_cache(symbol: str):
         logger.error(f"[WARMER] Failed to run analysis for {symbol}: {e}")
 
 async def periodic_warmer():
-    """The async loop that schedules the warming tasks."""
-    # Wait a bit after startup before kicking in
     await asyncio.sleep(10)
     
     while True:
         try:
-            # Get symbols
-            symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST[:20]] 
-            logger.info(f"[WARMER] Starting periodic cache warm for {len(symbols_to_warm)} symbols.")
+            # Prioritize Nifty 50 or recently viewed
+            symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST[:50]] 
+            logger.info(f"[WARMER] Warming {len(symbols_to_warm)} symbols via ProcessPool...")
             
             loop = asyncio.get_running_loop()
             
-            # ### PATCH FIX: Use BACKGROUND_EXECUTOR
+            # USE COMPUTE_EXECUTOR (Process), NOT BACKGROUND_EXECUTOR (Thread)
+            # We don't care about the return values, just that they cache the data
             futures = [
-                loop.run_in_executor(BACKGROUND_EXECUTOR, run_analysis_for_cache, symbol)
+                loop.run_in_executor(COMPUTE_EXECUTOR, run_full_analysis, symbol)
                 for symbol in symbols_to_warm
             ]
             
-            await asyncio.gather(*futures, return_exceptions=True)
-            logger.info(f"[WARMER] Cycle complete. Sleeping {CACHE_WARMING_INTERVAL_SECONDS}s.")
+            # Run in batches to avoid clogging the CPU for user requests
+            # Simple batching logic:
+            batch_size = 5
+            for i in range(0, len(futures), batch_size):
+                batch = futures[i:i + batch_size]
+                await asyncio.gather(*batch, return_exceptions=True)
+                await asyncio.sleep(2) # Breathe between batches
+            
+            logger.info(f"[WARMER] Cycle complete.")
             
         except Exception as e:
-            logger.error(f"[WARMER] Error in loop: {e}")
+            logger.error(f"[WARMER] Error: {e}")
         
         await asyncio.sleep(CACHE_WARMING_INTERVAL_SECONDS)
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,24 +105,16 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting API Executor ({API_THREADS} threads) and Background Executor ({BG_THREADS} threads)...")
     
     # Start background task
-    cache_warmer_task = asyncio.create_task(periodic_warmer())
-    logger.info("Background Cache Warmer started.")
+    # cache_warmer_task = asyncio.create_task(periodic_warmer())
+    # logger.info("Background Cache Warmer started.")
     
     yield
     
     # Shutdown logic
     logger.info("Shutting down Executors...")
     API_EXECUTOR.shutdown(wait=False)
+    COMPUTE_EXECUTOR.shutdown(wait=False) # Add this line
     BACKGROUND_EXECUTOR.shutdown(wait=False)
-    
-    if cache_warmer_task:
-        cache_warmer_task.cancel()
-        try:
-            await cache_warmer_task
-        except asyncio.CancelledError:
-            logger.info("Background Cache Warmer task successfully cancelled.")
-        except Exception as e:
-            logger.error(f"Error during cache warmer shutdown: {e}")
 
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
@@ -134,11 +143,14 @@ NSE_STOCKS_FILE = os.path.join(DATA_DIR, "nse_stocks.json")
 # ### PATCH FIX: SEPARATE EXECUTORS FOR API AND BACKGROUND TASKS
 # ==============================================================================
 # API Executor: Higher thread count for responsive user interface
-API_THREADS = 30 
+API_THREADS = 5
 API_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=API_THREADS, thread_name_prefix="API_Worker")
 
+MAX_CPU = max(1, (os.cpu_count() or 2) - 1)
+COMPUTE_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=MAX_CPU)
+
 # Background Executor: Lower thread count to prevent resource starvation
-BG_THREADS = 5
+BG_THREADS = 2
 BACKGROUND_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=BG_THREADS, thread_name_prefix="BG_Worker")
 
 # Global reference for the warmer task
@@ -146,7 +158,6 @@ cache_warmer_task = None
 CACHE_WARMING_INTERVAL_SECONDS = 15 * 60  # 15 minutes
 
 # --- CACHE HELPERS ---
-SCORE_CACHE: Dict[str, Dict[str, Any]] = {}
 CACHE_LOCK = threading.Lock()
 CACHE_TTL = 60 * 60  # 1 hour
 STOCK_TO_INDEX_MAP: Dict[str, str] = {}
@@ -184,18 +195,106 @@ def build_smart_index_map():
     logger.info(f"[INIT] Smart Index Map built for {len(STOCK_TO_INDEX_MAP)} symbols.")
 
 def get_cached(symbol: str):
-    with CACHE_LOCK:
-        entry = SCORE_CACHE.get(symbol)
+    """
+    Retrieves analysis from SQLite (Persistent).
+    Returns the flattened dictionary expected by AG Grid.
+    """
+    db: Session = SessionLocal()
+    try:
+        # Query DB
+        entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
+        
         if not entry:
             return None
-        if time.time() - entry["ts"] > CACHE_TTL:
-            del SCORE_CACHE[symbol]
-            return None
-        return entry["value"]
+            
+        # Check TTL (Optional: if you want data to expire even from DB)
+        age = (datetime.datetime.now() - entry.updated_at).total_seconds()
+        if age > CACHE_TTL:
+             return None
+
+        # Reconstruct the 'Flat' dictionary for the Grid
+        # 1. Start with the structured columns
+        flat_data = {
+            "symbol": entry.symbol,
+            "score": entry.score,
+            "recommendation": entry.recommendation,
+            "confidence": entry.conf_score,
+            "bull_signal": entry.signal_text,
+            "rr_ratio": entry.rr_ratio,
+            "entry_trigger": entry.entry_price,
+            "stop_loss": entry.stop_loss,
+            "cached": True
+        }
+        
+        # 2. Merge the flexible JSON fields (horizon scores, errors, macros)
+        if entry.horizon_scores:
+            flat_data.update(entry.horizon_scores)
+            
+        return flat_data
+
+    except Exception as e:
+        logger.error(f"DB Read Error {symbol}: {e}")
+        return None
+    finally:
+        db.close()
 
 def set_cached(symbol: str, value: Dict[str, Any]):
-    with CACHE_LOCK:
-        SCORE_CACHE[symbol] = {"value": value, "ts": time.time()}
+    """
+    Saves analysis to SQLite (Persistent).
+    Maps the 'flat' grid dictionary into the structured DB columns.
+    """
+    db: Session = SessionLocal()
+    try:
+        with CACHE_LOCK: # Keep Lock to prevent SQLite race conditions
+            # Check if exists
+            entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
+            
+            # Pack the "Extra" fields into the JSON column
+            horizon_data = {
+                "intra_score": value.get("intra_score"),
+                "short_score": value.get("short_score"),
+                "long_score": value.get("long_score"),
+                "multi_score": value.get("multi_score"),
+                "sl_dist": value.get("sl_dist"),
+                "macro_index_name": value.get("macro_index_name"),
+                "error_details": value.get("error_details")
+            }
+            
+            # Helper to safely get float
+            def _f(k): return value.get(k) if isinstance(value.get(k), (int, float)) else 0.0
+
+            if not entry:
+                entry = SignalCache(
+                    symbol=symbol,
+                    score=_f("score"),
+                    recommendation=str(value.get("recommendation", "HOLD")),
+                    best_horizon=str(value.get("recommendation", "")).split("--")[-1],
+                    signal_text=str(value.get("bull_signal", "")),
+                    conf_score=int(_f("confidence")),
+                    rr_ratio=_f("rr_ratio"),
+                    entry_price=_f("entry_trigger"),
+                    stop_loss=_f("stop_loss"), # Ensure this key exists in quick_scores or default to 0
+                    horizon_scores=horizon_data,
+                    updated_at=datetime.datetime.now()
+                )
+                db.add(entry)
+            else:
+                # Update existing
+                entry.score = _f("score")
+                entry.recommendation = str(value.get("recommendation", "HOLD"))
+                entry.signal_text = str(value.get("bull_signal", ""))
+                entry.conf_score = int(_f("confidence"))
+                entry.rr_ratio = _f("rr_ratio")
+                entry.entry_price = _f("entry_trigger")
+                entry.horizon_scores = horizon_data
+                entry.updated_at = datetime.datetime.now()
+                
+            db.commit()
+    except Exception as e:
+        logger.error(f"DB Write Error {symbol}: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 def get_cached_stocks(index_file: str) -> List[Tuple[str, str]]:
     if os.path.exists(index_file):
@@ -218,7 +317,7 @@ def get_cached_stocks(index_file: str) -> List[Tuple[str, str]]:
     return []
 
 # --- GLOBAL STOCK LIST LOADER ---
-ALL_STOCKS_LIST = get_cached_stocks(os.path.join(DATA_DIR, "nifty500.json"))
+ALL_STOCKS_LIST = get_cached_stocks(os.path.join(DATA_DIR, "NSEStock.json"))
 if not ALL_STOCKS_LIST:
     ALL_STOCKS_LIST = get_cached_stocks(NSE_STOCKS_FILE)
 ALL_STOCKS_MAP = {s[0]: s[1] for s in ALL_STOCKS_LIST}
@@ -361,12 +460,21 @@ async def quick_scores(payload: QuickScoresRequest):
     if not to_fetch:
         return results
 
-    def worker(sym: str):
+    # ### KEEPING YOUR ROBUST WORKER LOGIC
+    loop = asyncio.get_running_loop()
+
+    calc_tasks = [
+        loop.run_in_executor(COMPUTE_EXECUTOR, run_full_analysis, s, index_name)
+        for s in to_fetch
+    ]
+    
+    analyzed_data_list = await asyncio.gather(*calc_tasks)
+
+    for analysis_data in analyzed_data_list:
+        sym = analysis_data.get("symbol")
+        if not sym: continue
+        
         try:
-            # 1. Run Analysis (With the Index Logic Fix)
-            analysis_data = run_full_analysis(sym, index_name)
-            
-            # 2. Extract Data
             full_rep = analysis_data.get("full_report", {})
             profiles = full_rep.get("profiles", {})
             best_profile = profiles.get(full_rep.get("best_fit", "short_term"), {})
@@ -433,24 +541,10 @@ async def quick_scores(payload: QuickScoresRequest):
             }
 
             set_cached(sym, flat_output)
-            return sym, flat_output
-            
+            results[sym] = flat_output
         except Exception as e:
-            logger.exception(f"Worker error {sym}: {e}")
-            return sym, {"symbol": sym, "recommendation": "Error"}
-
-    # ### KEEPING YOUR ROBUST WORKER LOGIC
-    loop = asyncio.get_running_loop()
-    
-    tasks = [
-        loop.run_in_executor(API_EXECUTOR, worker, s)
-        for s in to_fetch
-    ]
-    
-    worker_results = await asyncio.gather(*tasks)
-    
-    for sym, out in worker_results:
-        results[sym] = out
+            logger.error(f"[{sym}] Error flattening analysis data: {e}")
+            results[sym] = {"symbol": sym, "recommendation": "Error"}
             
     return results
 
@@ -496,7 +590,7 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50", 
         # 1. Trigger the analysis
         loop = asyncio.get_running_loop()
         analysis_data = await loop.run_in_executor(
-            API_EXECUTOR, 
+            COMPUTE_EXECUTOR, 
             run_full_analysis, 
             symbol, 
             index

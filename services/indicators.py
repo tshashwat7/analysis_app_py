@@ -36,15 +36,12 @@ MIN_ROWS_FOR_ACCURACY = 400  # 200 DMA + 200 warm-up periods
 
 def _slice_for_speed(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Slices the DataFrame to the most recent N rows to speed up pandas_ta.
+    Performance Fix: Slices DataFrame to the most recent N rows.
     Calculations on 5000 rows vs 400 rows is ~10x faster.
-    We keep 400 rows to ensure 200 DMA and recursive indicators (EMA/RSI) are accurate.
     """
     if df is None or df.empty:
         return df
-    
     if len(df) > MIN_ROWS_FOR_ACCURACY:
-        # Take the last N rows
         return df.iloc[-MIN_ROWS_FOR_ACCURACY:].copy()
     return df
 
@@ -1833,194 +1830,184 @@ INDICATOR_METRIC_MAP: Dict[str, Dict[str, Any]] = {
 
 def compute_indicators(
     symbol: str,
-    df_hash: str = None, # df_hash and benchmark_hash are now unused but kept for cache key
+    df_hash: str = None, 
     benchmark_hash: str = None,
     horizon: str = "short_term",
     benchmark_symbol: str = "^NSEI"
 ) -> Dict[str, Dict[str, Any]]:
 
-    logger.info(f"[CACHE] computing indicators for {symbol} (horizon={horizon})")
+    # logger.debug(f"[CACHE] computing indicators for {symbol} (horizon={horizon})")
 
-    # 1. Get the list of metrics required for this *profile*
+    # 1. Get Profile
     profile = HORIZON_PROFILE_MAP.get(horizon, {})
     if not profile:
-        logger.warning(f"[{symbol}] Profile '{horizon}' not found in HORIZON_PROFILE_MAP.")
         return {}
         
-    # Get all metrics this profile cares about
-    profile_metrics = list(profile.get("metrics", {}).keys())
-    # Also get all metrics used in penalties
-    profile_metrics.extend(list(profile.get("penalties", {}).keys()))
-    # Also get all metrics from meta-scores (if they exist)
-    profile_metrics.extend(list(MOMENTUM_WEIGHTS.keys()))
-    profile_metrics.extend(list(VALUE_WEIGHTS.keys()))
-    profile_metrics.extend(list(GROWTH_WEIGHTS.keys()))
-    profile_metrics.extend(list(QUALITY_WEIGHTS.keys()))
+    # 2. Identify Metrics
+    # We use a set first to deduplicate
+    raw_metrics = set(profile.get("metrics", {}).keys())
+    raw_metrics.update(profile.get("penalties", {}).keys())
+    raw_metrics.update(MOMENTUM_WEIGHTS.keys())
+    raw_metrics.update(VALUE_WEIGHTS.keys())
+    raw_metrics.update(GROWTH_WEIGHTS.keys())
+    raw_metrics.update(QUALITY_WEIGHTS.keys())
+    raw_metrics.update(CORE_TECHNICAL_SETUP_METRICS)
     
-    # Get unique list
-    profile_metrics = list(set(profile_metrics + CORE_TECHNICAL_SETUP_METRICS))    
-    indicators: Dict[str, Dict[str, Any]] = {}
+    # --- REFINEMENT: Dependency Ordering ---
+    # We must ensure base metrics run before dependent ones (e.g. RSI before RSI Slope)
+    # and bundles run early.
+    PRIORITY_ORDER = [
+        "rsi", "macd", "macd_cross", "macd_histogram", # Base Momentum
+        "pivot_point", "resistance_1", "support_1",    # Pivots bundle
+        "ema_20", "ema_50", "ema_200", "adx"           # Trend basics
+    ]
     
-    # 2. This cache is CRITICAL.
-    # It holds dataframes (e.g., "intraday", "long_term")
-    # for this *single* run, so we don't re-fetch.
+    ordered_metrics = []
+    # Add priority items first if they exist in the profile
+    for m in PRIORITY_ORDER:
+        if m in raw_metrics:
+            ordered_metrics.append(m)
+            
+    # Add the rest
+    for m in raw_metrics:
+        if m not in ordered_metrics:
+            ordered_metrics.append(m)
+    
+    # 3. BATCH FETCH: Identify unique horizons needed
+    required_horizons = {horizon} # Always fetch the main horizon
+    metric_meta_map = {} 
+    
+    for m in ordered_metrics:
+        if m in INDICATOR_METRIC_MAP:
+            meta = INDICATOR_METRIC_MAP[m]
+            metric_meta_map[m] = meta
+            h_req = meta.get("horizon", "default")
+            if h_req == "default": h_req = horizon
+            if h_req != "special": required_horizons.add(h_req)
 
-    # 3. Add Price from the *profile's* horizon
-    try:
-        df_profile = get_history_for_horizon(symbol, horizon)
-        if not df_profile.empty:
-            price = float(df_profile["Close"].iloc[-1])
+    # 4. BATCH FETCH: Load DataFrames ONCE
+    dfs_cache = {}
+    for h in required_horizons:
+        try:
+            raw_df = get_history_for_horizon(symbol, h)
+            if raw_df is not None and not raw_df.empty:
+                # OPTIMIZATION: Slice immediately
+                dfs_cache[h] = _slice_for_speed(raw_df)
+        except Exception as e:
+            logger.debug(f"[{symbol}] Batch fetch failed for {h}: {e}")
+
+    indicators: Dict[str, Dict[str, Any]] = {}
+
+    # 5. Add Price (Try from cache)
+    price = None
+    if horizon in dfs_cache:
+        try:
+            price = float(dfs_cache[horizon]["Close"].iloc[-1])
             indicators["Price"] = {"value": round(price, 2), "score": 0, "alias": "Price", "desc": "Current Price"}
-        else:
-            price = None
-    except Exception:
-        price = None
-        
-    # 4. Loop through required metrics and run them on correct data
+        except: pass
+
+    # 6. Execute Metrics
     macd_handled = False
     
-    for metric_key in profile_metrics:
-        if not metric_key:
-            continue
-            
-        meta = INDICATOR_METRIC_MAP.get(metric_key)
-        if not meta:
-            # This is not an indicator (e.g., a fundamental metric), skip it.
-            continue
-            
+    for metric_key in ordered_metrics:
+        if not metric_key or metric_key not in metric_meta_map: continue
+        
+        meta = metric_meta_map[metric_key]
         fn = meta.get("func")
+        if not fn: continue
 
-        # --- Handle MACD Bundle (as it's special) ---
+        # A. MACD Bundle Optimization
         if metric_key in {"macd", "macd_cross", "macd_hist_z", "macd_histogram"}:
-            if macd_handled:
-                continue # Already ran
+            if macd_handled: continue
             macd_handled = True
             
-            # MACD always runs on "short_term" (daily) data
-            try:
-                df_macd = get_history_for_horizon(symbol, "short_term")
-                if not df_macd.empty:
-                    # 🚀 FIX 1: Slice MACD data explicitly here
-                    df_macd_sliced = _slice_for_speed(df_macd)
-                    macd_results = compute_macd(df_macd_sliced)
-                    indicators.update(macd_results)
-            except Exception as e:
-                logger.warning(f"[{symbol}] MACD bundle failed: {e}")
-            continue # Move to next metric
-
-        # --- Pivot Bundle Logic ---
-        pivot_keys = {
-            "pivot_point", "resistance_1", "resistance_2", "resistance_3",
-            "support_1", "support_2", "support_3"
-        }
-        
-        if metric_key in pivot_keys:
-            # Safety Check: If already calculated, skip
-            if indicators.get("_pivot_done"):
-                continue
-
-            try:
-                # Default to short_term (daily) for standard pivots
-                piv_horizon = meta.get("horizon", "short_term")
-                df_piv = get_history_for_horizon(symbol, piv_horizon)
-                
-                if not df_piv.empty:
-                    # Note: Pivot function needs previous day, so slicing to 400 is safe
-                    piv_results = compute_pivot_points(df_piv)
-                    indicators.update(piv_results)
-                    indicators["_pivot_done"] = True
-            except Exception as e:
-                logger.warning(f"[{symbol}] Pivot bundle failed: {e}")
-
-        if fn is None:
-            continue # Skip non-callable metrics
-
-        # --- This is the "Smart" Logic ---
-        # 5. Get the *data horizon* this metric needs
-        data_horizon = meta.get("horizon", "default")
-        
-        # 'default' means use the profile's main horizon
-        if data_horizon == "default":
-            data_horizon = horizon
-        elif data_horizon == "special":
-            # 'special' metrics (like bid_ask) handle their own data
-            pass 
+            df_macd = dfs_cache.get("short_term")
+            if df_macd is None: 
+                 # Fallback fetch + Slice
+                 try:
+                     raw_macd = get_history_for_horizon(symbol, "short_term")
+                     df_macd = _slice_for_speed(raw_macd)
+                 except: pass
             
-        # 6. Get the correct dataframe from the cache
-        df_local = None
-        if data_horizon != "special":
-            try:
-                df_local = get_history_for_horizon(symbol, data_horizon)
-                if df_local is not None:
-                    df_local = _slice_for_speed(df_local)
-                elif df_local is None or df_local.empty:
-                    raise ValueError(f"DF for horizon '{data_horizon}' is None")
-            except Exception as e:
-                logger.warning(f"[{symbol}] Failed to get DF for metric '{metric_key}' (horizon '{data_horizon}'): {e}")
-                continue # Skip metric if data is bad
+            if df_macd is not None and not df_macd.empty:
+                try: indicators.update(compute_macd(df_macd))
+                except Exception as e: logger.debug(f"[{symbol}] MACD bundle error: {e}")
+            continue
 
-        # 7. Get the benchmark DF (if needed)
-        # Note: We'll fetch benchmark data based on the *metric's* horizon
+        # B. Pivot Bundle Optimization
+        pivot_keys = {"pivot_point", "resistance_1", "resistance_2", "resistance_3", "support_1", "support_2", "support_3"}
+        if metric_key in pivot_keys:
+            if indicators.get("_pivot_done"): continue
+            piv_horizon = meta.get("horizon", "short_term")
+            
+            df_piv = dfs_cache.get(piv_horizon)
+            
+            # --- REFINEMENT: Sliced Fallback for Pivots ---
+            if df_piv is None: 
+                try:
+                    raw_piv = get_history_for_horizon(symbol, piv_horizon)
+                    if raw_piv is not None:
+                        df_piv = _slice_for_speed(raw_piv)
+                except: pass
+
+            if df_piv is not None and not df_piv.empty:
+                try:
+                    indicators.update(compute_pivot_points(df_piv))
+                    indicators["_pivot_done"] = True
+                except Exception as e: logger.debug(f"[{symbol}] Pivot bundle error: {e}")
+            continue
+
+        # C. Standard Metrics
+        data_horizon = meta.get("horizon", "default")
+        if data_horizon == "default": data_horizon = horizon
+        
+        df_local = dfs_cache.get(data_horizon)
+        if df_local is None and data_horizon != "special": continue 
+        
+        # --- REFINEMENT: Price Fallback ---
+        # If main horizon price failed, try to recover price from current metric's DF
+        if price is None and df_local is not None and not df_local.empty:
+            try:
+                price = float(df_local["Close"].iloc[-1])
+            except: pass
+
+        # Benchmark (Lazy load + Slice)
         benchmark_df = None
         sig = inspect.signature(fn)
         if "benchmark_df" in sig.parameters:
             try:
-                benchmark_df = get_benchmark_data(data_horizon, benchmark_symbol=benchmark_symbol)
-                # 🚀 FIX 3: Slicing logic for Benchmark DF (Applied here)
-                if benchmark_df is not None and not benchmark_df.empty:
-                    benchmark_df = _slice_for_speed(benchmark_df)
-            except Exception as e:
-                 logger.warning(f"[{symbol}] Failed to get Benchmark DF for metric '{metric_key}': {e}")
+                raw_bench = get_benchmark_data(data_horizon, benchmark_symbol=benchmark_symbol)
+                benchmark_df = _slice_for_speed(raw_bench)
+            except: pass
 
-        # 8. Build kwargs and Run
+        # Build Arguments
         kwargs = {}
         try:
-            # (Set price from earlier, or get it now if it failed)
-            if price is None and not df_local.empty:
-                 price = float(df_local["Close"].iloc[-1])
-            
-            # 🆕 FIX: INJECT RSI SERIES DATA FOR DEPENDENT FUNCTION (RSI SLOPE)
+            # Inject RSI series for Slope (Works because of Priority Order)
             if metric_key == "rsi_slope":
                 rsi_entry = indicators.get("rsi")
-                # Safely extract the series dictionary stored by compute_rsi
-                rsi_series_data = rsi_entry.get("full_series") if rsi_entry else None
-                
-                if rsi_series_data:
-                    # Add the series data to kwargs for the function to consume
-                    kwargs["rsi_series"] = rsi_series_data
-            
-            # Inspect function parameters and build kwargs
+                if rsi_entry: kwargs["rsi_series"] = rsi_entry.get("full_series")
+
             for p in sig.parameters.values():
                 name = p.name
-                if name == "symbol":
-                    kwargs["symbol"] = symbol
-                elif name == "df":
-                    kwargs["df"] = df_local # <-- Pass the correct local df
-                elif name == "benchmark_df":
-                    kwargs["benchmark_df"] = benchmark_df
-                elif name == "close":
-                    kwargs["close"] = df_local["Close"]
-                elif name == "high":
-                    kwargs["high"] = df_local["High"]
-                elif name == "low":
-                    kwargs["low"] = df_local["Low"]
-                elif name == "volume":
-                    kwargs["volume"] = df_local["Volume"]
-                elif name == "price":
-                    kwargs["price"] = price
-                elif name == "horizon":
-                    kwargs["horizon"] = data_horizon # Pass the data horizon
+                if name == "symbol": kwargs["symbol"] = symbol
+                elif name == "df": kwargs["df"] = df_local
+                elif name == "benchmark_df": kwargs["benchmark_df"] = benchmark_df
+                elif name == "close": kwargs["close"] = df_local["Close"]
+                elif name == "high": kwargs["high"] = df_local["High"]
+                elif name == "low": kwargs["low"] = df_local["Low"]
+                elif name == "volume": kwargs["volume"] = df_local["Volume"]
+                elif name == "price": kwargs["price"] = price
+                elif name == "horizon": kwargs["horizon"] = data_horizon
             
-            # Run the metric function
             result = fn(**kwargs)
-            if isinstance(result, dict):
-                indicators.update(result)
-                
-        except Exception as e:
-            logger.warning(f"[{symbol}] Metric '{metric_key}' (func {fn.__name__}) failed: {e}")
+            if isinstance(result, dict): indicators.update(result)
 
-    # 9. Add technical_score (from the old, simple logic)
-    # Your signal_engine doesn't use this, but we'll keep it for compatibility
+        except Exception as e:
+            # --- REFINEMENT: Debug Logging ---
+            logger.debug(f"[{symbol}] Metric '{metric_key}' failed: {e}")
+
+    # --- REFINEMENT: Restore Legacy Keys ---
     try:
         raw_score = compute_technical_score(indicators)
         indicators["technical_score"] = {
@@ -2031,13 +2018,7 @@ def compute_indicators(
         }
         indicators["Horizon"] = {"value": horizon, "score": 0, "desc": "Horizon setting"}
     except Exception as e:
-        logger.warning("[%s] Failed computing technical_score: %s", symbol, e)
-        indicators["technical_score"] = {
-            "value": -1, 
-            "score": 0, 
-            "desc": "Aggregate Technical Score",
-            "alias": "Technical Score"
-        }
+        logger.debug(f"[{symbol}] Failed computing technical_score: {e}")
+        indicators["technical_score"] = {"value": -1, "score": 0, "desc": "Aggregate Technical Score", "alias": "Technical Score"}
 
     return indicators
-

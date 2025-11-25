@@ -33,10 +33,13 @@ class ParquetStore:
         
         try:
             path = ParquetStore._get_path(symbol, interval)
+            # 1. Force Index Name Standard
+            df_to_save = df.copy()
+            df_to_save.index.name = "Date"  # Enforce standard name            
             
             # Ensure index is reset for Parquet (Time column needs to be explicit)
             # We convert the Pandas Index to a Column named 'Date' or 'Datetime'
-            reset_df = df.reset_index()
+            reset_df = df_to_save.reset_index()
             
             # Convert to Polars for optimized write
             pl_df = pl.from_pandas(reset_df)
@@ -47,39 +50,48 @@ class ParquetStore:
             logger.error(f"[{symbol}] Parquet Write Error: {e}")
 
     @staticmethod
-    def load_ohlcv(symbol: str, interval: str, max_age_minutes: int = None) -> pd.DataFrame:
+    def load_ohlcv(symbol: str, interval: str, max_age_minutes: int = None, lookback_days: int = None) -> pd.DataFrame:
         """
-        Reads Parquet -> Returns Pandas DataFrame (indexed by Date).
-        Returns None if file doesn't exist or is too old.
+        Reads Parquet -> Returns Pandas DataFrame.
+        OPTIMIZED: Uses Polars LazyFrame to only load the necessary tail of the data.
         """
         path = ParquetStore._get_path(symbol, interval)
-        if not path.exists():
-            return None
+        if not path.exists(): return None
             
         # 1. Stale Check
         if max_age_minutes:
-            mtime = path.stat().st_mtime
-            age_mins = (datetime.now().timestamp() - mtime) / 60
-            if age_mins > max_age_minutes:
-                # logger.debug(f"[{symbol}] Cache Stale (Age: {age_mins:.0f}m)")
+            try:
+                mtime = path.stat().st_mtime
+                age_mins = (datetime.now().timestamp() - mtime) / 60
+                if age_mins > max_age_minutes:
+                    return None
+            except FileNotFoundError:
                 return None
 
-        # 2. Fast Read
+        # 2. Optimized Lazy Read
         try:
-            # Scan -> Collect is efficient
-            pl_df = pl.read_parquet(path)
+            lazy_df = pl.scan_parquet(path)
             
-            # Convert back to Pandas for your existing indicator engine
-            pdf = pl_df.to_pandas()
+            if lookback_days:
+                # Optimized multiplier logic
+                multiplier = 400 if "m" in interval else 2 
+                row_limit = int(lookback_days * multiplier * 1.2)
+                lazy_df = lazy_df.tail(row_limit)
+
+            pdf = lazy_df.collect().to_pandas()
             
-            # Re-set Index (Handle both Date and Datetime keys)
+            # Robust Index Restoration
             if "Date" in pdf.columns:
                 pdf.set_index("Date", inplace=True)
             elif "Datetime" in pdf.columns:
                 pdf.set_index("Datetime", inplace=True)
-            elif "index" in pdf.columns:
+            elif "index" in pdf.columns: # Fallback for legacy files
                 pdf.set_index("index", inplace=True)
-                
+            
+            # Ensure DatetimeIndex (Crucial for Pandas-TA)
+            if not isinstance(pdf.index, pd.DatetimeIndex):
+                pdf.index = pd.to_datetime(pdf.index)
+
             return pdf
         except Exception as e:
             logger.error(f"[{symbol}] Parquet Read Error: {e}")

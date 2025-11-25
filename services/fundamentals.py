@@ -7,7 +7,10 @@ import numpy as np
 import yfinance as yf
 from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
-
+from sqlalchemy.orm import Session
+from services.db import SessionLocal, FundamentalCache
+import json
+import datetime
 from services.data_fetch import (
     safe_float, safe_div, safe_info, safe_history, _wrap_calc, 
     _fmt_pct, _retry, safe_get, get_history_for_horizon, safe_info_normalized
@@ -995,8 +998,7 @@ def calc_analyst_rating(t: yf.Ticker, unifier: DataUnifier = None):
 # AGGREGATOR
 # ========================================================
 
-@lru_cache(maxsize=1024)
-def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict[str, Any]:
+def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -> Dict[str, Any]:
     logger.info(f"[fundamentals] computing for {symbol}")
     t = yf.Ticker(symbol)
     unifier = DataUnifier(t)
@@ -1109,3 +1111,53 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
     fundamentals["symbol"] = symbol
 
     return fundamentals
+
+def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict[str, Any]:
+    """
+    DB-Cached wrapper. Uses SQLite (trade.db) instead of JSON files.
+    TTL: 24 Hours.
+    """
+    symbol = symbol.strip().upper()
+    db: Session = SessionLocal()
+    
+    try:
+        # 1. READ CACHE FROM DB
+        entry = db.query(FundamentalCache).filter(FundamentalCache.symbol == symbol).first()
+        
+        # Check TTL (24 Hours)
+        if entry:
+            age = (datetime.datetime.now() - entry.updated_at).total_seconds()
+            if age < (24 * 3600):
+                # Valid Cache Hit
+                # SQLAlchemy automatically converts the JSON column back to a Dict
+                return entry.data
+
+        # 2. FETCH FRESH (If cache missing or stale)
+        data = _compute_fundamentals_core(symbol, apply_market_penalty)
+        
+        if data and len(data) > 5: # Basic validity check
+            if entry:
+                # Update existing
+                entry.data = data
+                entry.updated_at = datetime.datetime.now()
+            else:
+                # Insert new
+                entry = FundamentalCache(
+                    symbol=symbol,
+                    data=data,
+                    updated_at=datetime.datetime.now()
+                )
+                db.add(entry)
+            
+            db.commit()
+            
+        return data
+
+    except Exception as e:
+        logger.error(f"DB Cache Error for {symbol}: {e}")
+        db.rollback()
+        # Fallback: Just calculate and return without saving if DB fails
+        return _compute_fundamentals_core(symbol, apply_market_penalty)
+        
+    finally:
+        db.close()

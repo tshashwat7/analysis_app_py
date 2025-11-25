@@ -229,113 +229,174 @@ const columnDefs = [
         }
     }
 
-    // --- 6. The Smart Analysis Logic ---
-// --- 6. High-Performance Parallel Analysis ---
-// --- 6. High-Speed Single-Batch Analysis ---
-    async function analyzeCurrentView() {
-        if (!gridApi) return;
-        
-        // LOCK: Prevent re-entry
-        if (isPageAnalyzing) return;
-        isPageAnalyzing = true;
+// --- 6. Concurrent Batch Analysis with Auto-Nav ---
 
-        const index_name = document.getElementById("indexSelect").value;
-        
-        // 1. Identify range
-        const pageSize = gridApi.paginationGetPageSize();
-        const currentPage = gridApi.paginationGetCurrentPage();
-        const startRow = currentPage * pageSize;
-        const endRow = startRow + pageSize;
+// Helper: Pause execution
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-        const symbolsToAnalyze = [];
-        
-        // 2. Collect ALL symbols for this page
-        let currentIndex = 0;
-        gridApi.forEachNodeAfterFilterAndSort((node) => {
-            if (currentIndex >= startRow && currentIndex < endRow) {
-                // Optimization: Only analyze if score is missing
-                if (node.data.score === null || node.data.score === undefined) {
-                    symbolsToAnalyze.push(node.data.symbol);
-                }
+async function analyzeCurrentView() {
+    if (!gridApi) return;
+    
+    // LOCK: Prevent re-entry
+    if (isPageAnalyzing) return;
+    isPageAnalyzing = true;
+
+    const index_name = document.getElementById("indexSelect").value;
+    
+    // 1. Identify rows
+    const pageSize = gridApi.paginationGetPageSize();
+    const currentPage = gridApi.paginationGetCurrentPage();
+    const totalPages = gridApi.paginationGetTotalPages();
+    const startRow = currentPage * pageSize;
+    const endRow = startRow + pageSize;
+
+    const symbolsToAnalyze = [];
+    
+    gridApi.forEachNodeAfterFilterAndSort((node) => {
+        if (node.rowIndex >= startRow && node.rowIndex < endRow) {
+            // Optimization: Only analyze if score is missing
+            if (node.data.score === null || node.data.score === undefined) {
+                symbolsToAnalyze.push(node.data.symbol);
             }
-            currentIndex++;
-        });
-
-        const total = symbolsToAnalyze.length;
-        if (total === 0) {
-            setStatus(`Page ${currentPage + 1} is up to date.`);
-            setProgress(100);
-            lastAnalyzedPage = currentPage;
-            isPageAnalyzing = false; 
-            return;
         }
+    });
 
-        // 3. SINGLE BATCH: Send all symbols in one request
-        // This reduces HTTP overhead and lets the server parallelize efficiently
-        setStatus(`Analyzing ${total} stocks on Page ${currentPage + 1}...`);
-        setProgress(20); // Indicate activity
+    // 2. Handle Empty Page / Already Analyzed
+    if (symbolsToAnalyze.length === 0) {
+        setStatus(`Page ${currentPage + 1} is up to date.`);
+        setProgress(100);
+        lastAnalyzedPage = currentPage;
+        handleAutoNavigation(currentPage, totalPages); // Move next if Auto-On
+        isPageAnalyzing = false; 
+        return;
+    }
 
-        try {
-            const resp = await fetch("/quick_scores", {
-                method: "POST",
-                headers: {"Content-Type":"application/json"},
-                body: JSON.stringify({symbols: symbolsToAnalyze, index_name: index_name})
-            });
-            const map = await resp.json();
-            
-            // 4. Bulk Update Grid
-            const updates = [];
-            for(const s of symbolsToAnalyze){
-                if(map[s]){
-                    const node = gridApi.getRowNode(s);
-                    if(node && node.data){
-                        updates.push({ 
-                            ...node.data, 
-                            ...map[s],
-                            name: node.data.name, 
-                            corp_action: node.data.corp_action
-                        }); 
+    // 3. BATCHING LOGIC (Your UX Optimization)
+    const BATCH_SIZE = 5; 
+    const batches = [];
+    for (let i = 0; i < symbolsToAnalyze.length; i += BATCH_SIZE) {
+        batches.push(symbolsToAnalyze.slice(i, i + BATCH_SIZE));
+    }
+
+    let completedCount = 0;
+    const total = symbolsToAnalyze.length;
+    setStatus(`0/${total} Analyzed on Page ${currentPage + 1}...`);
+    setProgress(5);
+
+    // 4. Process Batches Concurrently
+    // We map each batch to a fetch Promise
+    const tasks = batches.map(async (batch) => {
+        const MAX_RETRIES = 3;
+        
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                const resp = await fetch("/quick_scores", {
+                    method: "POST",
+                    headers: {"Content-Type":"application/json"},
+                    body: JSON.stringify({symbols: batch, index_name: index_name})
+                });
+                
+                if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                
+                const map = await resp.json();
+                
+                // Update Grid INCREMENTALLY
+                const updates = [];
+                for(const s of batch){
+                    if(map[s]){
+                        const node = gridApi.getRowNode(s);
+                        if(node && node.data){
+                            updates.push({ 
+                                ...node.data, 
+                                ...map[s],
+                                name: node.data.name, 
+                                corp_action: node.data.corp_action
+                            }); 
+                        }
                     }
                 }
-            }
-            
-            if (updates.length > 0) {
-                gridApi.applyTransaction({ update: updates });
-            }
-            
-            setStatus(`Page ${currentPage + 1} Complete.`);
-            setProgress(100);
-            lastAnalyzedPage = currentPage;
+                if (updates.length > 0) {
+                    gridApi.applyTransaction({ update: updates });
+                }
 
-        } catch(err){ 
-            console.error(err);
-            setStatus("Analysis Error");
-        } finally {
-            isPageAnalyzing = false; // Unlock
+                // Update Progress
+                completedCount += batch.length;
+                const percent = Math.floor((completedCount / total) * 100);
+                setStatus(`${completedCount}/${total} Analyzed...`);
+                setProgress(percent);
+                
+                break; // Success! Exit retry loop
+
+            } catch(err) {
+                console.error(`Batch failed (Attempt ${attempt}):`, err);
+                if (attempt < MAX_RETRIES) {
+                    await wait(2000); // Retry delay
+                }
+            }
         }
-    } // --- 7. Button Handlers ---
-    
-    function startAutoAnalyze(){
-        isAutoAnalysisActive = true;
-        abortFlag = false;
-        document.getElementById("startBtn").disabled = true;
-        document.getElementById("stopBtn").disabled = false;
-        document.getElementById("startBtn").innerText = "Auto-Analysis: ON";
-        
-        // Reset tracking so we can force-analyze current page
-        lastAnalyzedPage = -1; 
-        analyzeCurrentView();
-    }
+    });
 
-    function stopAutoAnalyze(){ 
-        isAutoAnalysisActive = false; 
-        abortFlag = true; 
-        document.getElementById("startBtn").disabled = false;
-        document.getElementById("stopBtn").disabled = true;
-        document.getElementById("startBtn").innerText = "Start Auto Analysis";
-        setStatus("Auto-Analysis Stopped.");
-        setProgress(0);
+    // 5. Wait for ALL batches to finish
+    await Promise.all(tasks);
+
+    setStatus(`Page ${currentPage + 1} Complete.`);
+    setProgress(100);
+    lastAnalyzedPage = currentPage;
+    
+    // 6. Navigation Decision (Auto-Advance)
+    handleAutoNavigation(currentPage, totalPages);
+    isPageAnalyzing = false; // Unlock
+}
+
+// --- AUTO-NAV HELPER (Same as before) ---
+async function handleAutoNavigation(currentPage, totalPages) {
+    if (!isAutoAnalysisActive) return;
+
+    if (currentPage < totalPages - 1) {
+        await wait(1000); 
+        lastAnalyzedPage = currentPage; 
+        gridApi.paginationGoToNextPage(); 
+    } else {
+        setStatus("Analysis Complete: All pages scanned.");
+        stopAutoAnalyze();
+        alert("Full Market Scan Complete! 🚀");
     }
+}
+
+// --- 7. Button Handlers (Updated) ---
+
+function startAutoAnalyze(){
+    if (isAutoAnalysisActive) return; // Prevent double clicks
+    
+    isAutoAnalysisActive = true;
+    document.getElementById("startBtn").disabled = true;
+    document.getElementById("stopBtn").disabled = false;
+    document.getElementById("loadBtn").disabled = true; // Lock load during run
+    document.getElementById("startBtn").innerText = "Running...";
+    document.getElementById("startBtn").style.background = "#e2e8f0";
+    document.getElementById("startBtn").style.color = "#333";
+    
+    // Reset page tracking to force analysis of current view
+    lastAnalyzedPage = -1; 
+    analyzeCurrentView();
+}
+
+function stopAutoAnalyze(){ 
+    isAutoAnalysisActive = false; 
+    
+    // Reset Buttons
+    const startBtn = document.getElementById("startBtn");
+    startBtn.disabled = false;
+    startBtn.innerText = "Start Auto Analysis";
+    startBtn.style.background = "#007bff"; // Restore blue color
+    startBtn.style.color = "white";
+
+    document.getElementById("stopBtn").disabled = true;
+    document.getElementById("loadBtn").disabled = false; // Re-enable load
+    
+    setStatus("Auto-Analysis Stopped / Finished.");
+    setProgress(0);
+}
 
     // --- 8. Load Index ---
     async function loadIndex(){
@@ -382,36 +443,49 @@ const columnDefs = [
         document.getElementById("loadBtn").disabled = false;
     }
     
-    // --- 9. Corporate Actions ---
-    async function populateCorporateActions(tickers) {
-        if (!tickers || tickers.length === 0) return;
-        const chunk = tickers.slice(0, 50); 
+    // --- 9. Corporate Actions (Fixed: Chunks entire list) ---
+async function populateCorporateActions(tickers) {
+    if (!tickers || tickers.length === 0) return;
+    
+    // Process in chunks of 50 to avoid payload limits
+    const CHUNK_SIZE = 50;
+    
+    for (let i = 0; i < tickers.length; i += CHUNK_SIZE) {
+        const chunk = tickers.slice(i, i + CHUNK_SIZE);
+        
         try {
-            const res = await fetch('/corporate_action_summary', {
+            // Run in background (no await) to let UI stay responsive
+            fetch('/corporate_action_summary', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tickers: chunk })
-            });
-            const summary = await res.json();
-            if (!summary) return;
-
-            const rowsToUpdate = [];
-            for (const [sym, info] of Object.entries(summary)) {
-                if (info && info !== "-") {
-                    const node = gridApi.getRowNode(sym);
-                    if(node && node.data){
-                        rowsToUpdate.push({
-                            ...node.data,
-                            corp_action: info 
-                        });
+            })
+            .then(res => res.json())
+            .then(summary => {
+                if (!summary) return;
+                const rowsToUpdate = [];
+                for (const [sym, info] of Object.entries(summary)) {
+                    if (info && info !== "-") {
+                        const node = gridApi.getRowNode(sym);
+                        if(node && node.data){
+                            rowsToUpdate.push({
+                                ...node.data,
+                                corp_action: info 
+                            });
+                        }
                     }
                 }
-            }
-            if(rowsToUpdate.length > 0) {
-                gridApi.applyTransaction({ update: rowsToUpdate });
-            }
-        } catch (e) { console.error(e); }
+                if(rowsToUpdate.length > 0) {
+                    gridApi.applyTransaction({ update: rowsToUpdate });
+                }
+            });
+            
+            // Small delay between chunks to be nice to the server
+            await new Promise(r => setTimeout(r, 200)); 
+
+        } catch (e) { console.error("Corp Action Error:", e); }
     }
+}
 </script>
 </body>
 </html>

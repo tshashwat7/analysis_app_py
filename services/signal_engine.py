@@ -681,7 +681,7 @@ def compute_all_profiles(ticker: str, fundamentals: Dict[str, Any], indicators: 
     for pname in pm.keys():
         try:
             out = compute_profile_score(pname, fundamentals, indicators, profile_map=pm)
-            logger.info(f"{ticker} | {pname.upper():<12} | base={out.get('base_score'):>4} | final={out.get('final_score'):>4} | {out.get('category')}")
+            logger.debug(f"{ticker} | {pname.upper():<12} | base={out.get('base_score'):>4} | final={out.get('final_score'):>4} | {out.get('category')}")
         except Exception as e:
             logger.exception("Failed compute_profile_score %s for %s: %s", pname, ticker, e)
             out = {"profile": pname, "error": str(e)}
