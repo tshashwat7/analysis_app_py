@@ -1,10 +1,8 @@
 # services/indicators.py
 """
 Production-ready indicators orchestrator (multi-horizon, profile-driven, cached).
-- Metric implementations preserved (only neutral-score corrections and Ichimoku purity applied).
-- INDICATOR_METRIC_MAP maps metric_key -> {"func": callable, "horizon": "<horizon_key>|default|special"}.
-- compute_indicators orchestrates metric selection from HORIZON_PROFILE_MAP and executes them
-  with correct timeframe data (df_local) and local OHLC/price variables.
+- OPTIMIZATION: Benchmark data is fetched ONCE per symbol analysis (Unified Benchmark Fetch).
+- Metric implementations preserved (neutral-score corrections and Ichimoku purity applied).
 - Caching: per-call df_cache and bench_cache avoid redundant yfinance downloads.
 """
 
@@ -19,8 +17,12 @@ import inspect
 
 logger = logging.getLogger(__name__)
 
-# Shared helpers from your project (assumed present)
-from config.constants import CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, QUALITY_WEIGHTS, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
+# Shared helpers from your project
+from config.constants import (
+    CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, 
+    QUALITY_WEIGHTS, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, 
+    TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
+)
 from services.data_fetch import (
     get_benchmark_data,
     safe_float,
@@ -49,13 +51,11 @@ def _slice_for_speed(df: pd.DataFrame) -> pd.DataFrame:
 try:
     _wrap_calc._is_wrapped_calc = True
 except Exception:
-    # no-op if not possible
     pass
 
 
 # -----------------------------
 # Indicator metric functions
-# (Unchanged calculation logic, except for neutral scoring fix and Ichimoku purity)
 # -----------------------------
 
 def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
@@ -63,7 +63,7 @@ def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
         if df is None or df.empty or "Close" not in df.columns:
             raise ValueError("Missing Close column for RSI")
 
-        rsi_series = ta.rsi(df["Close"], length=length) # <-- The series is calculated here
+        rsi_series = ta.rsi(df["Close"], length=length)
         if rsi_series is None or rsi_series.empty:
             raise ValueError("RSI data unavailable")
 
@@ -88,7 +88,6 @@ def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
                 "full_series": rsi_series.to_dict() 
             }
         }
-
     return _wrap_calc(_inner, "RSI")
 
 
@@ -112,7 +111,6 @@ def compute_mfi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
             score, desc = 5, "Neutral"
 
         return {"mfi": {"value": round(mfi_val, 2), "score": score, "desc": desc}}
-
     return _wrap_calc(_inner, "MFI")
 
 
@@ -135,7 +133,6 @@ def compute_short_ma_cross(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             signal, score = "Neutral", 5
 
         return {"short_ma_cross": {"value": signal, "score": score}}
-
     return _wrap_calc(_inner, "Short MA Cross (5/20)")
 
 
@@ -149,7 +146,6 @@ def compute_adx(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
         if adx_df is None or adx_df.empty:
             raise ValueError("ADX DataFrame empty")
 
-        # FIX: Do this lookup ONCE
         adx_col = next((c for c in adx_df.columns if "adx" in c.lower()), None)
         di_plus_col = next((c for c in adx_df.columns if "dmp" in c.lower() or "di+" in c.lower()), None)
         di_minus_col = next((c for c in adx_df.columns if "dmn" in c.lower() or "di-" in c.lower()), None)
@@ -174,22 +170,9 @@ def compute_adx(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
         return {
             "adx": {"value": round(adx_val, 2),"raw": adx_val, "score": score}, 
             "adx_signal": {"value": trend, "score": score}, 
-            
-            # 🆕 PATCH: Expose DI+ and DI- for the Trend Strength Composite
-            "di_plus": {
-                "value": round(di_plus_val, 2) if di_plus_val is not None else None, 
-                "raw": di_plus_val, # Ensure raw value is available
-                "score": 5,          # Neutral score for standalone use
-                "desc": f"DI+ {di_plus_val:.2f}"
-            }, 
-            "di_minus": {
-                "value": round(di_minus_val, 2) if di_minus_val is not None else None, 
-                "raw": di_minus_val, # Ensure raw value is available
-                "score": 5,          # Neutral score for standalone use
-                "desc": f"DI- {di_minus_val:.2f}"
-            },
-            }
-
+            "di_plus": {"value": round(di_plus_val, 2) if di_plus_val is not None else None, "raw": di_plus_val, "score": 5, "desc": f"DI+ {di_plus_val:.2f}"}, 
+            "di_minus": {"value": round(di_minus_val, 2) if di_minus_val is not None else None, "raw": di_minus_val, "score": 5, "desc": f"DI- {di_minus_val:.2f}"},
+        }
     return _wrap_calc(_inner, "ADX")
 
 
@@ -242,59 +225,19 @@ def compute_stochastic(df: pd.DataFrame, k_length: int = 14, d_length: int = 3, 
             "stoch_d": {"value": round(stoch_d, 2), "score": score},
             "stoch_cross": {"value": crossover_status, "score": crossover_score},
         }
-
     return _wrap_calc(_inner, "Stochastic")
 
 
-def compute_ema_crossover(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or "Close" not in df.columns:
-            raise ValueError("Missing Close column for EMA crossover")
-
-        ema20 = ta.ema(df["Close"], length=20)
-        ema50 = ta.ema(df["Close"], length=50)
-        ema200 = ta.ema(df["Close"], length=200)
-
-        if ema20 is None or ema50 is None or ema200 is None:
-            raise ValueError("EMA calculation failed")
-
-        e20 = safe_float(ema20.iloc[-1])
-        e50 = safe_float(ema50.iloc[-1])
-        e200 = safe_float(ema200.iloc[-1])
-
-        if any(v is None for v in [e20, e50, e200]):
-            raise ValueError("Invalid EMA values")
-
-        if e20 > e50 > e200:
-            trend, score = "Bullish", 10
-        elif e20 < e50 < e200:
-            trend, score = "Bearish", 0
-        else:
-            trend, score = "Neutral", 5
-
-        return {
-            "ema_20": {"value": round(e20, 2), "score": score},
-            "ema_50": {"value": round(e50, 2), "score": score},
-            "ema_200": {"value": round(e200, 2), "score": score},
-            "ema_cross_trend": {"value": trend, "score": score},
-        }
-
-    return _wrap_calc(_inner, "EMA Crossover")
-
-#
-# NEW: compute_macd (Refactored from inline logic)
-#
 def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
         close_ser = df["Close"].dropna()
-        if len(close_ser) < 35: # Standard minimum for 12/26/9 MACD
+        if len(close_ser) < 35:
             raise ValueError(f"Not enough data points ({len(close_ser)}) for MACD")
 
         macd_df = ta.macd(close_ser, fast=12, slow=26, signal=9)
         if macd_df is None or macd_df.empty:
             raise ValueError("Empty MACD DataFrame")
 
-        # Standardize column names
         macd_df.columns = [c.lower() for c in macd_df.columns]
         macd_col = next((c for c in macd_df.columns if "macd_" in c), None)
         signal_col = next((c for c in macd_df.columns if "macds_" in c or "signal" in c), None)
@@ -311,7 +254,6 @@ def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         if macd_val is None or macd_signal is None or macd_hist is None:
             raise ValueError("Invalid MACD values (None/NaN)")
 
-        # 1. Crossover signal + scoring
         if macd_val > macd_signal:
             cross, score = "Bullish", 10
         elif macd_val < macd_signal:
@@ -319,11 +261,9 @@ def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         else:
             cross, score = "Neutral", 5
 
-        # 2. Histogram z-score normalization
         hist_score = 5
         window_size = min(100, len(hist_series))
         
-        # Calculate z-score based on all data *except* the last bar
         if window_size > 1:
             hist_window = hist_series.tail(window_size)
             hist_mean = hist_window.iloc[:-1].mean()
@@ -340,19 +280,17 @@ def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             hist_z = 0.0
             hist_desc = "Z-Score requires more data"
 
-        # 3. Histogram strength (simple)
         hist_desc = f"MACD Histogram {macd_hist:.3f}"
         hist_strength = 10 if macd_hist > 0.5 else 7 if macd_hist > 0 else 3 if macd_hist > -0.5 else 0
 
-        # Return all 4 metrics
         return {
             "macd": {"value": round(macd_val, 2), "score": score},
             "macd_cross": {"value": cross, "score": score},
             "macd_hist_z": {"value": round(hist_z, 4), "score": hist_score, "desc": "MACD Hist momentum normalized (Z-Score)"},
             "macd_histogram": {"value": round(macd_hist, 3), "score": hist_strength, "desc": hist_desc},
         }
-
     return _wrap_calc(_inner, "MACD")
+
 
 def compute_vwap(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
@@ -377,7 +315,6 @@ def compute_vwap(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             bias, score = "Neutral", 5
 
         return {"vwap": {"value": round(vwap_val, 2), "score": score}, "vwap_bias": {"value": bias, "score": score}}
-
     return _wrap_calc(_inner, "VWAP")
 
 
@@ -428,7 +365,6 @@ def compute_bollinger_bands(df: pd.DataFrame, length: int = 20, std_dev: float =
             "bb_low": {"value": round(lower, 2), "score": score, "desc": band},
             "bb_width": {"value": bb_width_val,"raw": bb_width_val, "score": bb_width_score, "desc": bb_width_desc},
         }
-
     return _wrap_calc(_inner, "Bollinger Bands")
 
 
@@ -447,19 +383,14 @@ def compute_rvol(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         if rvol is None:
             raise ValueError("RVOL NaN")
 
-        # NEW SCORING:
-        # Score 10 for high volume
-        # Score 0 for low volume
-        # Score 5 for normal volume
         if rvol > 1.5:
             score = 10
-        elif rvol < 0.8: # Penalize low volume
+        elif rvol < 0.8: 
             score = 0
-        else: # Normal volume (0.8 to 1.5)
+        else: 
             score = 5
 
         return {"rvol": {"value": round(rvol, 2), "score": score}}
-
     return _wrap_calc(_inner, "RVOL")
 
 
@@ -486,7 +417,6 @@ def compute_obv_divergence(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             signal, score = "Neutral", 5
 
         return {"obv_div": {"value": signal, "score": score}}
-
     return _wrap_calc(_inner, "OBV Divergence")
 
 
@@ -513,7 +443,6 @@ def compute_vpt(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             signal, score = "Neutral", 5
 
         return {"vpt": {"value": round(vpt_val, 2), "score": score, "desc": signal}}
-
     return _wrap_calc(_inner, "VPT")
 
 
@@ -537,11 +466,9 @@ def compute_volume_spike(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         elif spike_ratio > 1.2:
             signal, score = "Moderate Spike", 5
         else:
-            # Neutral should be 5, not 0
             signal, score = "Normal", 5
 
         return {"vol_spike_ratio": {"value": round(spike_ratio, 2), "score": score}, "vol_spike_signal": {"value": signal, "score": score}}
-
     return _wrap_calc(_inner, "Volume Spike")
 
 
@@ -580,11 +507,9 @@ def compute_atr(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
                 "desc": f"{atr_pct_val:.2f}% ATR Volatility",
                 }
         }
-
     return _wrap_calc(_inner, "ATR")
 
 
-# Ichimoku: PURE function now (no internal fetching).
 def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _manual_ichimoku(df_local: pd.DataFrame):
         high, low = df_local["High"], df_local["Low"]
@@ -639,7 +564,6 @@ def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]
         except Exception as e:
             logger.warning("Ichimoku Cloud (library) failed: %s", e)
 
-        # If still missing, fallback to manual computation
         if span_a_val is None or span_b_val is None:
             try:
                 conv, base, span_a_series, span_b_series = _manual_ichimoku(_df_local)
@@ -677,7 +601,6 @@ def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]
             "ichi_tenkan": {"value": round(tenkan_val, 2) if tenkan_val else "N/A", "score": 0},
             "ichi_kijun": {"value": round(kijun_val, 2) if kijun_val else "N/A", "score": 0},
         }
-
     return _wrap_calc(_inner, "Ichimoku")
 
 
@@ -700,23 +623,12 @@ def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             score, signal = 0, "Weak Close"
 
         return {"price_action": {"value": round(position * 100, 1), "score": score, "signal": signal}}
-
     return _wrap_calc(_inner, "Price Action")
 
 
-#
-# REVISED: compute_200dma (Horizon-Aware)
-#
 def compute_200dma(df, close, price, horizon: str = "short_term"):
     ma_length_and_type = None
     def _inner():
-        
-        # 1. Define equivalent lengths based on horizon
-        # short_term (1d): 200-day MA is the standard
-        # long_term (1wk): 50-week MA is the standard (~250 days)
-        # multibagger (1mo): 12-month MA is the standard
-        # intraday (15m): A 200-period MA is still a valid long-term intraday trend
-        
         ma_length_map = {
             "intraday": 200,
             "short_term": 200,
@@ -733,12 +645,10 @@ def compute_200dma(df, close, price, horizon: str = "short_term"):
         ma_length = ma_length_map.get(horizon, 200)
         ma_type = ma_type_map.get(horizon, "MA")
 
-        # 2. Check if we have enough data
         num_bars = len(close.dropna())
         if num_bars < ma_length:
             raise ValueError(f"Insufficient data ({num_bars} bars) for {ma_length}{ma_type}")
 
-        # 3. Calculate
         sma_series = ta.sma(close, length=ma_length)
         sma_val = safe_float(sma_series.iloc[-1])
         if sma_val is None:
@@ -746,7 +656,6 @@ def compute_200dma(df, close, price, horizon: str = "short_term"):
 
         pct_diff = ((price - sma_val) / sma_val) * 100
 
-        # 4. Score
         if pct_diff > 0:
             score, desc = 10, f"Uptrend (Above {ma_length} {ma_type})"
         elif abs(pct_diff) < 3:
@@ -754,7 +663,6 @@ def compute_200dma(df, close, price, horizon: str = "short_term"):
         else:
             score, desc = 0, f"Downtrend (Below {ma_length} {ma_type})"
 
-        # 5. Return dynamic keys
         key_name = f"price_vs_{ma_length}{ma_type.lower()}_pct"
         ma_key_name = f"{ma_length}{ma_type.lower()}"
         ma_length_and_type = (ma_length, ma_type)
@@ -762,14 +670,21 @@ def compute_200dma(df, close, price, horizon: str = "short_term"):
             key_name: {"value": round(pct_diff, 2), "score": score, "desc": desc},
             ma_key_name: {"value": round(sma_val, 2), "score": 0},
         }
-
     return _wrap_calc(_inner, f"Long-Term MA {ma_length_and_type}")
 
-def compute_volume_trend(df, indicators):
+def compute_volume_trend(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
+        if df is None or df.empty or "Volume" not in df.columns:
+            raise ValueError("Missing Volume data")
+
         volume = df["Volume"]
+        # Need at least 50 bars for a decent average
+        if len(volume) < 50:
+            raise ValueError("Insufficient volume data for trend")
+
         vol_avg50 = safe_float(volume.tail(50).mean())
         vol_today = safe_float(volume.iloc[-1])
+        
         if vol_avg50 is None or vol_today is None:
             raise ValueError("Volume NaN")
 
@@ -780,6 +695,7 @@ def compute_volume_trend(df, indicators):
             else "Neutral"
         )
         score = 10 if trend == "Rising" else 5 if trend == "Neutral" else 0
+        
         return {
             "vol_trend": {
                 "value": trend,
@@ -787,36 +703,10 @@ def compute_volume_trend(df, indicators):
                 "desc": f"{trend} volume trend"
             }
         }
-
     return _wrap_calc(_inner, "Volume Trend")
-
-
-def compute_volume_vs_avg20(df, indicators):
-    def _inner():
-        volume = df["Volume"]
-        vol_avg20 = safe_float(volume.tail(20).mean())
-        vol_today = safe_float(volume.iloc[-1])
-        if vol_avg20 is None or vol_today is None or vol_avg20 == 0:
-            raise ValueError("Invalid volume data")
-        ratio = vol_today / vol_avg20
-        return {"vol_vs_avg20": {"value": round(ratio, 2), "score": 5}}
-
-    return _wrap_calc(_inner, "Volume vs Avg20")
-
-
-#
-# REVISED: compute_dma_cross (Horizon-Aware)
-#
 def compute_dma_cross(df, close, horizon: str = "short_term"):
-    short_len = long_len = 0  # Default initialization
+    short_len = long_len = 0 
     def _inner():
-        
-        # 1. Define equivalent lengths
-        # short_term (1d): 20-day / 50-day
-        # long_term (1wk): 10-week / 40-week (common equivalents for 50/200 day)
-        # multibagger (1mo): 6-month / 12-month
-        # intraday (15m): 20-bar / 50-bar is a standard relative cross
-        
         length_map = {
             "intraday": (20, 50),
             "short_term": (20, 50),
@@ -833,7 +723,6 @@ def compute_dma_cross(df, close, horizon: str = "short_term"):
         short_len, long_len = length_map.get(horizon, (20, 50))
         short_type, long_type = type_map.get(horizon, ("MA", "MA"))
         
-        # 2. Calculate
         dma_short = ta.sma(close, length=short_len)
         dma_long = ta.sma(close, length=long_len)
 
@@ -843,13 +732,11 @@ def compute_dma_cross(df, close, horizon: str = "short_term"):
         if dma_short_val is None or dma_long_val is None:
             raise ValueError("DMA values NaN")
 
-        # 3. Score
         if dma_short_val > dma_long_val:
             score, desc = 10, f"Bullish ({short_len} > {long_len})"
         else:
             score, desc = 0, f"Bearish ({short_len} < {long_len})"
             
-        # 4. Return dynamic keys
         short_key = f"dma_{short_len}{short_type.lower()}"
         long_key = f"dma_{long_len}{long_type.lower()}"
         cross_key = f"dma_{short_len}_{long_len}_cross"
@@ -859,13 +746,9 @@ def compute_dma_cross(df, close, horizon: str = "short_term"):
             long_key: {"value": round(dma_long_val, 2), "score": 0},
             cross_key: {"value": desc, "score": score, "desc": desc},
         }
-
     return _wrap_calc(_inner, f"{short_len}/{long_len} DMA Cross")
 
-#
-# NEW (from compute_ema_crossover): compute_ma_crossover (Horizon-Aware)
-# Note: Renamed to be generic, as it now uses SMAs for long-term
-#
+
 def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
     ma_type = ""
     def _inner():
@@ -874,14 +757,11 @@ def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
 
         close = df["Close"]
         
-        # 1. Define equivalent lengths
-        # We will use the same logic from our other functions
-        
         len_map = {
-            "intraday": (20, 50, 200),     # 20, 50, 200 bar EMA
-            "short_term": (20, 50, 200),  # 20, 50, 200 day EMA
-            "long_term": (10, 40, 50),    # 10, 40, 50 week SMA (long_term uses SMA)
-            "multibagger": (6, 12, 12)    # 6, 12 month SMA (12 is the longest)
+            "intraday": (20, 50, 200),
+            "short_term": (20, 50, 200),
+            "long_term": (10, 40, 50),
+            "multibagger": (6, 12, 12)
         }
         type_map = {
             "intraday": "EMA",
@@ -893,7 +773,6 @@ def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
         l_short, l_mid, l_long = len_map.get(horizon, (20, 50, 200))
         ma_type = type_map.get(horizon, "EMA")
         
-        # 2. Calculate (Use EMA or SMA based on horizon)
         if horizon in ("long_term", "multibagger"):
             ma_short = ta.sma(close, length=l_short)
             ma_mid = ta.sma(close, length=l_mid)
@@ -903,7 +782,6 @@ def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
             ma_mid = ta.ema(close, length=l_mid)
             ma_long = ta.ema(close, length=l_long)
 
-        # 3. Get values
         v_short = safe_float(ma_short.iloc[-1])
         v_mid = safe_float(ma_mid.iloc[-1])
         v_long = safe_float(ma_long.iloc[-1])
@@ -911,7 +789,6 @@ def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
         if any(v is None for v in [v_short, v_mid, v_long]):
             raise ValueError("Invalid MA values")
 
-        # 4. Score
         if v_short > v_mid > v_long:
             trend, score = "Bullish", 10
         elif v_short < v_mid < v_long:
@@ -919,7 +796,6 @@ def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
         else:
             trend, score = "Neutral", 5
             
-        # 5. Return dynamic keys
         key_short = f"ma_{l_short}{ma_type.lower()}"
         key_mid = f"ma_{l_mid}{ma_type.lower()}"
         key_long = f"ma_{l_long}{ma_type.lower()}"
@@ -931,14 +807,11 @@ def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
             key_long: {"value": round(v_long, 2), "score": score},
             key_cross: {"value": trend, "score": score},
         }
-
     return _wrap_calc(_inner, f"MA Crossover ({ma_type})")
 
-#
-# REVISED: compute_relative_strength (Horizon-Aware)
-#
+
 def compute_relative_strength(symbol, df, benchmark_df, horizon: str = "short_term") -> Dict[str, Dict[str, Any]]:
-    lookback = 20  # Default initialization
+    lookback = 20
     def _inner():
         if df is None or df.empty:
             raise ValueError("Stock data missing")
@@ -958,8 +831,6 @@ def compute_relative_strength(symbol, df, benchmark_df, horizon: str = "short_te
             "multibagger": 12
         }
         lookback = lookback_map.get(horizon, 20)
-        
-        # ... (rest of the function is the same, just uses `lookback`) ...
         
         stock_close = None
         for col in ("Adj Close", "Close"):
@@ -998,39 +869,30 @@ def compute_relative_strength(symbol, df, benchmark_df, horizon: str = "short_te
                 "desc": f"{desc} vs NIFTY ({rel_strength:.2f}%) over {lookback} bars"
             }
         }
-
     return _wrap_calc(_inner, "Relative Strength vs NIFTY (%)")
+
 
 def compute_entry_price(df: pd.DataFrame, price: float):
     def _inner():
-        # NEW: Calculate bb_mid (SMA 20) directly
         sma20_series = ta.sma(df["Close"], length=20)
         if sma20_series is None or sma20_series.empty:
             raise ValueError("SMA(20) for BB Mid unavailable")
 
         bb_mid = safe_float(sma20_series.iloc[-1])
         if bb_mid is None:
-            bb_mid = price # Fallback in case of NaN
+            bb_mid = price
 
-        # Your original logic, now using `df`
         last_high = df["High"].tail(10).max() if "High" in df.columns else None
-        
-        # Use bb_mid if last_high isn't available
         confirm_val = round(last_high * 1.005, 2) if last_high else round(bb_mid, 2)
-        
         entry_score = 10 if price > (confirm_val or 0) else 5
         
         return {"entry_confirm": {"value": confirm_val, "score": entry_score, "desc": "Approximate breakout confirmation level"}}
-
     return _wrap_calc(_inner, "Entry Price (Confirm)")
 
-#
-# REVISED: compute_200dma_slope (Horizon-Aware)
-#
+
 def compute_200dma_slope(df: pd.DataFrame, close: pd.Series, horizon: str = "short_term"):
     ma_length_and_type = None
     def _inner():
-        # 1. Define equivalent lengths (must match compute_200dma)
         ma_length_map = {
             "intraday": 200,
             "short_term": 200,
@@ -1047,10 +909,8 @@ def compute_200dma_slope(df: pd.DataFrame, close: pd.Series, horizon: str = "sho
         ma_length = ma_length_map.get(horizon, 200)
         ma_type = ma_type_map.get(horizon, "MA")
         
-        # 2. Calculate the MA series
         sma_series = ta.sma(close, length=ma_length)
         
-        # 3. Check data for slope calculation
         lookback = 10
         if sma_series.isnull().all() or len(sma_series.dropna()) < lookback:
             raise ValueError(f"Insufficient data for {ma_length}{ma_type} slope (need {lookback} periods)")
@@ -1059,7 +919,6 @@ def compute_200dma_slope(df: pd.DataFrame, close: pd.Series, horizon: str = "sho
         if np.isnan(y).any():
              raise ValueError("SMA values contain NaN, cannot calculate slope")
 
-        # 4. Calculate slope
         x = np.arange(len(y))
         slope, _ = np.polyfit(x, y, 1)
         angle = degrees(atan(slope))
@@ -1074,8 +933,8 @@ def compute_200dma_slope(df: pd.DataFrame, close: pd.Series, horizon: str = "sho
         key_name = f"{ma_length}{ma_type.lower()}_slope"
         ma_length_and_type = (ma_length, ma_type)
         return {key_name: {"value": trend, "score": score, "desc": f"Slope: {angle:.2f}°"}}
-
     return _wrap_calc(_inner, f" {ma_length_and_type} Trend (Slope)")
+
 
 def compute_atr_sl(df, indicators, high, low, close, price):
     def _inner():
@@ -1086,12 +945,9 @@ def compute_atr_sl(df, indicators, high, low, close, price):
         return {
             "sl_2x_atr": {"value": round(sl, 2), "score": 0},
         }
-
     return _wrap_calc(_inner, "Suggested SL (2xATR)")
 
-#
-# REVISED: compute_supertrend (More robust, handles NaN)
-#
+
 def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0) -> Dict[str, Dict[str, Any]]:
     def _inner():
         if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
@@ -1105,35 +961,72 @@ def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3
         if st_df is None or st_df.empty:
             raise ValueError("SuperTrend DataFrame empty")
 
-        st_df.columns = [c.lower() for c in st_df.columns]
-        trend_col = next((c for c in st_df.columns if "direction" in c or "trend" in c), None)
-        
-        if not trend_col:
-            # Fallback to the last column (which is usually the trend)
-            trend_col = st_df.columns[-1]
+        cols = list(st_df.columns)
+        dir_candidates = [c for c in cols if any(k in c.lower() for k in ("d", "dir", "direction", "trend"))]
+        level_candidates = [c for c in cols if "supertl" in c.lower() or "supert_s" in c.lower() or "supertl" in c.lower()]
 
-        # --- NEW ROBUSTNESS FIX ---
-        # Find the last valid (non-NaN) value in the trend series
-        st_series = st_df[trend_col].dropna()
-        if st_series.empty:
-            raise ValueError("SuperTrend calculation resulted in all NaN values")
+        trend_val = None
+        close_price = safe_float(df["Close"].iloc[-1])
 
-        # Get the last valid value
-        trend_val = safe_float(st_series.iloc[-1])
-        # --- END FIX ---
+        for c in dir_candidates:
+            series = pd.to_numeric(st_df[c], errors="coerce").dropna()
+            if not series.empty:
+                trend_val = series.iloc[-1]
+                break
+
+        if trend_val is None and level_candidates:
+            for c in level_candidates:
+                level_series = pd.to_numeric(st_df[c], errors="coerce").dropna()
+                if not level_series.empty:
+                    level_val = level_series.iloc[-1]
+                    if close_price is not None:
+                        signal = "Bullish" if close_price > level_val else "Bearish"
+                        score = 10 if signal == "Bullish" else 0
+                        return {"supertrend_signal": {"value": signal, "score": score, "desc": f"SuperTrend level ({length},{multiplier}) {signal}"}} 
+                    else:
+                        trend_val = safe_float(level_val)
+                        break
 
         if trend_val is None:
-            # This check should be redundant now, but good to have
-            raise ValueError("Could not find a valid SuperTrend value after NaN check")
+            for c in cols[::-1]: 
+                series = pd.to_numeric(st_df[c], errors="coerce").dropna()
+                if not series.empty:
+                    trend_val = series.iloc[-1]
+                    break
 
-        signal = "Bullish" if trend_val > 0 else "Bearish"
-        score = 10 if signal == "Bullish" else 0
+        if trend_val is None:
+            try:
+                atr_val = ta.atr(df["High"], df["Low"], df["Close"], length=14).iloc[-1]
+                if not np.isnan(atr_val):
+                    prev_close = safe_float(df["Close"].iloc[-2]) if len(df) >= 2 else None
+                    if prev_close is not None and close_price is not None:
+                        signal = "Bullish" if close_price > (prev_close + 0.1 * atr_val) else "Bearish"
+                        score = 6 if signal == "Bullish" else 4
+                        return {"supertrend_signal": {"value": signal, "score": score, "desc": f"SuperTrend fallback {signal}"}}
+            except Exception:
+                pass
+            return {"supertrend_signal": {"value": "Unavailable", "score": 0, "desc": "SuperTrend computation produced no usable column"}}
 
-        return {
-            "supertrend_signal": {"value": signal, "score": score, "desc": f"SuperTrend ({length},{multiplier}) {signal}"}
-        }
-
+        try:
+            tv = float(trend_val)
+            if tv == 1.0:
+                signal = "Bullish"
+            elif tv == -1.0:
+                signal = "Bearish"
+            else:
+                signal = "Bullish" if tv > 0 else "Bearish"
+            score = 10 if signal == "Bullish" else 0
+            return {"supertrend_signal": {"value": signal, "score": score, "desc": f"SuperTrend ({length},{multiplier}) {signal}"}}
+        except Exception:
+            sval = str(trend_val).lower()
+            if "bull" in sval:
+                return {"supertrend_signal": {"value": "Bullish", "score": 10, "desc": "SuperTrend (string) Bullish"}}
+            elif "bear" in sval:
+                return {"supertrend_signal": {"value": "Bearish", "score": 0, "desc": "SuperTrend (string) Bearish"}}
+            else:
+                return {"supertrend_signal": {"value": "Unavailable", "score": 0, "desc": "SuperTrend computed but value ambiguous"}}
     return _wrap_calc(_inner, "SuperTrend")
+
 
 def compute_regression_slope(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]:
     def _inner():
@@ -1154,7 +1047,6 @@ def compute_regression_slope(df: pd.DataFrame, length: int = 20) -> Dict[str, Di
         return {
             "reg_slope": {"value": round(angle, 2), "score": score, "desc": f"Trend: {desc} ({angle:.2f}°)"}
         }
-
     return _wrap_calc(_inner, "Regression Slope")
 
 
@@ -1179,12 +1071,9 @@ def compute_cci(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]
             desc, score = "Neutral", 5
 
         return {"cci": {"value": round(cci_val, 2), "score": score, "desc": desc}}
-
     return _wrap_calc(_inner, "CCI")
 
-#
-# REVISED: compute_rsi_slope
-#
+
 def compute_rsi_slope(df: pd.DataFrame,
                       rsi_series: Optional[pd.Series] = None,
                       length: int = 14,
@@ -1192,15 +1081,12 @@ def compute_rsi_slope(df: pd.DataFrame,
     def _inner():
         rsi_data = None
         
-        # 🆕 FIX 2: Attempt to rebuild and use the injected Series
         if rsi_series and isinstance(rsi_series, dict) and rsi_series:
             try:
-                # Rebuild pandas Series from dictionary (must handle index if available)
                 rsi_data = pd.Series(rsi_series).sort_index()
             except Exception as e:
                 logger.warning(f"Failed to rebuild RSI series from dict: {e}. Falling back to recalculation.")
 
-        # Recalculation Fallback (Original Inefficiency, kept for robustness)
         if rsi_data is None or rsi_data.empty:
             if "Close" not in df.columns:
                 raise ValueError("Missing Close for RSI slope computation")
@@ -1209,7 +1095,6 @@ def compute_rsi_slope(df: pd.DataFrame,
         if rsi_data is None or rsi_data.empty:
             raise ValueError("RSI data unavailable for slope")
         
-        # --- Start original slope logic ---
         if len(rsi_data.dropna()) < lookback:
             raise ValueError(f"Insufficient RSI data ({len(rsi_data.dropna())}) for slope (need {lookback})")
 
@@ -1232,8 +1117,8 @@ def compute_rsi_slope(df: pd.DataFrame,
                 "desc": f"{desc} [{slope:.2f}/step]"
             }
         }
-
     return _wrap_calc(_inner, "RSI Slope")
+
 
 def compute_bb_percent_b(df: pd.DataFrame, length: int = 20, std_dev: float = 2.0) -> Dict[str, Dict[str, Any]]:
     def _inner():
@@ -1257,7 +1142,6 @@ def compute_bb_percent_b(df: pd.DataFrame, length: int = 20, std_dev: float = 2.
         score = 10 if bb_percent_b < 0.2 else 0 if bb_percent_b > 0.8 else 5
 
         return {"bb_percent_b": {"value": round(bb_percent_b, 3), "score": score, "desc": f"{bb_percent_b:.2f} position in band"}}
-
     return _wrap_calc(_inner, "Bollinger %B")
 
 
@@ -1282,7 +1166,6 @@ def compute_cmf(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]
             desc, score = "Neutral", 5
 
         return {"cmf_signal": {"value": round(cmf_val, 3), "score": score, "desc": desc}}
-
     return _wrap_calc(_inner, "Chaikin Money Flow")
 
 
@@ -1303,41 +1186,113 @@ def compute_donchian(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, 
             signal, score = "Inside Range", 5
 
         return {"donchian_signal": {"value": signal, "score": score, "desc": f"{signal} ({length}-period)"}}
-
     return _wrap_calc(_inner, "Donchian Channel")
 
 
 def compute_nifty_trend_score(benchmark_df: pd.DataFrame):
+    """
+    Robust, unbiased NIFTY Trend Score.
+    - Uses EMA200 when enough daily data is available.
+    - Falls back to EMA50 when EMA200 is unavailable (weekly/monthly horizons).
+    - Returns (value=None, score=None) when trend cannot be reliably determined.
+    """
     def _inner():
         try:
-            if benchmark_df is None or benchmark_df.empty or "Close" not in benchmark_df.columns:
-                raise ValueError("Missing Close in NIFTY data")
+            if (
+                benchmark_df is None
+                or benchmark_df.empty
+                or "Close" not in benchmark_df.columns
+            ):
+                return {
+                    "nifty_trend_score": {
+                        "value": None,
+                        "score": None,
+                        "desc": "Benchmark missing — trend UNKNOWN"
+                    }
+                }
 
-            close = benchmark_df["Close"]
-            ema_50 = ta.ema(close, 50).iloc[-1]
-            ema_200 = ta.ema(close, 200).iloc[-1]
-            latest = close.iloc[-1]
+            close = benchmark_df["Close"].dropna()
 
-            diff = (latest - ema_200) / ema_200 * 100
-            if latest > ema_50 > ema_200:
-                trend, score = "Strong Uptrend", 9
-            elif latest > ema_200:
-                trend, score = "Moderate Uptrend", 7
-            elif latest < ema_200 and latest > ema_50:
-                trend, score = "Neutral / Pullback", 5
-            else:
-                trend, score = "Downtrend", 2
+            if len(close) < 20:  # not enough data even for EMA50
+                return {
+                    "nifty_trend_score": {
+                        "value": None,
+                        "score": None,
+                        "desc": "Insufficient benchmark data — trend UNKNOWN"
+                    }
+                }
 
+            latest = float(close.iloc[-1])
+
+            ema_50_series = ta.ema(close, 50)
+            ema_200_series = ta.ema(close, 200)
+
+            ema_50 = (
+                float(ema_50_series.iloc[-1])
+                if ema_50_series is not None and not ema_50_series.dropna().empty
+                else None
+            )
+
+            ema_200 = (
+                float(ema_200_series.iloc[-1])
+                if ema_200_series is not None and not ema_200_series.dropna().empty
+                else None
+            )
+
+            # CASE A — Full Trend Logic (EMA200 available)
+            if ema_200 is not None:
+                diff_pct = (latest - ema_200) / ema_200 * 100
+
+                if ema_50 is not None and latest > ema_50 > ema_200:
+                    trend, score = "Strong Uptrend", 9
+                elif latest > ema_200:
+                    trend, score = "Moderate Uptrend", 7
+                elif ema_50 is not None and latest > ema_50 and latest < ema_200:
+                    trend, score = "Neutral / Pullback", 5
+                else:
+                    trend, score = "Downtrend", 2
+
+                return {
+                    "nifty_trend_score": {
+                        "value": round(diff_pct, 2),
+                        "score": score,
+                        "desc": f"{trend} ({diff_pct:.2f}% above 200 EMA)"
+                    }
+                }
+
+            # CASE B — Fallback for weekly/monthly data (EMA50 logic)
+            if ema_50 is not None:
+                trend = "Uptrend" if latest > ema_50 else "Downtrend"
+                score = 7 if trend == "Uptrend" else 3
+                # FIX: Normalized to Percentage
+                diff_fallback_pct = (latest - ema_50) / ema_50 * 100
+
+                return {
+                    "nifty_trend_score": {
+                        "value": round(diff_fallback_pct, 2),
+                        "score": score,
+                        "desc": f"Fallback EMA50 Trend ({trend}) — insufficient data for EMA200"
+                    }
+                }
+
+            # CASE C — No usable EMAs
             return {
                 "nifty_trend_score": {
-                    "value": round(diff, 2),
-                    "score": score,
-                    "desc": f"{trend} ({diff:.2f}% above 200 EMA)"
+                    "value": None,
+                    "score": None,        
+                    "desc": "Unable to compute NIFTY trend — UNKNOWN"
                 }
             }
+
         except Exception as e:
             logger.warning(f"compute_nifty_trend_score failed: {e}")
-            return {"nifty_trend_score": {"value": None, "score": 0, "desc": "NIFTY trend unavailable"}}
+            return {
+                "nifty_trend_score": {
+                    "value": None,
+                    "score": None,
+                    "desc": "Error computing trend — UNKNOWN"
+                }
+            }
     return _wrap_calc(_inner, "NIFTY Trend Score")
 
 
@@ -1366,17 +1321,10 @@ def compute_gap_percent(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             score, desc = 5, "No Gap"
 
         return {"gap_percent": {"value": round(gap_pct, 2), "score": score, "desc": desc}}
-
     return _wrap_calc(_inner, "Gap Percent")
 
-#
-# --- ADD THIS NEW FUNCTION TO indicators.py ---
-#
 
 def compute_psar(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """
-    Calculates the Parabolic SAR (PSAR) for trend direction and potential stops.
-    """
     def _inner():
         if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
             raise ValueError("Missing OHLC data for Parabolic SAR")
@@ -1385,17 +1333,12 @@ def compute_psar(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         if psar_df is None or psar_df.empty:
             raise ValueError("PSAR calculation failed")
 
-        # FIX: Dynamically find columns starting with PSARl (long) and PSARs (short)
-        # pandas_ta names them like PSARl_0.02_0.2
         col_l = next((c for c in psar_df.columns if c.startswith("PSARl")), None)
         col_s = next((c for c in psar_df.columns if c.startswith("PSARs")), None)
-        col_r = next((c for c in psar_df.columns if c.startswith("PSARr")), None) # Reversal
+        col_r = next((c for c in psar_df.columns if c.startswith("PSARr")), None)
 
-        # Get values safely
         val_l = safe_float(psar_df[col_l].iloc[-1]) if col_l else None
         val_s = safe_float(psar_df[col_s].iloc[-1]) if col_s else None
-        
-        # The level is whichever one is active (not NaN), or fallback
         psar_level = val_l if val_l is not None else val_s
         
         trend_val = safe_float(psar_df[col_r].iloc[-1]) if col_r else 0
@@ -1411,27 +1354,18 @@ def compute_psar(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "psar_trend": { "value": signal, "score": score, "desc": f"PSAR Trend is {signal}" },
             "psar_level": { "value": round(psar_level, 2), "score": 0, "desc": f"PSAR Trailing Stop: {round(psar_level, 2)}" }
         }
-
     return _wrap_calc(_inner, "Parabolic SAR")
 
-#
-# --- ADD THIS NEW FUNCTION TO indicators.py ---
-#
 
 def compute_keltner_squeeze(df: pd.DataFrame, 
                             bb_length: int = 20, 
                             bb_std: float = 2.0,
                             kc_length: int = 20,
                             kc_scalar: float = 1.5) -> Dict[str, Dict[str, Any]]:
-    """
-    Calculates Keltner Channels (KC) and checks for a TTM Squeeze
-    (Bollinger Bands go inside Keltner Channels).
-    """
     def _inner():
         if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
             raise ValueError("Missing OHLC data for Keltner/BB Squeeze")
 
-        # 1. Calculate Bollinger Bands
         bb_df = ta.bbands(df["Close"], length=bb_length, std=bb_std)
         if bb_df is None:
             raise ValueError("Bollinger Bands calculation failed")
@@ -1441,8 +1375,6 @@ def compute_keltner_squeeze(df: pd.DataFrame,
         bb_upper = safe_float(bb_df[bb_upper_col].iloc[-1])
         bb_lower = safe_float(bb_df[bb_lower_col].iloc[-1])
 
-        # 2. Calculate Keltner Channels
-        # Note: We use kc_scalar=1.5, which is a common setting for squeezes
         kc_df = ta.kc(df["High"], df["Low"], df["Close"], length=kc_length, scalar=kc_scalar)
         if kc_df is None:
             raise ValueError("Keltner Channels calculation failed")
@@ -1455,13 +1387,12 @@ def compute_keltner_squeeze(df: pd.DataFrame,
         if any(v is None for v in [bb_upper, bb_lower, kc_upper, kc_lower]):
             raise ValueError("NaN values in BB or KC bands")
 
-        # 3. Check for the Squeeze
         is_squeeze = (bb_upper < kc_upper) and (bb_lower > kc_lower)
 
         if is_squeeze:
-            signal, score = "Squeeze On", 10 # 10 = High potential energy
+            signal, score = "Squeeze On", 10
         else:
-            signal, score = "Squeeze Off", 5 # 5 = Neutral, trend is active
+            signal, score = "Squeeze Off", 5
 
         return {
             "ttm_squeeze": {
@@ -1472,20 +1403,16 @@ def compute_keltner_squeeze(df: pd.DataFrame,
             "kc_upper": {"value": round(kc_upper, 2), "score": 0},
             "kc_lower": {"value": round(kc_lower, 2), "score": 0}
         }
-        
     return _wrap_calc(_inner, "TTM Squeeze")
 
-# In services/indicators.py (add these new functions near the other compute_... functions):
 
 def compute_ema_slope(df: pd.DataFrame, length_s: int = 20, length_l: int = 50, lookback: int = 10) -> Dict[str, Dict[str, Any]]:
-    """Calculates the angle/slope of short-term and mid-term EMAs over a recent lookback window."""
     def _inner():
         if df is None or len(df) < length_l or "Close" not in df.columns:
             raise ValueError("Insufficient data for EMA slopes")
         
         close = df["Close"]
         
-        # Calculate EMAs
         ema_s_series = ta.ema(close, length=length_s)
         ema_l_series = ta.ema(close, length=length_l)
         
@@ -1500,11 +1427,9 @@ def compute_ema_slope(df: pd.DataFrame, length_s: int = 20, length_l: int = 50, 
 
         x = np.arange(lookback)
         
-        # Short Slope: calculate angle from linear regression slope
         slope_s, _ = np.polyfit(x, y_s, 1)
         angle_s = degrees(atan(slope_s))
         
-        # Long Slope: calculate angle
         slope_l, _ = np.polyfit(x, y_l, 1)
         angle_l = degrees(atan(slope_l))
         
@@ -1512,7 +1437,6 @@ def compute_ema_slope(df: pd.DataFrame, length_s: int = 20, length_l: int = 50, 
         desc = f"{length_s}EMA Angle: {angle_s:.2f}°"
 
         return {
-            # 🆕 RAW INPUT FOR TREND STRENGTH COMPOSITE
             "ema_20_slope": {"value": round(angle_s, 2), "raw": angle_s, "score": score, "desc": desc},
             "ema_50_slope": {"value": round(angle_l, 2), "raw": angle_l, "score": 0, "desc": f"{length_l}EMA Angle: {angle_l:.2f}°"},
         }
@@ -1520,7 +1444,6 @@ def compute_ema_slope(df: pd.DataFrame, length_s: int = 20, length_l: int = 50, 
 
 
 def compute_true_range(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """Calculates the latest True Range (TR) and True Range Percentage (TR%)."""
     def _inner():
         if df is None or len(df) < 2 or not {"High", "Low", "Close"}.issubset(df.columns):
             raise ValueError("Insufficient data for True Range")
@@ -1537,7 +1460,6 @@ def compute_true_range(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
 
         tr_pct = (tr_val / price) * 100
         
-        # Raw TR is used for compression checks
         return {
             "true_range": {"value": round(tr_val, 2), "raw": tr_val, "score": 0, "desc": f"Raw TR: {tr_val:.2f}"},
             "true_range_pct": {"value": round(tr_pct, 2), "raw": tr_pct, "score": 5, "desc": f"TR %: {tr_pct:.2f}%"}
@@ -1546,34 +1468,27 @@ def compute_true_range(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
 
 
 def compute_historical_volatility(df: pd.DataFrame, periods: Tuple[int, int] = (10, 20)) -> Dict[str, Dict[str, Any]]:
-    """Calculates annualized Historical Volatility (HV) for multiple short-term periods."""
     def _inner():
         if df is None or len(df) < periods[1] + 1 or "Close" not in df.columns:
             raise ValueError(f"Insufficient data for HV (need >{periods[1]} bars)")
             
         close = df["Close"].astype(float)
-        
-        # Calculate logarithmic returns
         log_returns = np.log(close / close.shift(1)).dropna()
-        
-        # Annualization factor (assuming 252 trading days/periods)
         annualization_factor = np.sqrt(252)
         output = {}
         
         for p in periods:
             if len(log_returns) >= p:
                 hv_series = log_returns.tail(p)
-                hv_val = hv_series.std() * annualization_factor * 100 # Convert to percent
+                hv_val = hv_series.std() * annualization_factor * 100
                 
-                # 🆕 FIX: Implement HV Scoring Logic
                 if hv_val < 20.0:
-                    score_hv = 10  # Low Volatility (< 20%) -> Stable
+                    score_hv = 10
                 elif hv_val < 40.0:
-                    score_hv = 5   # Medium Volatility (20-40%) -> Neutral
+                    score_hv = 5
                 else:
-                    score_hv = 2   # High Volatility (> 40%) -> Risky
+                    score_hv = 2
                 
-                # Output format remains the same
                 output[f"hv_{p}"] = {
                     "value": round(hv_val, 2), 
                     "raw": hv_val, 
@@ -1588,7 +1503,6 @@ def compute_historical_volatility(df: pd.DataFrame, periods: Tuple[int, int] = (
     return _wrap_calc(_inner, "Historical Volatility")
 
 
-
 def compute_volume_score(indicators: Dict[str, Any]) -> float:
     rvol = indicators.get("rvol", {}).get("score", 5)
     obv = indicators.get("obv_div", {}).get("score", 5)
@@ -1601,7 +1515,6 @@ def compute_volume_score(indicators: Dict[str, Any]) -> float:
         (vpt * 0.25) +
         (volume_spike * 0.15)
     )
-
     return round(score, 2)
 
 
@@ -1685,22 +1598,17 @@ def compute_technical_score(indicators: Dict[str, Dict[str, Any]],
     final_score = round(score / weight_sum * 100, 1) if weight_sum > 0 else 0
     return max(0, min(100, final_score))
 
+
 def compute_pivot_points(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    """
-    Classic + Fibonacci Pivot Points (Bundle of 7 metrics).
-    Uses previous candle. Includes Alias/Source metadata for UI.
-    """
     def _inner():
         if df is None or len(df) < 2:
             raise ValueError("Insufficient data for Pivots")
 
-        # Get PREVIOUS period's data
         prev = df.iloc[-2]
         high = safe_float(prev["High"])
         low = safe_float(prev["Low"])
         close = safe_float(prev["Close"])
         
-        # Robust NaN check (The Tweak)
         if any(pd.isna(v) for v in [high, low, close]):
             raise ValueError("Invalid OHLC (NaN) for pivots")
 
@@ -1715,7 +1623,6 @@ def compute_pivot_points(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         s2 = pp - 0.618 * range_hl
         s3 = pp - 1.000 * range_hl
 
-        # Returns standardized dictionary structure
         return {
             "pivot_point":  {"value": round(pp, 2), "raw": pp, "score": 0, "desc": "Pivot Point", "alias": "Pivot Point", "source": "pivot"},
             "resistance_1": {"value": round(r1, 2), "raw": r1, "score": 0, "desc": "Fib R1",      "alias": "Resistance 1", "source": "pivot"},
@@ -1725,16 +1632,13 @@ def compute_pivot_points(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "support_2":    {"value": round(s2, 2), "raw": s2, "score": 0, "desc": "Fib S2",      "alias": "Support 2",    "source": "pivot"},
             "support_3":    {"value": round(s3, 2), "raw": s3, "score": 0, "desc": "Fib S3",      "alias": "Support 3",    "source": "pivot"},
         }
-
     return _wrap_calc(_inner, "Pivot Levels (Fib)")
 
 
 # -----------------------------
-# Metric registry with explicit horizon overrides
-# horizon: "intraday" | "short_term" | "long_term" | "multibagger" | "default" | "special"
+# Metric registry
 # -----------------------------
 INDICATOR_METRIC_MAP: Dict[str, Dict[str, Any]] = {
-    # Default / horizon-agnostic metrics
     "rsi": {"func": compute_rsi, "horizon": "default"},
     "mfi": {"func": compute_mfi, "horizon": "default"},
     "rsi_slope": {"func": compute_rsi_slope, "horizon": "default"},
@@ -1760,8 +1664,8 @@ INDICATOR_METRIC_MAP: Dict[str, Dict[str, Any]] = {
     "sl_2x_atr": {"func": compute_atr_sl, "horizon": "default"},
     "nifty_trend_score": {"func": compute_nifty_trend_score, "horizon": "long_term"},
     "gap_percent": {"func": compute_gap_percent, "horizon": "long_term"},
+    "vol_trend": {"func": compute_volume_trend, "horizon": "default"},
 
-    # Short-term / daily metrics (should be computed on daily / short_term horizon)
     "adx": {"func": compute_adx, "horizon": "short_term"},
     "stoch_k": {"func": compute_stochastic, "horizon": "short_term"},
     "stoch_d": {"func": compute_stochastic, "horizon": "short_term"},
@@ -1778,19 +1682,15 @@ INDICATOR_METRIC_MAP: Dict[str, Dict[str, Any]] = {
     "ma_50ema": {"func": compute_ma_crossover, "horizon": "default"},
     "ma_200ema": {"func": compute_ma_crossover, "horizon": "default"},
 
-    # 🆕 NEW: Raw Components for Composites (Trend)
     "ema_20_slope": {"func": compute_ema_slope, "horizon": "default"},
     "ema_50_slope": {"func": compute_ema_slope, "horizon": "default"},
 
-    # 🆕 NEW: Raw Components for Composites (Volatility)
     "true_range": {"func": compute_true_range, "horizon": "default"},
     "true_range_pct": {"func": compute_true_range, "horizon": "default"},
     
-    # Run HV on daily data (short_term) by default for accuracy
     "hv_10": {"func": compute_historical_volatility, "horizon": "short_term"}, 
     "hv_20": {"func": compute_historical_volatility, "horizon": "short_term"},
 
-    # Long-term metrics (2y / weekly / monthly frames)
     "price_vs_200dma_pct": {"func": compute_200dma, "horizon": "long_term"},
     "dma_200": {"func": compute_200dma, "horizon": "long_term"},
      "dma_200_slope": {"func": compute_200dma_slope, "horizon": "long_term"},
@@ -1806,12 +1706,10 @@ INDICATOR_METRIC_MAP: Dict[str, Dict[str, Any]] = {
     "psar_trend": {"func": compute_psar, "horizon": "short_term"},
     "psar_level": {"func": compute_psar, "horizon": "short_term"},
     
-    # Keltner Squeeze
     "ttm_squeeze": {"func": compute_keltner_squeeze, "horizon": "short_term"},
     "kc_upper": {"func": compute_keltner_squeeze, "horizon": "short_term"},
     "kc_lower": {"func": compute_keltner_squeeze, "horizon": "short_term"},
 
-    # --- Pivot Points Bundle (Horizon: short_term = Daily) ---
     "pivot_point":  {"func": compute_pivot_points, "horizon": "short_term"},
     "resistance_1": {"func": compute_pivot_points, "horizon": "short_term"},
     "resistance_2": {"func": compute_pivot_points, "horizon": "short_term"},
@@ -1823,10 +1721,8 @@ INDICATOR_METRIC_MAP: Dict[str, Dict[str, Any]] = {
 
 
 # -----------------------------
-# ----Main orchestrator
-# --- NEW: compute_indicators (Horizon-Aware) ---
-#
-
+# Main orchestrator
+# -----------------------------
 
 def compute_indicators(
     symbol: str,
@@ -1836,15 +1732,12 @@ def compute_indicators(
     benchmark_symbol: str = "^NSEI"
 ) -> Dict[str, Dict[str, Any]]:
 
-    # logger.debug(f"[CACHE] computing indicators for {symbol} (horizon={horizon})")
-
     # 1. Get Profile
     profile = HORIZON_PROFILE_MAP.get(horizon, {})
     if not profile:
         return {}
         
     # 2. Identify Metrics
-    # We use a set first to deduplicate
     raw_metrics = set(profile.get("metrics", {}).keys())
     raw_metrics.update(profile.get("penalties", {}).keys())
     raw_metrics.update(MOMENTUM_WEIGHTS.keys())
@@ -1853,28 +1746,23 @@ def compute_indicators(
     raw_metrics.update(QUALITY_WEIGHTS.keys())
     raw_metrics.update(CORE_TECHNICAL_SETUP_METRICS)
     
-    # --- REFINEMENT: Dependency Ordering ---
-    # We must ensure base metrics run before dependent ones (e.g. RSI before RSI Slope)
-    # and bundles run early.
+    # Priority Order
     PRIORITY_ORDER = [
-        "rsi", "macd", "macd_cross", "macd_histogram", # Base Momentum
-        "pivot_point", "resistance_1", "support_1",    # Pivots bundle
-        "ema_20", "ema_50", "ema_200", "adx"           # Trend basics
+        "rsi", "macd", "macd_cross", "macd_histogram", 
+        "pivot_point", "resistance_1", "support_1",    
+        "ema_20", "ema_50", "ema_200", "adx"           
     ]
     
     ordered_metrics = []
-    # Add priority items first if they exist in the profile
     for m in PRIORITY_ORDER:
         if m in raw_metrics:
             ordered_metrics.append(m)
-            
-    # Add the rest
     for m in raw_metrics:
         if m not in ordered_metrics:
             ordered_metrics.append(m)
     
     # 3. BATCH FETCH: Identify unique horizons needed
-    required_horizons = {horizon} # Always fetch the main horizon
+    required_horizons = {horizon}
     metric_meta_map = {} 
     
     for m in ordered_metrics:
@@ -1891,14 +1779,30 @@ def compute_indicators(
         try:
             raw_df = get_history_for_horizon(symbol, h)
             if raw_df is not None and not raw_df.empty:
-                # OPTIMIZATION: Slice immediately
                 dfs_cache[h] = _slice_for_speed(raw_df)
         except Exception as e:
             logger.debug(f"[{symbol}] Batch fetch failed for {h}: {e}")
 
+    # --------------------------
+    # UNIFIED BENCHMARK FETCH (DAILY, CACHED)
+    # --------------------------
+    benchmark_df = None
+    try:
+        # Force Daily Horizon to get consistent macro context
+        # Note: We rely on data_fetch.py's internal 2y force logic for duration
+        raw_bench = get_benchmark_data("long_term", benchmark_symbol)
+        if raw_bench is not None and not raw_bench.empty:
+            benchmark_df = raw_bench.copy()
+            # Ensure index is timezone-naive to match stock data
+            benchmark_df.index = pd.to_datetime(benchmark_df.index).tz_localize(None)
+            benchmark_df = benchmark_df.sort_index()
+    except Exception as e:
+        logger.debug(f"[{symbol}] Benchmark fetch failed: {e}")
+        benchmark_df = None
+
     indicators: Dict[str, Dict[str, Any]] = {}
 
-    # 5. Add Price (Try from cache)
+    # 5. Add Price
     price = None
     if horizon in dfs_cache:
         try:
@@ -1923,10 +1827,10 @@ def compute_indicators(
             
             df_macd = dfs_cache.get("short_term")
             if df_macd is None: 
-                 # Fallback fetch + Slice
                  try:
                      raw_macd = get_history_for_horizon(symbol, "short_term")
-                     df_macd = _slice_for_speed(raw_macd)
+                     if raw_macd is not None and not raw_macd.empty:
+                        df_macd = _slice_for_speed(raw_macd)
                  except: pass
             
             if df_macd is not None and not df_macd.empty:
@@ -1941,8 +1845,6 @@ def compute_indicators(
             piv_horizon = meta.get("horizon", "short_term")
             
             df_piv = dfs_cache.get(piv_horizon)
-            
-            # --- REFINEMENT: Sliced Fallback for Pivots ---
             if df_piv is None: 
                 try:
                     raw_piv = get_history_for_horizon(symbol, piv_horizon)
@@ -1964,39 +1866,30 @@ def compute_indicators(
         df_local = dfs_cache.get(data_horizon)
         if df_local is None and data_horizon != "special": continue 
         
-        # --- REFINEMENT: Price Fallback ---
-        # If main horizon price failed, try to recover price from current metric's DF
         if price is None and df_local is not None and not df_local.empty:
             try:
                 price = float(df_local["Close"].iloc[-1])
             except: pass
 
-        # Benchmark (Lazy load + Slice)
-        benchmark_df = None
-        sig = inspect.signature(fn)
-        if "benchmark_df" in sig.parameters:
-            try:
-                raw_bench = get_benchmark_data(data_horizon, benchmark_symbol=benchmark_symbol)
-                benchmark_df = _slice_for_speed(raw_bench)
-            except: pass
-
-        # Build Arguments
+        # Build Arguments (Inject Cached Benchmark)
         kwargs = {}
         try:
-            # Inject RSI series for Slope (Works because of Priority Order)
             if metric_key == "rsi_slope":
                 rsi_entry = indicators.get("rsi")
                 if rsi_entry: kwargs["rsi_series"] = rsi_entry.get("full_series")
 
+            sig = inspect.signature(fn)
             for p in sig.parameters.values():
                 name = p.name
                 if name == "symbol": kwargs["symbol"] = symbol
                 elif name == "df": kwargs["df"] = df_local
-                elif name == "benchmark_df": kwargs["benchmark_df"] = benchmark_df
-                elif name == "close": kwargs["close"] = df_local["Close"]
-                elif name == "high": kwargs["high"] = df_local["High"]
-                elif name == "low": kwargs["low"] = df_local["Low"]
-                elif name == "volume": kwargs["volume"] = df_local["Volume"]
+                elif name == "benchmark_df": 
+                    # INJECT THE CACHED DATAFRAME HERE
+                    kwargs["benchmark_df"] = benchmark_df
+                elif name == "close": kwargs["close"] = df_local["Close"] if (df_local is not None and "Close" in df_local.columns) else None
+                elif name == "high": kwargs["high"] = df_local["High"] if (df_local is not None and "High" in df_local.columns) else None
+                elif name == "low": kwargs["low"] = df_local["Low"] if (df_local is not None and "Low" in df_local.columns) else None
+                elif name == "volume": kwargs["volume"] = df_local["Volume"] if (df_local is not None and "Volume" in df_local.columns) else None
                 elif name == "price": kwargs["price"] = price
                 elif name == "horizon": kwargs["horizon"] = data_horizon
             
@@ -2004,10 +1897,12 @@ def compute_indicators(
             if isinstance(result, dict): indicators.update(result)
 
         except Exception as e:
-            # --- REFINEMENT: Debug Logging ---
             logger.debug(f"[{symbol}] Metric '{metric_key}' failed: {e}")
 
-    # --- REFINEMENT: Restore Legacy Keys ---
+    # CLEANUP: Remove heavy series data meant for internal calculation only
+    if "rsi" in indicators and "full_series" in indicators["rsi"]:
+        del indicators["rsi"]["full_series"]
+
     try:
         raw_score = compute_technical_score(indicators)
         indicators["technical_score"] = {

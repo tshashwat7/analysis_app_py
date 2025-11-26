@@ -711,70 +711,89 @@ def compute_all_profiles(ticker: str, fundamentals: Dict[str, Any], indicators: 
 # -------------------------
 
 def classify_setup(indicators: Dict[str, Any]) -> str:
-    """
-    Determines trading setup using a Priority Queue system.
-    Evaluates ALL conditions and picks the highest-priority match.
-    """
     # 1. Extract Metrics
     close = _safe_float(indicators.get("Price", {}).get("value"))
-    ema20 = _safe_float(indicators.get("20 EMA", {}).get("value"))
-    ema50 = _safe_float(indicators.get("50 EMA", {}).get("value"))
-    ema200 = _safe_float(indicators.get("200 EMA", {}).get("value"))
-    bb_upper = _safe_float(indicators.get("BB High", {}).get("value"))
-    rsi = _safe_float(indicators.get("RSI", {}).get("value"))
-    macd_hist = _safe_float(indicators.get("MACD Histogram (Raw Momentum)", {}).get("value"))
-    squeeze = str(indicators.get("ttm_squeeze", {}).get("value") or "").lower().strip()
-    rvol = _safe_float(indicators.get("Relative Volume (RVOL)", {}).get("value"))
+    open_price = _safe_float(indicators.get("Open", {}).get("value"))
+    prev_close = _safe_float(indicators.get("prev_close", {}).get("value"))
     
+    ema20 = _safe_float(indicators.get("ema_20", {}).get("value"))
+    ema50 = _safe_float(indicators.get("ema_50", {}).get("value"))
+    ema200 = _safe_float(indicators.get("ema_200", {}).get("value")) or _safe_float(indicators.get("dma_200", {}).get("value"))
+    
+    # VWAP Extraction (Snake case fallback)
+    vwap = _safe_float(indicators.get("vwap", {}).get("value")) 
+    if vwap is None: vwap = ema20 # Fallback
+
+    bb_upper = _safe_float(indicators.get("bb_high", {}).get("value"))
+    
+    rsi = _safe_float(indicators.get("rsi", {}).get("value"))
+    rsi_slope = _safe_float(indicators.get("rsi_slope", {}).get("value")) # New
+    
+    macd_hist = _safe_float(indicators.get("macd_histogram", {}).get("value"))
+    squeeze = str(indicators.get("ttm_squeeze", {}).get("value") or "").lower().strip()
+    rvol = _safe_float(indicators.get("rvol", {}).get("value"))
+    trend_strength = _safe_float(indicators.get("trend_strength", {}).get("value"))
+
     if not close: return "GENERIC"
 
-    # 2. Define Candidates List: (Priority, SetupName)
     candidates = []
 
     # --- A. MOMENTUM BREAKOUT (Priority: 100) ---
-    # Strict: Price High + High RSI + Volume Expansion
     if (bb_upper and close >= (bb_upper * 0.98) and 
         (rsi and rsi > 60) and 
-        (rvol and rvol > 1.2)):
+        (rvol and rvol > 1.5)): 
         candidates.append((100, "MOMENTUM_BREAKOUT"))
 
     # --- B. VOLATILITY SQUEEZE (Priority: 90) ---
-    # Strict String Match (Fixes Issue 3)
     if squeeze in ["squeeze on", "on", "squeeze_on"]:
-        candidates.append((90, "VOLATILITY_SQUEEZE"))
+        if (macd_hist and macd_hist > 0) or (rsi and rsi > 55):
+            candidates.append((90, "VOLATILITY_SQUEEZE"))
 
     # --- C. PULLBACKS (Priority: 70-75) ---
-    # Context: Must be in Long-Term Uptrend (Above 200 EMA)
-    if ema200 and close > ema200:
-        # 1. Shallow Pullback (Priority 75) - Dip to 20 EMA zone
-        if ema20 and (ema20 * 0.97) <= close <= (ema20 * 1.01):
-            candidates.append((75, "TREND_PULLBACK"))
-        
-        # 2. Deep Pullback (Priority 70) - Dip to 50 EMA zone (Fix Issue 1)
-        elif ema50 and (ema50 * 0.97) <= close <= (ema50 * 1.01):
-            candidates.append((70, "DEEP_PULLBACK"))
+    ema200_slope = _safe_float(indicators.get("dma_200_slope", {}).get("value"))
+    if ema200_slope is None:
+        ema200_slope = _safe_float(indicators.get("200dma_slope", {}).get("value"))
+    
+    if ema200 and close > ema200 and (ema200_slope is None or ema200_slope > -0.1): 
+        # Shallow Pullback (Confirmation: Bounce)
+        if ema20 and (ema20 * 0.98) <= close <= (ema20 * 1.02):
+            if prev_close is None or close > prev_close: 
+                 candidates.append((75, "TREND_PULLBACK"))
+        # Deep Pullback (Confirmation: Green Candle + RSI)
+        elif ema50 and (ema50 * 0.98) <= close <= (ema50 * 1.02):
+            is_green_candle = (open_price is None) or (close > open_price)
+            if rsi and rsi > 45 and is_green_candle:
+                candidates.append((70, "DEEP_PULLBACK"))
 
     # --- D. OVERSOLD BOUNCE (Priority: 60 vs 30) ---
-    # Context: Panic Selling (RSI < 30 + High Volume)
     if (rsi and rsi < 30 and (rvol and rvol > 1.3)):
-        # High Quality: Oversold in Uptrend (Buy the Dip) - Fix Issue 2
         if ema200 and close > ema200:
-            candidates.append((60, "OVERSOLD_IN_UPTREND"))
-        # Risky: Oversold in Downtrend (Falling Knife)
+            if macd_hist is None or macd_hist >= -0.2: 
+                candidates.append((60, "OVERSOLD_IN_UPTREND"))
         else:
             candidates.append((30, "OVERSOLD_REVERSAL"))
 
     # --- E. TREND FOLLOWING (Priority: 40) ---
-    # Strict: Price > 20EMA AND Momentum Confirmations (Fix Issue 4)
-    if (ema20 and close > ema20 and 
-        (rsi and rsi > 50) and 
-        (macd_hist and macd_hist > 0)):
-        candidates.append((40, "TREND_FOLLOWING"))
+    if (ema20 and close > ema20):
+        # REFINEMENT: High Quality Trend Only
+        if rsi and rsi >= 55:
+            if macd_hist and macd_hist >= 0.1:
+                # Require strong ADX/Trend Composite
+                if trend_strength and trend_strength >= 6:
+                    
+                    # DYNAMIC EXTENSION FILTER
+                    dist_to_ema = (close - ema20) / ema20
+                    
+                    # If Trend is "Super Strong" (Trend Score > 8), allow up to 6% extension
+                    # Otherwise, standard limit is 4% (relaxed from 3%)
+                    max_dist = 0.06 if trend_strength >= 8 else 0.04
+                    
+                    if dist_to_ema < max_dist:  
+                        candidates.append((40, "TREND_FOLLOWING"))
 
     # --- F. DEFAULT ---
     candidates.append((10, "NEUTRAL / CHOPPY"))
 
-    # 3. Pick Winner
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
 
@@ -790,33 +809,32 @@ def calculate_setup_confidence(indicators: Dict[str, Any],
     """
     # Extract Helpers
     close = _safe_float(indicators.get("Price", {}).get("value"))
-    ema20 = _safe_float(indicators.get("20 EMA", {}).get("value"))
-    ema50 = _safe_float(indicators.get("50 EMA", {}).get("value"))
-    ema200 = _safe_float(indicators.get("200 EMA", {}).get("value"))
-    
-    # Fix Issue 5: VWAP Fallback
-    vwap = _safe_float(indicators.get("VWAP", {}).get("value"))
+    ema20 = _safe_float(indicators.get("ema_20", {}).get("value"))
+    ema50 = _safe_float(indicators.get("ema_50", {}).get("value"))
+    ema200 = _safe_float(indicators.get("ema_200", {}).get("value")) or _safe_float(indicators.get("dma_200", {}).get("value"))
+    # VWAP Fallback
+    vwap = _safe_float(indicators.get("vwap", {}).get("value"))
     if vwap is None or vwap == 0:
-        vwap = ema20 # Use 20 EMA as proxy for intraday average control
+        vwap = ema20 
         
-    rsi_slope = _safe_float(indicators.get("RSI Slope", {}).get("value")) 
-    macd_hist = _safe_float(indicators.get("MACD Histogram (Raw Momentum)", {}).get("value"))
-    rvol = _safe_float(indicators.get("Relative Volume (RVOL)", {}).get("value"))
-    obv_div = str(indicators.get("OBV Divergence", {}).get("value") or "").lower()
+    rsi_slope = _safe_float(indicators.get("rsi_slope", {}).get("value")) 
+    macd_hist = _safe_float(indicators.get("macd_histogram", {}).get("value"))
+    rvol = _safe_float(indicators.get("rvol", {}).get("value"))
+    obv_div = str(indicators.get("obv_div", {}).get("value") or "").lower()
 
     # --- COMPONENT A: TREND CONFIDENCE (Max 40) ---
     trend_score = 0
-    if close and ema200 and close > ema200: trend_score += 15   # Long-term alignment
-    if close and ema50 and close > ema50: trend_score += 10     # Mid-term alignment
-    if trend_strength and trend_strength > 25: trend_score += 15 # ADX Strength
+    if close and ema200 and close > ema200: trend_score += 15
+    if close and ema50 and close > ema50: trend_score += 10
+    if trend_strength and trend_strength > 25: trend_score += 15
     trend_score = min(40, trend_score)
 
     # --- COMPONENT B: MOMENTUM CONFIDENCE (Max 40) ---
     mom_score = 0
-    if macd_hist and macd_hist > 0: mom_score += 15             # Momentum Positive
-    if close and vwap and close > vwap: mom_score += 10         # Buyers in control
-    if rsi_slope and rsi_slope > 0: mom_score += 10             # Momentum Accelerating
-    # Volatility Quality Bonus
+    if macd_hist and macd_hist > 0: mom_score += 15
+    if close and vwap and close > vwap: mom_score += 10
+    if rsi_slope and rsi_slope > 0: mom_score += 10
+    
     vol_qual = _safe_float(indicators.get("volatility_quality", {}).get("value"))
     if vol_qual and vol_qual > 6: mom_score += 5
     mom_score = min(40, mom_score)
@@ -828,63 +846,60 @@ def calculate_setup_confidence(indicators: Dict[str, Any],
     if "confirm" in obv_div or "bull" in obv_div: vol_score += 5
     vol_score = min(20, vol_score)
 
-    # --- TOTAL RAW SCORE ---
-    # Formula: 40% Trend + 40% Momentum + 20% Volume
     total_conf = trend_score + mom_score + vol_score
 
     # --- MACRO & BIAS ADJUSTMENTS ---
-    # Fix Issue 6: Expanded Bearish Keywords
+    # REVIEW POINT 11: Nuanced Macro Filter
     macro = (macro_trend_status or "").lower()
     is_bearish_macro = any(x in macro for x in ["bear", "down", "corrective", "distribution", "weak"])
     
     if is_bearish_macro:
-        # If macro is weak, punish bullish setups
-        if setup_type in ["MOMENTUM_BREAKOUT", "TREND_FOLLOWING", "VOLATILITY_SQUEEZE"]:
-            total_conf *= 0.85  # -15% Penalty
+        # Don't punish "Buy The Dip" setups or Reversals as harshly
+        if setup_type not in ["TREND_PULLBACK", "DEEP_PULLBACK", "OVERSOLD_IN_UPTREND"]:
+            total_conf *= 0.85 # Penalty for breakouts in bear market
 
-    # Setup Boost (Feedback Loop)
     boost_map = {
         "MOMENTUM_BREAKOUT": 1.10,
         "TREND_PULLBACK": 1.07,
         "DEEP_PULLBACK": 1.05,
         "OVERSOLD_IN_UPTREND": 1.05,
         "VOLATILITY_SQUEEZE": 1.05,
-        "OVERSOLD_REVERSAL": 0.90 # Penalty for counter-trend
+        "OVERSOLD_REVERSAL": 0.90
     }
     boost = boost_map.get(setup_type, 1.0)
     
     final_conf = int(total_conf * boost)
     return min(100, max(0, final_conf))
 
-
-
+# ==============================================================================
+# 🚀 TRADE PLANNER
+# ==============================================================================
 
 def generate_trade_plan(profile_report: Dict[str, Any],
                         indicators: Dict[str, Any],
                         macro_trend_status: str = "N/A") -> Dict[str, Any]:
+    
     final_score = profile_report.get("final_score", 0)
     category = profile_report.get("category", "HOLD")
 
-    price = _safe_float(indicators.get("Price", {}).get("value") if isinstance(indicators.get("Price"), dict) else indicators.get("Price"))
-    atr = _safe_float(indicators.get("atr_14", {}).get("value") if isinstance(indicators.get("atr_14"), dict) else indicators.get("atr_14"))
-    adx = _safe_float(indicators.get("adx", {}).get("value") if isinstance(indicators.get("adx"), dict) else indicators.get("adx"))
+    price = _safe_float(indicators.get("Price", {}).get("value"))
+    atr = _safe_float(indicators.get("atr_14", {}).get("value"))
+    
+    psar_trend = str(indicators.get("psar_trend", {}).get("value") or "").lower()
+    psar_level = _safe_float(indicators.get("psar_level", {}).get("value"))
+    squeeze_signal = str(indicators.get("ttm_squeeze", {}).get("value") or "").lower()
 
-    psar_trend = str(indicators.get("psar_trend", {}).get("value") if isinstance(indicators.get("psar_trend"), dict) else indicators.get("psar_trend") or "").lower()
-    psar_level = _safe_float(indicators.get("psar_level", {}).get("value") if isinstance(indicators.get("psar_level"), dict) else indicators.get("psar_level"))
-    squeeze_signal = str(indicators.get("ttm_squeeze", {}).get("value") if isinstance(indicators.get("ttm_squeeze"), dict) else indicators.get("ttm_squeeze") or "").lower()
+    r1 = _safe_float(indicators.get("resistance_1", {}).get("value"))
+    r2 = _safe_float(indicators.get("resistance_2", {}).get("value"))
+    r3 = _safe_float(indicators.get("resistance_3", {}).get("value"))
+    s1 = _safe_float(indicators.get("support_1", {}).get("value"))
+    s2 = _safe_float(indicators.get("support_2", {}).get("value"))
+    s3 = _safe_float(indicators.get("support_3", {}).get("value"))
 
-    r1 = _safe_float(indicators.get("resistance_1", {}).get("value") if isinstance(indicators.get("resistance_1"), dict) else indicators.get("resistance_1"))
-    r2 = _safe_float(indicators.get("resistance_2", {}).get("value") if isinstance(indicators.get("resistance_2"), dict) else indicators.get("resistance_2"))
-    r3 = _safe_float(indicators.get("resistance_3", {}).get("value") if isinstance(indicators.get("resistance_3"), dict) else indicators.get("resistance_3"))
-    s1 = _safe_float(indicators.get("support_1", {}).get("value") if isinstance(indicators.get("support_1"), dict) else indicators.get("support_1"))
-    s2 = _safe_float(indicators.get("support_2", {}).get("value") if isinstance(indicators.get("support_2"), dict) else indicators.get("support_2"))
-    s3 = _safe_float(indicators.get("support_3", {}).get("value") if isinstance(indicators.get("support_3"), dict) else indicators.get("support_3"))
-
-# --- NEW: Run Advanced Logic ---
     setup_type = classify_setup(indicators)
     ts_val = _safe_float(indicators.get("trend_strength", {}).get("value"))
     setup_conf = calculate_setup_confidence(indicators, ts_val, macro_trend_status, setup_type)
-    
+
     loggable_data = {
         "type": setup_type,
         "confidence": setup_conf,
@@ -899,7 +914,7 @@ def generate_trade_plan(profile_report: Dict[str, Any],
         "setup_confidence": setup_conf, 
         "log_data": loggable_data,
         "reason": "Analysis Inconclusive",
-        "entry": price, # Fallback
+        "entry": price,
         "stop_loss": None,
         "targets": {"t1": None, "t2": None},
         "rr_ratio": 0,
@@ -927,7 +942,9 @@ def generate_trade_plan(profile_report: Dict[str, Any],
         plan["reason"] = "Missing ATR"
         return plan
 
-    # LONG
+    # ----------------------------------------------------
+    # LONG LOGIC
+    # ----------------------------------------------------
     if category == "BUY" and is_bullish_psar:
         if macro_bearish:
             plan["signal"] = "RISKY_BUY"
@@ -936,28 +953,51 @@ def generate_trade_plan(profile_report: Dict[str, Any],
             plan["signal"] = "BUY_SQUEEZE" if is_squeeze else "BUY_TREND"
             plan["reason"] = f"Bullish Score {final_score} + Trend Alignment"
 
-        sl_calc = psar_level if (psar_level is not None and psar_level < price) else (price - (2 * atr))
-        plan["stop_loss"] = round(sl_calc, 2)
-        raw_risk = price - sl_calc
-        risk = max(raw_risk, atr * 1.2)
-        t1 = price + risk
-        min_target = price + (risk * 1.5)
+        atr_multiplier = 1.5
+        sl_theoretical = psar_level if (psar_level is not None and psar_level < price) else (price - (atr_multiplier * atr))
+        raw_risk_dist = price - sl_theoretical
+        
+        # Enforce Floor (1.2 ATR) AND Cap (Max 4% risk)
+        actual_risk = max(raw_risk_dist, atr * 1.2)
+        actual_risk = min(actual_risk, price * 0.04) 
+        
+        plan["stop_loss"] = round(price - actual_risk, 2)
+        
+        # Targets
+        t1 = price + (actual_risk * 1.5)
+        min_target = t1
+        
         tgt_calc = min_target
+        pivot_candidate = None
         for r in [r1, r2, r3]:
             if r is not None and r > min_target:
-                tgt_calc = r
+                pivot_candidate = r
                 break
+        if pivot_candidate: tgt_calc = pivot_candidate
+        
+        # Fallback: If pivot is somehow below T1, use T1
+        if tgt_calc <= t1: tgt_calc = t1 + (actual_risk * 0.5)
+
         plan["targets"]["t1"] = round(t1, 2)
         plan["targets"]["t2"] = round(tgt_calc, 2)
         plan["move_stop_to_breakeven_after_t1"] = True
-        plan["rr_ratio"] = round((tgt_calc - price) / max(risk, 1e-9), 2)
+        plan["rr_ratio"] = round((tgt_calc - price) / max(actual_risk, 1e-9), 2)
+        
         plan["execution_hints"] = {
-            "t1_desc": "1R take-profit; move stop to breakeven after hit",
-            "t2_desc": "Pivot target or 1.5R fallback"
+            "t1_desc": "1.5R take-profit; move stop to breakeven after hit",
+            "t2_desc": "Pivot target or 2R fallback"
         }
-        return plan
 
-    # SHORT
+        # RR Filter
+        if plan["rr_ratio"] < 1.1:
+            plan["signal"] = "SKIPPED_LOW_RR"
+            plan["reason"] = f"RR {plan['rr_ratio']} < 1.1 threshold"
+            
+        return plan 
+
+    # ----------------------------------------------------
+    # SHORT LOGIC
+    # ----------------------------------------------------
     if category == "SELL" and is_bearish_psar:
         if macro_bullish:
             plan["signal"] = "RISKY_SHORT"
@@ -966,27 +1006,48 @@ def generate_trade_plan(profile_report: Dict[str, Any],
             plan["signal"] = "SHORT_SQUEEZE" if is_squeeze else "SHORT_TREND"
             plan["reason"] = f"Bearish Score {final_score} + Trend Breakdown"
 
-        sl_calc = psar_level if (psar_level is not None and psar_level > price) else (price + (2 * atr))
-        plan["stop_loss"] = round(sl_calc, 2)
-        raw_risk = sl_calc - price
-        risk = max(raw_risk, atr * 1.2)
-        t1 = price - risk
-        min_target = price - (risk * 1.5)
+        atr_multiplier = 1.5
+        sl_theoretical = psar_level if (psar_level is not None and psar_level > price) else (price + (atr_multiplier * atr))
+        raw_risk = sl_theoretical - price
+        
+        # Enforce Floor (1.2 ATR) AND Cap (Max 4% risk)
+        actual_risk = max(raw_risk, atr * 1.2)
+        actual_risk = min(actual_risk, price * 0.04) 
+
+        plan["stop_loss"] = round(price + actual_risk, 2)
+
+        # Targets
+        t1 = price - (actual_risk * 1.5)
+        min_target = price - (actual_risk * 2.0)
+        
         tgt_calc = min_target
+        pivot_candidate = None
         for s in [s1, s2, s3]:
             if s is not None and s < min_target:
-                tgt_calc = s
+                pivot_candidate = s
                 break
+        if pivot_candidate: tgt_calc = pivot_candidate
+        
+        # Fallback: If pivot is somehow above T1 (closer to price), use T2 fallback
+        if tgt_calc >= t1: tgt_calc = t1 - (actual_risk * 0.5)
+            
         plan["targets"]["t1"] = round(t1, 2)
         plan["targets"]["t2"] = round(tgt_calc, 2)
         plan["move_stop_to_breakeven_after_t1"] = True
-        plan["rr_ratio"] = round((price - tgt_calc) / max(risk, 1e-9), 2)
+        plan["rr_ratio"] = round((price - tgt_calc) / max(actual_risk, 1e-9), 2)
+        
         plan["execution_hints"] = {
-            "t1_desc": "1R take-profit; move stop to breakeven after hit",
-            "t2_desc": "Pivot support target or 1.5R fallback"
+            "t1_desc": "1.5R take-profit; move stop to breakeven after hit",
+            "t2_desc": "Pivot support target or 2R fallback"
         }
-        return plan
 
+        # RR Filter
+        if plan["rr_ratio"] < 1.1:
+            plan["signal"] = "SKIPPED_LOW_RR"
+            plan["reason"] = f"RR {plan['rr_ratio']} < 1.1 threshold"
+            
+        return plan
+    
     plan["signal"] = "WAIT"
     if category == "HOLD":
         plan["reason"] = f"Score {final_score} is neutral. No clear edge."
@@ -995,7 +1056,6 @@ def generate_trade_plan(profile_report: Dict[str, Any],
     elif category == "SELL":
         plan["reason"] = "Fundamental Sell, but Technical trend not aligned"
     return plan
-
 # ----------------------------------------------------------------------
 # Meta-Category (Archetype) Scoring — Required for main.py
 # ----------------------------------------------------------------------

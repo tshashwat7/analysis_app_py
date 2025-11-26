@@ -191,7 +191,8 @@ TECHNICAL_METRIC_MAP = {
     "dma_20_50_cross": "20/50 DMA Cross",
     "rel_strength_nifty": "Relative Strength vs NIFTY (%)",
     "entry_confirm": "Entry Price (Confirm)",
-    "dma_200_slope": "200 DMA Trend (Slope)",
+    "dma_200_slope": "200 DMA Trend (Slope)", # Key for Short Term
+    "200dma_slope": "200 DMA Trend (Slope)",
     "sl_2x_atr": "Suggested SL (2xATR)",
     "supertrend_signal": "SuperTrend Signal",
     "cci": "Commodity Channel Index (CCI)",
