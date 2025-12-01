@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from typing import Dict, Any, Optional, List, Union
-from datetime import datetime
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, FundamentalCache
 import json
@@ -27,7 +26,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------
 # 🔧 HELPER: SMART YEAR ALIGNMENT & FUZZY PICKING
 # ---------------------------------------------------------
-
 def get_smart_aligned_columns(df_primary: pd.DataFrame, df_secondary: pd.DataFrame) -> tuple[Optional[Any], Optional[Any]]:
     """
     Matches columns between two dataframes based on YEAR.
@@ -65,56 +63,37 @@ def get_smart_aligned_columns(df_primary: pd.DataFrame, df_secondary: pd.DataFra
     return ymap_1[latest_year], ymap_2[latest_year]
 
 def pick_value_by_key(df: pd.DataFrame, candidates: List[str], col_key: Any) -> Optional[float]:
-    """
-    Extracts value for a specific column key with FUZZY row matching.
-    """
+    """Extracts value for a specific column key with FUZZY row matching."""
     if df is None or df.empty or col_key is None: return None
     if col_key not in df.columns: return None
 
-    # 1. Exact Match Speed Path
+    # 1. Exact Match
     for name in candidates:
         if name in df.index:
-            try:
-                val = df.loc[name, col_key]
-                return safe_float(val)
-            except Exception:
-                continue
+            try: return safe_float(df.loc[name, col_key])
+            except: continue
 
-    # 2. Fuzzy Match (Lowercase + Strip) - Restored!
-    # Create map once
+    # 2. Fuzzy Match
     lower_map = {str(i).lower().strip(): i for i in df.index}
-    
     for name in candidates:
         clean_name = str(name).lower().strip()
         if clean_name in lower_map:
             real_idx = lower_map[clean_name]
-            try:
-                val = df.loc[real_idx, col_key]
-                return safe_float(val)
-            except Exception:
-                continue
+            try: return safe_float(df.loc[real_idx, col_key])
+            except: continue
                 
     return None
 
 def pick_latest_column(df: Optional[pd.DataFrame]) -> Optional[int]:
-    """
-    Return the index (int) of the column to use for latest full-year values.
-    Checks if columns are datelike and sorted. YFinance usually sends Newest -> Oldest (index 0).
-    """
-    if df is None or df.empty:
-        return None
-    
+    """Return index of latest full-year values (usually 0)."""
+    if df is None or df.empty: return None
     cols = list(df.columns)
-    if not cols:
-        return None
-        
+    if not cols: return None
     # Check if columns are timestamps to determine order
     if len(cols) > 1:
-        first, last = cols[0], cols[-1]
-        # If first is newer than last (Newest First), use 0.
-        # If first is older than last (Oldest First), use -1 (len-1).
         try:
-            if pd.to_datetime(first) > pd.to_datetime(last):
+            # If col[0] > col[-1], it is Newest->Oldest (Standard)
+            if pd.to_datetime(cols[0]) > pd.to_datetime(cols[-1]):
                 return 0
             else:
                 return len(cols) - 1
@@ -125,24 +104,16 @@ def pick_latest_column(df: Optional[pd.DataFrame]) -> Optional[int]:
     return 0
 
 def pick_value_from_df(df: Optional[pd.DataFrame], candidates: list, col_index: Optional[int]=None) -> Optional[float]:
-    """
-    Robust lookup that ensures we pick the same column index (time period) for all metrics.
-    """
-    if df is None or df.empty:
-        return None
-        
-    if col_index is None:
-        col_index = pick_latest_column(df)
-        
+    if df is None or df.empty: return None
+    if col_index is None: col_index = pick_latest_column(df)
     if col_index is None: return None
 
     # Attempt to find candidate rows
     for name in candidates:
         if name in df.index:
-            try:
-                val = df.iloc[df.index.get_loc(name), col_index]
-                return safe_float(val)
-            except Exception:
+            try: return safe_float(df.iloc[df.index.get_loc(name), col_index])
+            except Exception as e: 
+                logger.warning(f"could find candidates: {e}")
                 continue
                 
     # Fuzzy match (case-insensitive)
@@ -154,12 +125,13 @@ def pick_value_from_df(df: Optional[pd.DataFrame], candidates: list, col_index: 
             try:
                 val = df.loc[idx].iat[col_index] if hasattr(df.loc[idx], 'iat') else df.loc[idx].iloc[col_index]
                 return safe_float(val)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"fuzzy match missed: {e}")
                 continue
     return None
 
 # ========================================================
-# 🚀 DATA UNIFIER CLASS (Optimized + Robust)
+# 🚀 DATA UNIFIER CLASS
 # ========================================================
 class DataUnifier:
     def __init__(self, ticker: yf.Ticker):
@@ -167,15 +139,14 @@ class DataUnifier:
         self.symbol = getattr(ticker, "ticker", "UNKNOWN")
         self.flat_data = {}
         
-        # FIX: Use ticker.info directly (cached by yf) instead of creating new request
-        # Only call safe_info if ticker.info is empty/missing
-        raw_info = getattr(ticker, "info", None)
-        if not raw_info or len(raw_info) < 5:
-            raw_info = safe_info(self.symbol) # Fallback to fresh fetch
-            
-        self.info = raw_info or {}
-        
-        # Raw Dataframes
+        # 1. Use Cached Info Directly
+        self.info = getattr(ticker, "info", {}) or {}
+
+        # Improvement D: Log warning if info is empty avoid API hammering in quick score run
+        if not self.info:
+            logger.warning(f"[{self.symbol}] Fundamentals Warning: 'info' dict is empty (possible rate limit)")
+
+        # 2. Map Dataframes (Zero API calls if main.py initialized ticker correctly)
         self.financials = getattr(ticker, "financials", pd.DataFrame())
         self.balance_sheet = getattr(ticker, "balance_sheet", pd.DataFrame())
         self.cashflow = getattr(ticker, "cashflow", pd.DataFrame())
@@ -199,32 +170,46 @@ class DataUnifier:
 
     def find_series(self, candidates: List[str], source_df: pd.DataFrame) -> pd.Series:
         # Legacy support for existing functions not yet patched
-        if source_df is None or source_df.empty:
-            return pd.Series(dtype=float)
-        for key in candidates:
-            if key in source_df.index:
-                return source_df.loc[key]
+        if source_df is None or source_df.empty: return pd.Series(dtype=float)
         
+        for key in candidates:
+            if key in source_df.index: return source_df.loc[key]
+        
+        # Fuzzy match
         norm_candidates = [str(k).lower().replace(" ", "").replace("_", "") for k in candidates]
         index_map = {str(k).lower().replace(" ", "").replace("_", ""): k for k in source_df.index}
         
         for nc in norm_candidates:
-            if nc in index_map:
-                return source_df.loc[index_map[nc]]
+            if nc in index_map: return source_df.loc[index_map[nc]]
+            
         return pd.Series(dtype=float)
 
     def find_value(self, candidates: List[str], source_df: pd.DataFrame) -> Optional[float]:
-        # Legacy wrapper using new robust picker
         return pick_value_from_df(source_df, candidates)
-    
-    def find_series_values(self, candidates: List[str], source_df: pd.DataFrame) -> List[float]:
-        ser = self.find_series(candidates, source_df)
-        if ser is None or ser.empty: return []
-        return ser.dropna().astype(float).tolist()
 
 # ========================================================
-# METRIC CALCULATORS (Hybrid Mode B Logic)
+# METRIC CALCULATORS
 # ========================================================
+def _get_ebit_robust(unifier: DataUnifier, df_fin: pd.DataFrame, col_key: Any) -> Optional[float]:
+    """Try to get EBIT directly, otherwise calculate it: Net Income + Tax + Interest."""
+    # 1. Try Direct Fetch
+    ebit = pick_value_by_key(df_fin, FIELD.get("ebit", []) + ["Operating Income", "OperatingIncome"], col_key)
+    if ebit is not None:
+        return ebit
+        
+    # 2. Manual Calculation: Net Income + Tax + Interest
+    ni = pick_value_by_key(df_fin, FIELD.get("net_income", []), col_key)
+    tax = pick_value_by_key(df_fin, FIELD.get("tax_expense", []), col_key)
+    interest = pick_value_by_key(df_fin, FIELD.get("interest_expense", []), col_key)
+    
+    if ni is not None:
+        val = ni
+        if tax is not None: val += tax
+        if interest is not None: val += abs(interest) # Interest is often negative expense
+        return val
+        
+    return None
+
 
 def _derive_wacc(unifier: DataUnifier) -> float:
     try:
@@ -263,9 +248,7 @@ def calc_pe_ratio(t, unifier: DataUnifier = None):
         price = unifier.get(["currentPrice", "regularMarketPrice"])
         # Use pick_value_from_df to get the LATEST EPS only (index 0)
         eps = pick_value_from_df(unifier.financials, ["Basic EPS", "Diluted EPS", "EPS"])
-        
-        if price and eps and eps > 0:
-            pe = price / eps
+        if price and eps and eps > 0: pe = price / eps
 
     if pe is None: return None
     score = 10 if pe <= 12 else 7 if pe <= 20 else 4 if pe <= 30 else 1
@@ -283,9 +266,8 @@ def calc_profit_growth_3y(t, unifier: DataUnifier = None):
     fin = unifier.financials
     profit_series = unifier.find_series(FIELD.get("net_income", []), fin)
     
-    if profit_series.empty:
-        return None
-
+    if profit_series.empty:  return None
+    
     valid = profit_series.dropna().astype(float)[::-1] # Oldest -> Newest
     if len(valid) < 2: return None
     
@@ -308,25 +290,16 @@ def calc_eps_growth_5y(t, unifier: DataUnifier = None):
              # Try to find EPS col
              for c in earnings.columns:
                  if "eps" in c.lower():
-                     eps_series = earnings[c]
-                     break
+                     eps_series = earnings[c]; break
 
     if eps_series.empty: return None
     
-    # Ensure chronological (Oldest -> Newest)
-    # Financials are Newest->Oldest. Earnings usually Oldest->Newest.
-    # Check index type.
     vals = eps_series.dropna().astype(float).tolist()
-    
-    # Heuristic: if index is datetime and [0] > [-1], it's descending.
+    # Ensure Oldest -> Newest
     if isinstance(eps_series.index, pd.DatetimeIndex):
-        if eps_series.index[0] > eps_series.index[-1]:
-             vals = vals[::-1]
+        if eps_series.index[0] > eps_series.index[-1]: vals = vals[::-1]
     else:
-        # For financials (cols are dates), default behavior is newest first.
-        # So we reverse.
-        if "financials" in str(eps_series.name) or len(vals) < 10: # Crude check
-             vals = vals[::-1]
+        if len(vals) < 10: vals = vals[::-1] # Assume Financials are Newest first
 
     if len(vals) < 2: return None
     start, end = vals[0], vals[-1]
@@ -341,7 +314,6 @@ def calc_eps_growth_5y(t, unifier: DataUnifier = None):
 @_wrap_calc("peg_ratio")
 def calc_peg_ratio(t, unifier: DataUnifier = None):
     peg = unifier.get(["pegRatio"])
-    
     if peg is None:
         pe = unifier.get(["trailingPE"])
         if pe and pe > 0:
@@ -358,108 +330,159 @@ def calc_peg_ratio(t, unifier: DataUnifier = None):
     score = 10 if peg <= 1 else 8 if peg <= 1.5 else 5 if peg <= 2.5 else 0
     return {"raw": peg, "value": round(peg, 2), "score": score, "desc": f"PEG {peg:.2f}"}
 
-
 @_wrap_calc("roe")
 def calc_roe(t, unifier: DataUnifier = None):
-    fin = unifier.financials
-    bs = unifier.balance_sheet
-    info = unifier.info
+    fin, bs = unifier.financials, unifier.balance_sheet
     col_fin, col_bs = get_smart_aligned_columns(fin, bs)
     ni = pick_value_by_key(fin, FIELD.get("net_income", []), col_fin)
     equity = pick_value_by_key(bs, FIELD.get("total_equity", []), col_bs)
 
     if equity is None:
         # Fallback to Book Value * Shares
-        bv = safe_info_normalized("bookValue", info)
-        shares = safe_info_normalized("sharesOutstanding", info)
-        mcap = safe_info_normalized("marketCap", info)
-
-        if bv is not None and shares is not None and mcap is not None:
+        bv = safe_info_normalized("bookValue", unifier.info)
+        shares = safe_info_normalized("sharesOutstanding", unifier.info)
+        mcap = safe_info_normalized("marketCap", unifier.info)
+        if bv and shares and mcap:
             calc_eq = bv * shares
             # Sanity Check: Equity within 10% - 400% of Market Cap
-            if 0.1 < (calc_eq / mcap) < 4.0: 
-                equity = calc_eq
+            if 0.1 < (calc_eq / mcap) < 4.0: equity = calc_eq     
     if ni is None or equity is None or equity == 0:
-        # Last resort: Yahoo TTM
         roe = unifier.get(["returnOnEquity"])
         if roe: return {"raw": roe*100, "value": f"{roe*100:.2f}%", "score": 5, "desc": "ROE (Yahoo)"}
         return None
+        
     pct = (ni / equity) * 100.0
     score = 10 if pct >= 20 else 7 if pct >= 12 else 3
     return {"raw": pct, "value": f"{pct:.2f}%", "score": score, "desc": f"ROE {pct:.2f}%"}
 
+# --- NEW: ROE HISTORY CALCULATOR FOR STABILITY ---
+@_wrap_calc("roe_history")
+def calc_roe_history(unifier: DataUnifier) -> List[float]:
+    """Calculate ROE for available years to feed Signal Engine stability checks."""
+    try:
+        fin, bs = unifier.financials, unifier.balance_sheet
+        if fin.empty or bs.empty: return []
+        
+        roe_list = []
+        # Iterate over columns (Years)
+        # Note: Financials cols are usually Timestamps.
+        valid_cols = [c for c in fin.columns if c in bs.columns]
+        
+        for col in valid_cols:
+            ni = pick_value_by_key(fin, FIELD.get("net_income", []), col)
+            eq = pick_value_by_key(bs, FIELD.get("total_equity", []), col)
+            if ni and eq and eq > 0:
+                roe_list.append((ni / eq) * 100.0)
+                
+        # Return sorted by time? No, statistics.pstdev doesn't care about order.
+        return {"raw": roe_list, "value": roe_list, "score": None, "desc": "ROE for available years"}
+    
+    except Exception:
+        return []
+
 @_wrap_calc("roce")
 def calc_roce(t, unifier: DataUnifier = None):
-    fin = unifier.financials
-    bs = unifier.balance_sheet
-
-    # 1. Smart Year Alignment
+    fin, bs = unifier.financials, unifier.balance_sheet
+    
+    # 1. Smart Alignment
     col_fin, col_bs = get_smart_aligned_columns(fin, bs)
     
-    # 2. Fetch Components
-    ebit = pick_value_by_key(fin, FIELD.get("ebit", []), col_fin)
-    
-    # 2. Denominator: Capital Employed
-    # Formula: Total Assets - Current Liabilities
-    assets = pick_value_by_key(bs, FIELD.get("total_assets", []), col_bs)
-    cliab = pick_value_by_key(bs, FIELD.get("current_liabilities", []), col_bs)
-    
-    # 3. Adjustment: Subtract Cash (Screener Logic)
-    cash = pick_value_by_key(bs, FIELD.get("cash_equivalents", []), col_bs) or 0
-    # Also subtract Short Term Investments if possible
-    st_inv = pick_value_by_key(bs, ["Short Term Investments", "OtherShortTermInvestments"], col_bs) or 0
+    # 2. Fallback
+    if col_fin is None: col_fin = fin.columns[0] if not fin.empty else None
+    if col_bs is None: col_bs = bs.columns[0] if not bs.empty else None
 
-    if ebit and assets and cliab:
-        # Capital Employed = (Assets - Current Liab) - Cash - ST Investments
-        cap_employed = (assets - cliab) - cash - st_inv
+    # 3. Robust Fetch EBIT (Validated by Interest Coverage match)
+    ebit = _get_ebit_robust(unifier, fin, col_fin)
+    
+    # 4. Check Sector
+    sector = unifier.get_raw("sector")
+    is_financial = sector == "Financial Services"
+    
+    cap_employed = None
+    
+    if is_financial:
+        # --- BANK FORMULA ---
+        # For banks, Capital Employed ≈ Total Assets 
+        # (Since Deposits are liabilities used to generate income)
+        assets = pick_value_by_key(bs, FIELD.get("total_assets", []), col_bs)
+        if assets:
+            cap_employed = assets
+    else:
+        # --- STANDARD FORMULA ---
+        assets = pick_value_by_key(bs, FIELD.get("total_assets", []), col_bs)
+        cliab = pick_value_by_key(bs, FIELD.get("current_liabilities", []), col_bs)
+        cash = pick_value_by_key(bs, FIELD.get("cash_equivalents", []), col_bs) or 0
         
-        if cap_employed > 0:
-            roce = (ebit / cap_employed) * 100.0
+        if assets is not None and cliab is not None:
+            cap_employed = (assets - cliab) - cash
+        
+        # Fallback Method B (Equity + Debt - Cash)
+        if cap_employed is None:
+            equity = pick_value_by_key(bs, FIELD.get("total_equity", []), col_bs)
+            total_debt = pick_value_by_key(bs, FIELD.get("total_debt", []), col_bs)
+            if total_debt is None:
+                 lt_debt = pick_value_by_key(bs, ["Long Term Debt", "LongTermDebt"], col_bs)
+                 total_debt = lt_debt or 0
+            if equity is not None:
+                cap_employed = (equity + (total_debt or 0)) - cash
+
+    # 5. Final Calculation
+    if ebit is not None and cap_employed is not None and cap_employed > 0:
+        roce = (ebit / cap_employed) * 100.0
+        
+        # Scoring: Banks naturally have lower ROCE (5-10% is good), others need 20%
+        if is_financial:
+            score = 10 if roce >= 1.5 else 7 if roce >= 1.0 else 3 # Adjusted for huge asset base
+        else:
             score = 10 if roce >= 20 else 7 if roce >= 15 else 3
-            return {"raw": roce, "value": f"{roce:.2f}%", "score": score, "desc": f"ROCE {roce:.2f}%"}
             
-    # Fallback to Yahoo if raw calculation fails
+        return {"raw": roce, "value": f"{roce:.2f}%", "score": score, "desc": f"ROCE {roce:.2f}%"}
+            
+    # 6. Yahoo Fallback
     roce = unifier.get(["returnOnCapitalEmployed", "roce"])
     if roce: 
-        return {"raw": roce * 100 if roce < 1 else roce, "value": f"{roce:.2f}%", "score": 5, "desc": "ROCE (Yahoo)"}
+        val = roce * 100 if roce < 1 else roce
+        return {"raw": val, "value": f"{val:.2f}%", "score": 5, "desc": "ROCE (Yahoo)"}
+        
     return None
 
 @_wrap_calc("roic")
 def calc_roic(t, unifier: DataUnifier = None):
-    fin = unifier.financials
-    bs = unifier.balance_sheet
-    
-    # 1. Smart Year Alignment
+    fin, bs = unifier.financials, unifier.balance_sheet
     col_fin, col_bs = get_smart_aligned_columns(fin, bs)
+    
+    if col_fin is None: col_fin = fin.columns[0] if not fin.empty else None
+    if col_bs is None: col_bs = bs.columns[0] if not bs.empty else None
 
-    # 2. Fetch Components
-    ebit = pick_value_by_key(fin, FIELD.get("ebit", []), col_fin)
+    ebit = _get_ebit_robust(unifier, fin, col_fin)
     equity = pick_value_by_key(bs, FIELD.get("total_equity", []), col_bs)
     debt = pick_value_by_key(bs, FIELD.get("total_debt", []), col_bs) or 0
     cash = pick_value_by_key(bs, FIELD.get("cash_equivalents", []), col_bs) or 0
 
-    # 3. Calculate Tax Rate
     tax_exp = pick_value_by_key(fin, FIELD.get("tax_expense", []), col_fin)
     pre_tax = pick_value_by_key(fin, FIELD.get("pre_tax_income", []), col_fin)
     
+    sector = unifier.get_raw("sector")
+    is_financial = sector == "Financial Services"
+    
     tax_rate = 0.25
-    if tax_exp is not None and pre_tax is not None and pre_tax > 0:
+    if tax_exp and pre_tax and pre_tax > 0:
         calc_rate = tax_exp / pre_tax
-        if 0.0 < calc_rate < 0.5:
-            tax_rate = calc_rate
+        if 0.0 < calc_rate < 0.5: tax_rate = calc_rate
 
-    # 4. NOPAT
-    if ebit is None: return None
+    if ebit is None or equity is None: return None
+    
     nopat = ebit * (1 - tax_rate)
-
-    # 5. Invested Capital
-    if equity is None: return None
     
-    invested_capital = (equity + debt) - cash
+    # SECTOR SWITCH
+    if is_financial:
+        # Banks: Invested Capital = Equity + Debt (Do not subtract cash)
+        invested_capital = equity + debt
+    else:
+        # Standard: Invested Capital = Equity + Debt - Cash
+        invested_capital = (equity + debt) - cash
     
-    # Strict Logic: If Invested Capital is tiny/negative, fail.
-    if invested_capital < 1000: # effectively 0/None
-        return None
+    if invested_capital < 1000: return None
 
     roic = (nopat / invested_capital) * 100.0
     wacc = _derive_wacc(unifier)
@@ -471,29 +494,15 @@ def calc_roic(t, unifier: DataUnifier = None):
 def calc_de_ratio(t, unifier: DataUnifier = None):
     bs = unifier.balance_sheet
     info = unifier.info
-    
-    # Use latest column index (Integer, e.g., 0)
     col_idx = pick_latest_column(bs)
     
-    # ---------------------------------------------------------
-    # 1. ROBUST DEBT FETCHING (Use pick_value_from_df for Index support)
-    # ---------------------------------------------------------
-    # First, try explicit "Total Debt"
     debt = pick_value_from_df(bs, FIELD.get("total_debt", []), col_idx)
-
-    # If missing, try summing components: Long Term + Short Term/Current
     if debt is None:
-        long_term = pick_value_from_df(bs, FIELD.get("total_debt", []) + ["Long Term Debt", "LongTermDebt"], col_idx)
-        short_term = pick_value_from_df(bs, FIELD.get("pure_borrowings", []) + ["Current Debt", "Short Term Debt"], col_idx)
-        
-        if long_term is not None or short_term is not None:
-            debt = (long_term or 0) + (short_term or 0)
+        lt = pick_value_from_df(bs, FIELD.get("total_debt", []) + ["Long Term Debt"], col_idx)
+        st = pick_value_from_df(bs, FIELD.get("pure_borrowings", []) + ["Current Debt"], col_idx)
+        if lt is not None or st is not None: debt = (lt or 0) + (st or 0)
 
-    # ---------------------------------------------------------
-    # 2. ROBUST EQUITY FETCHING
-    # ---------------------------------------------------------
     equity = pick_value_from_df(bs, FIELD.get("total_equity", []), col_idx)
-
     # Fallback A: Assets - Liabilities
     if equity is None:
         assets = pick_value_from_df(bs, FIELD.get("total_assets", []), col_idx)
@@ -507,29 +516,30 @@ def calc_de_ratio(t, unifier: DataUnifier = None):
         shares = safe_info_normalized("sharesOutstanding", info)
         if bv and shares:
             equity = bv * shares
-
-    # ---------------------------------------------------------
-    # 3. CALCULATION & FALLBACKS
-    # ---------------------------------------------------------
-    
-    # If we have valid numbers, calculate standard D/E
-    if equity is not None and equity > 0 and debt is not None:
+    if equity and equity > 0 and debt is not None:
         de = debt / equity
-        score = 10 if de < 0.5 else 7 if de < 1.0 else 4 if de < 2.0 else 0
+        
+        # SECTOR SCORING ADJUSTMENT
+        sector = unifier.get_raw("sector")
+        if sector == "Financial Services":
+            # Banks run high leverage naturally (D/E 1.27 is actually very safe for a bank)
+            # We don't try to match Screener's 11.1 (Deposits), but we score the Borrowings ratio leniently
+            score = 10 if de < 2.0 else 7 if de < 4.0 else 4
+        else:
+            # Standard Companies
+            score = 10 if de < 0.5 else 7 if de < 1.0 else 4 if de < 2.0 else 0
+            
         return {"raw": de, "value": round(de, 2), "score": score, "desc": f"D/E {de:.2f}"}
-
-    # If raw data failed, try Yahoo Pre-calc
+    
     yahoo_de = unifier.get(["debtToEquity"])
     if yahoo_de is not None:
-        # Yahoo sends 150.5 for 1.505. Normalize if > 50 (heuristic)
+        # Yahoo sends 150.5 for 1.505. Normalize if > 50 (known API quirk)
         val = yahoo_de / 100.0 if yahoo_de > 50 else yahoo_de
         score = 10 if val < 0.5 else 7 if val < 1.0 else 4 if val < 2.0 else 0
         return {"raw": val, "value": round(val, 2), "score": score, "desc": f"D/E {val:.2f} (Yahoo)"}
 
-    # Last Resort: If Equity exists but Debt is strictly None, assume Debt-Free
-    if equity is not None and equity > 0 and debt is None:
-         return {"raw": 0.0, "value": 0.0, "score": 10, "desc": "D/E 0.00 (Debt-Free)"}
-
+    # 2. If we reach here, we have no calculated debt and no Yahoo debt.
+    # Return None so the engine knows data is missing.
     return None
 
 @_wrap_calc("interest_coverage")
@@ -555,31 +565,23 @@ def calc_fcf_yield(t, unifier: DataUnifier = None):
     mcap = unifier.get(["marketCap"])
     if not fcf or not mcap: return None
     yld = (fcf / mcap) * 100
-    # v1 thresholds
-    score = 10 if yld >= 10 else 6 if yld >= 6 else 4 if yld >= 4 else 2 if yld >= 2 else 0
+    score = 10 if yld >= 10 else 6 if yld >= 6 else 4 if yld >= 2 else 0
     return {"raw": yld, "value": f"{yld:.2f}%", "score": score, "desc": f"FCF Yield {yld:.2f}%"}
 
 @_wrap_calc("fcf_margin")
 def calc_fcf_margin(t, unifier: DataUnifier = None):
-    fin = unifier.financials
-    cf = unifier.cashflow
-    
-    # 1. Smart Alignment (Financials vs Cashflow)
+    fin, cf = unifier.financials, unifier.cashflow
     col_fin, col_cf = get_smart_aligned_columns(fin, cf)
     
-    # 2. Fetch Values using aligned keys
     rev = pick_value_by_key(fin, FIELD.get("revenue", []), col_fin)
     fcf = pick_value_by_key(cf, FIELD.get("free_cash_flow", []), col_cf)
     
-    # 3. Fallback for FCF if not explicit (OCF - Capex)
     if fcf is None and col_cf is not None:
         ocf = pick_value_by_key(cf, FIELD.get("ocf", []), col_cf)
         capex = pick_value_by_key(cf, FIELD.get("capex", []), col_cf)
-        if ocf is not None: 
-            fcf = ocf - abs(capex or 0)
+        if ocf is not None: fcf = ocf - abs(capex or 0)
             
     if not rev or not fcf: return None
-    
     margin = (fcf / rev) * 100
     score = 10 if margin >= 15 else 5 if margin >= 10 else 0
     return {"raw": margin, "value": f"{margin:.1f}%", "score": score, "desc": f"FCF Margin {margin:.1f}%"}
@@ -597,27 +599,18 @@ def calc_current_ratio(t, unifier: DataUnifier = None):
 
 @_wrap_calc("asset_turnover")
 def calc_asset_turnover(t, unifier: DataUnifier = None):
-    fin = unifier.financials
-    bs = unifier.balance_sheet
-    
-    # 1. Smart Alignment (Ensure Revenue year matches Asset year)
+    fin, bs = unifier.financials, unifier.balance_sheet
     col_fin, col_bs = get_smart_aligned_columns(fin, bs)
-    
-    # 2. Fetch (Use pick_value_by_key)
     rev = pick_value_by_key(fin, FIELD.get("revenue", []), col_fin)
     assets = pick_value_by_key(bs, FIELD.get("total_assets", []), col_bs)
-    
     if not rev or not assets: return None
-    
     at = rev / assets
     score = 10 if at > 1 else 5 if at > 0.5 else 0
     return {"raw": at, "value": round(at, 2), "score": score, "desc": f"Asset Turnover {at:.2f}"}
 
 @_wrap_calc("piotroski_f")
 def calc_piotroski_f(t, unifier: DataUnifier = None):
-    fin = unifier.financials
-    bs = unifier.balance_sheet
-    cf = unifier.cashflow
+    fin = unifier.financials; bs = unifier.balance_sheet; cf = unifier.cashflow
     if fin.empty or bs.empty: return None
     
     def _get_2y(field_keys, df):
@@ -626,8 +619,6 @@ def calc_piotroski_f(t, unifier: DataUnifier = None):
         return safe_float(ser.iloc[0]), safe_float(ser.iloc[1])
 
     score = 0
-    breakdown = {}
-
     ni, ni_prev = _get_2y(FIELD.get("net_income", []), fin)
     roa = unifier.get(["returnOnAssets"])
     ocf, _ = _get_2y(FIELD.get("ocf", []), cf)
@@ -662,7 +653,7 @@ def calc_piotroski_f(t, unifier: DataUnifier = None):
         if at > at_prev: score += 1
     
     normalized = round((score / 9) * 10, 1)
-    return {"raw": score, "value": f"{score}/9", "score": normalized, "desc": f"F-Score {score}", "meta": breakdown}
+    return {"raw": score, "value": f"{score}/9", "score": normalized, "desc": f"F-Score {score}"}
 
 @_wrap_calc("r_d_intensity")
 def calc_rd_intensity(t, unifier: DataUnifier = None):
@@ -689,7 +680,6 @@ def calc_earnings_stability(t, unifier: DataUnifier = None):
 def calc_fcf_growth_3y(t, unifier: DataUnifier = None):
     cf = unifier.cashflow
     if cf.empty: return None
-
     ser = unifier.find_series(FIELD.get("free_cash_flow", []), cf)
     if ser.empty:
         ocf = unifier.find_series(FIELD.get("ocf", []), cf)
@@ -736,7 +726,6 @@ def calc_institutional_ownership(t, unifier: DataUnifier = None):
     # Yahoo only gives FII — add DIIs via fallback weights
     fii = unifier.get(["heldPercentInstitutions"])
     dii = unifier.get(["diiPercent", "domesticInstitutionalPercent"])
-
     inst = 0
     if fii:
         inst += (fii * 100 if fii < 1 else fii)
@@ -781,19 +770,15 @@ def calc_dividend_yield(t, unifier: DataUnifier = None):
 def calc_quarterly_growth(t, unifier: DataUnifier = None):
     eps_g = unifier.get(["earningsQuarterlyGrowth"])
     rev_g = unifier.get(["revenueQuarterlyGrowth"])
-    
     if not eps_g and not rev_g:
         qfin = unifier.quarterly_financials
         if not qfin.empty:
             ni = unifier.find_series(FIELD.get("net_income", []), qfin)
             rev = unifier.find_series(FIELD.get("revenue", []), qfin)
-            if len(ni) >= 2 and ni.iloc[1]:
-                eps_g = (ni.iloc[0] - ni.iloc[1]) / abs(ni.iloc[1])
-            if len(rev) >= 2 and rev.iloc[1]:
-                rev_g = (rev.iloc[0] - rev.iloc[1]) / abs(rev.iloc[1])
+            if len(ni) >= 2 and ni.iloc[1]: eps_g = (ni.iloc[0] - ni.iloc[1]) / abs(ni.iloc[1])
+            if len(rev) >= 2 and rev.iloc[1]: rev_g = (rev.iloc[0] - rev.iloc[1]) / abs(rev.iloc[1])
 
-    eps_pct = (eps_g or 0) * 100
-    rev_pct = (rev_g or 0) * 100
+    eps_pct = (eps_g or 0) * 100; rev_pct = (rev_g or 0) * 100
     avg = (eps_pct + rev_pct) / 2
     score = 10 if avg > 20 else 7 if avg > 10 else 2
     desc = f"Avg {avg:.1f}%"
@@ -812,15 +797,12 @@ def calc_short_interest(t, unifier: DataUnifier = None):
 def calc_net_profit_margin(t, unifier: DataUnifier = None):
     npm = unifier.get(["profitMargins"])
     if not npm:
-        # Manual Calculation
         fin = unifier.financials
         col_idx = pick_latest_column(fin)
         ni = pick_value_from_df(fin, FIELD.get("net_income", []), col_idx)
         rev = pick_value_from_df(fin, FIELD.get("revenue", []), col_idx)
-        if ni and rev: 
-            npm = ni / rev
+        if ni and rev: npm = ni / rev
     if npm is None: return None
-    
     pct = npm * 100 if abs(npm) < 5 else npm
     score = 10 if pct > 15 else 7 if pct > 10 else 3
     return {"raw": pct, "value": f"{pct:.1f}%", "score": score, "desc": f"NPM {pct:.1f}%"}
@@ -843,7 +825,6 @@ def calc_operating_margin(t, unifier: DataUnifier = None):
     if opm:
         pct = opm * 100 if abs(opm) < 5 else opm
         return {"raw": pct, "value": f"{pct:.1f}%", "score": 5, "desc": f"OPM {pct:.1f}% (Yahoo)"}
-        
     return None
 
 @_wrap_calc("ebitda_margin")
@@ -901,8 +882,6 @@ def calc_revenue_growth_cagr(t, unifier: DataUnifier = None):
     start, end = valid.iloc[0], valid.iloc[-1]
     n = len(valid) - 1
     cagr = ((end / start) ** (1.0 / n) - 1.0) * 100.0
-    
-    # v1 scoring
     if cagr > 10: score = 10
     elif cagr > 8: score = 8
     elif cagr > 5: score = 5
@@ -911,35 +890,28 @@ def calc_revenue_growth_cagr(t, unifier: DataUnifier = None):
 
 @_wrap_calc("days_to_earnings")
 def calc_days_to_earnings(t, unifier: DataUnifier = None):
-    from datetime import datetime
+    # Import class explicitly to avoid module conflict
+    from datetime import datetime as dt_class 
+    
     ts = unifier.get_raw("earningsTimestamp")
     if not ts: return None
-    days = max((datetime.fromtimestamp(ts) - datetime.now()).days, 0)
-    # v1 Scoring: 0/5/7/10
+    
+    days = max((dt_class.fromtimestamp(ts) - dt_class.now()).days, 0)
+    
     score = 10 if days > 30 else 7 if days > 14 else 5
     return {"raw": days, "value": days, "score": score, "desc": f"{days} days to earnings"}
 
 @_wrap_calc("ocf_vs_profit")
 def calc_ocf_vs_profit(t, unifier: DataUnifier = None):
-    fin = unifier.financials
-    cf = unifier.cashflow
-    
-    # 1. Smart Alignment
+    fin, cf = unifier.financials, unifier.cashflow
     col_fin, col_cf = get_smart_aligned_columns(fin, cf)
-    
-    # 2. Fetch aligned values
     ocf = pick_value_by_key(cf, FIELD.get("ocf", []), col_cf)
     ni = pick_value_by_key(fin, FIELD.get("net_income", []), col_fin)
-    
     if not ocf or not ni: return None
-    
     ratio = ocf / ni
-    
-    # v1 scoring
     if ratio > 1.5: score = 10
     elif ratio > 1: score = 5
     else: score = 0
-    
     return {"raw": ratio, "value": round(ratio, 2), "score": score, "desc": f"OCF/NI {ratio:.2f}"}
 
 @_wrap_calc("promoter_pledge")
@@ -947,10 +919,7 @@ def calc_promoter_pledge(t, unifier: DataUnifier = None):
     pledge = unifier.get(["pledgedPercentage", "promoterPledge"])
     if pledge is None: return {"raw": 0, "value": "0%", "score": 5, "desc": "N/A"}
     pct = pledge * 100 if pledge < 1 else pledge
-    if pct == 0: score = 10
-    elif pct < 5: score = 7
-    elif pct < 20: score = 3
-    else: score = 0
+    score = 10 if pct == 0 else 7 if pct < 5 else 3 if pct < 20 else 0
     return {"raw": pct, "value": f"{pct:.1f}%", "score": score, "desc": f"Pledge {pct:.1f}%"}
 
 @_wrap_calc("ps_ratio")
@@ -968,31 +937,17 @@ def calc_ps_ratio(t, unifier: DataUnifier = None):
 def calc_market_cap(t, unifier: DataUnifier = None):
     mc = unifier.get(["marketCap"])
     if not mc: return None
-    
-    # v1 scoring
-    if mc > 2e12: score = 10 
-    elif mc > 5e11: score = 7 
-    elif mc > 5e10: score = 5 
-    else: score = 1
-    
-    # v1 formatting
+    score = 10 if mc > 2e12 else 7 if mc > 5e11 else 5 if mc > 5e10 else 1
     if mc > 1e12: val_str = f"{round(mc / 1e12, 2)} L Cr"
     elif mc > 1e7: val_str = f"{round(mc / 1e7, 0)} Cr"
     else: val_str = f"{mc}"
-    
     return {"raw": mc, "value": val_str, "score": score, "desc": val_str}
 
 @_wrap_calc("analyst_rating")
 def calc_analyst_rating(t: yf.Ticker, unifier: DataUnifier = None):
     key = unifier.get_raw("recommendationKey")
-    cur = unifier.get(["currentPrice"])
-    tgt = unifier.get(["targetMeanPrice"])
-    upside = None
-    if cur and tgt: upside = (tgt / cur - 1) * 100
     score = 10 if key in ("strong_buy", "buy") else 5 if key == "hold" else 2
-    desc = f"{key.title() if key else 'N/A'}"
-    if upside: desc += f" ({upside:+.1f}% tgt)"
-    return {"raw": key, "value": key, "score": score, "desc": desc}
+    return {"raw": key, "value": key, "score": score, "desc": key.title() if key else 'N/A'}
 
 # ========================================================
 # AGGREGATOR
@@ -1005,44 +960,24 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
     fundamentals: Dict[str, Dict[str, Any]] = {}
 
     METRIC_FUNCTIONS = {
-        "pe_ratio": calc_pe_ratio,
-        "pb_ratio": calc_pb_ratio,
-        "peg_ratio": calc_peg_ratio,
-        "roe": calc_roe,
-        "roce": calc_roce,
-        "roic": calc_roic,
-        "de_ratio": calc_de_ratio,
-        "interest_coverage": calc_interest_coverage,
-        "fcf_yield": calc_fcf_yield,
-        "current_ratio": calc_current_ratio,
-        "piotroski_f": calc_piotroski_f,
-        "promoter_holding": calc_promoter_holding,
-        "institutional_ownership": calc_institutional_ownership,
-        "dividend_yield": calc_dividend_yield,
-        "market_cap": calc_market_cap,
-        "net_profit_margin": calc_net_profit_margin,
-        "operating_margin": calc_operating_margin,
-        "profit_growth_3y": calc_profit_growth_3y,
-        "eps_growth_5y": calc_eps_growth_5y,
-        "fcf_growth_3y": calc_fcf_growth_3y,
-        "quarterly_growth": calc_quarterly_growth,
-        "ebitda_margin": calc_ebitda_margin,
-        "short_interest": calc_short_interest,
-        "pe_vs_sector": calc_pe_vs_sector,
-        "dividend_payout": calc_dividend_payout,
-        "yield_vs_avg": calc_yield_vs_avg,
-        "revenue_growth_5y": calc_revenue_growth_cagr,
-        "ocf_vs_profit": calc_ocf_vs_profit,
-        "promoter_pledge": calc_promoter_pledge,
-        "ps_ratio": calc_ps_ratio,
-        "r_d_intensity": calc_rd_intensity,
-        "earnings_stability": calc_earnings_stability,
-        "fcf_margin": calc_fcf_margin,
-        "market_cap_cagr": calc_market_cap_cagr,
-        "beta": calc_beta,
-        "52w_position": calc_52w_position,
-        "analyst_rating": calc_analyst_rating,
-        "days_to_earnings": calc_days_to_earnings,
+        "pe_ratio": calc_pe_ratio, "pb_ratio": calc_pb_ratio, "peg_ratio": calc_peg_ratio,
+        "roe": calc_roe, "roce": calc_roce, "roic": calc_roic,
+        "de_ratio": calc_de_ratio, "interest_coverage": calc_interest_coverage,
+        "fcf_yield": calc_fcf_yield, "current_ratio": calc_current_ratio,
+        "piotroski_f": calc_piotroski_f, "promoter_holding": calc_promoter_holding,
+        "institutional_ownership": calc_institutional_ownership, "dividend_yield": calc_dividend_yield,
+        "market_cap": calc_market_cap, "net_profit_margin": calc_net_profit_margin,
+        "operating_margin": calc_operating_margin, "profit_growth_3y": calc_profit_growth_3y,
+        "eps_growth_5y": calc_eps_growth_5y, "fcf_growth_3y": calc_fcf_growth_3y,
+        "quarterly_growth": calc_quarterly_growth, "ebitda_margin": calc_ebitda_margin,
+        "short_interest": calc_short_interest, "pe_vs_sector": calc_pe_vs_sector,
+        "dividend_payout": calc_dividend_payout, "yield_vs_avg": calc_yield_vs_avg,
+        "revenue_growth_5y": calc_revenue_growth_cagr, "ocf_vs_profit": calc_ocf_vs_profit,
+        "promoter_pledge": calc_promoter_pledge, "ps_ratio": calc_ps_ratio,
+        "r_d_intensity": calc_rd_intensity, "earnings_stability": calc_earnings_stability,
+        "fcf_margin": calc_fcf_margin, "market_cap_cagr": calc_market_cap_cagr,
+        "beta": calc_beta, "52w_position": calc_52w_position,
+        "analyst_rating": calc_analyst_rating, "days_to_earnings": calc_days_to_earnings,
         "asset_turnover": calc_asset_turnover,
     }
 
@@ -1050,24 +985,23 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
         try:
             res = func(t, unifier=unifier)
             alias = FUNDAMENTAL_ALIAS_MAP.get(key, key)
-            
             if not res:
-                fundamentals[key] = {
-                    "raw": None, "value": "N/A", "score": 0, 
-                    "desc": f"{alias} -> None", "alias": alias, "source": "core"
-                }
+                fundamentals[key] = {"raw": None, "value": "N/A", "score": 0, "desc": f"{alias} -> None", "alias": alias, "source": "core"}
             else:
                 if "alias" not in res: res["alias"] = alias
                 fundamentals[key] = res
-        except Exception:
-            pass
+        except Exception: pass
             
     fundamentals["eps_growth_3y"] = fundamentals.get("profit_growth_3y")
-
-    total_w = 0.0
-    weighted_sum = 0.0
-    used_weights = {}
     
+    # --- ADD MISSING DATA FOR SIGNAL ENGINE ---
+    fundamentals["roe_history"] = calc_roe_history(unifier)
+    fundamentals["sector"] = unifier.get_raw("sector")
+    fundamentals["industry"] = unifier.get_raw("industry")
+    fundamentals["website"] = unifier.get_raw("website")
+    fundamentals["current_price"] = unifier.get(["currentPrice", "regularMarketPrice"])
+
+    total_w = 0.0; weighted_sum = 0.0; used_weights = {}
     for k, w in FUNDAMENTAL_WEIGHTS.items():
         m = fundamentals.get(k)
         if not m or m.get("value") in (None, "N/A"): continue
@@ -1078,7 +1012,6 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
             used_weights[k] = float(w)
 
     base_score = round(weighted_sum / total_w, 2) if total_w else 0.0
-
     market_penalty = 0.0
     penalty_reasons = []
     
@@ -1119,12 +1052,9 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
     """
     symbol = symbol.strip().upper()
     db: Session = SessionLocal()
-    
     try:
         # 1. READ CACHE FROM DB
         entry = db.query(FundamentalCache).filter(FundamentalCache.symbol == symbol).first()
-        
-        # Check TTL (24 Hours)
         if entry:
             age = (datetime.datetime.now() - entry.updated_at).total_seconds()
             if age < (24 * 3600):
@@ -1134,8 +1064,7 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
 
         # 2. FETCH FRESH (If cache missing or stale)
         data = _compute_fundamentals_core(symbol, apply_market_penalty)
-        
-        if data and len(data) > 5: # Basic validity check
+        if data and len(data) > 5:
             if entry:
                 # Update existing
                 entry.data = data
@@ -1148,16 +1077,12 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
                     updated_at=datetime.datetime.now()
                 )
                 db.add(entry)
-            
             db.commit()
-            
         return data
-
     except Exception as e:
         logger.error(f"DB Cache Error for {symbol}: {e}")
         db.rollback()
         # Fallback: Just calculate and return without saving if DB fails
         return _compute_fundamentals_core(symbol, apply_market_penalty)
-        
     finally:
         db.close()

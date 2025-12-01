@@ -7,7 +7,8 @@ import datetime
 import math
 import threading
 import concurrent.futures
-import multiprocessing
+import pytz
+import traceback
 from typing import Dict, Any, List, Tuple, Optional
 from contextlib import asynccontextmanager
 
@@ -19,7 +20,7 @@ import pandas as pd
 import logging
 
 # --- Modular services ---
-from config.constants import INDEX_TICKERS
+from config.constants import ENABLE_CACHE_WARMER, INDEX_TICKERS
 from services.data_fetch import (
     safe_history,
     save_stocks_list,
@@ -45,6 +46,20 @@ from services.flowchart_helper import build_flowchart_payload, df_hash
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, SignalCache, init_db
 
+# Environment-configurable parameters (tweak as needed)
+WARMER_BATCH_SIZE = int(os.getenv("WARMER_BATCH_SIZE", "5"))
+WARMER_TOP_N_DURING_MARKET = int(os.getenv("WARMER_TOP_N_DURING_MARKET", "50"))
+WARMER_LRU_TARGET = int(os.getenv("WARMER_LRU_TARGET", "500"))
+WARMER_MARKET_INTERVAL_SEC = int(os.getenv("WARMER_MARKET_INTERVAL_SEC", str(15 * 60)))   # 15 minutes during market
+WARMER_OFFPEAK_INTERVAL_SEC = int(os.getenv("WARMER_OFFPEAK_INTERVAL_SEC", str(60 * 60))) # 60 minutes off-peak
+WARMER_DEEP_HOUR = int(os.getenv("WARMER_DEEP_HOUR", "2"))  # hour (IST) to run a deep warm
+WARMER_DEEP_SLEEP_HOURS = int(os.getenv("WARMER_DEEP_SLEEP_HOURS", "6"))
+WARMER_BATCH_SLEEP_MARKET = float(os.getenv("WARMER_BATCH_SLEEP_MARKET", "5"))
+WARMER_BATCH_SLEEP_OFFPEAK = float(os.getenv("WARMER_BATCH_SLEEP_OFFPEAK", "2"))
+WARMER_BATCH_TIMEOUT_SEC = int(os.getenv("WARMER_BATCH_TIMEOUT_SEC", str(5 * 60)))  # per-batch timeout
+WARMER_RATE_LIMIT_COOLDOWN_SEC = int(os.getenv("WARMER_RATE_LIMIT_COOLDOWN_SEC", "300"))  # 5 minutes
+IST = pytz.timezone("Asia/Kolkata")
+
 init_db()
 
 # Dependency to get DB session
@@ -65,56 +80,162 @@ def run_analysis_for_cache(symbol: str):
     except Exception as e:
         logger.error(f"[WARMER] Failed to run analysis for {symbol}: {e}")
 
+# ----------------------------------------------------------------------
+# SMART CACHE WARMER (Robust Version)
+# ----------------------------------------------------------------------
+
+logger = logging.getLogger("warmer")
+
 async def periodic_warmer():
+    """
+    Background task to pre-fetch data.
+    - Timezone-aware (IST)
+    - Smart schedule (market vs off-peak)
+    - Deep warm once per night
+    - Rate-limit cooling
+    - Cancels cleanly on shutdown
+    """
+    # small startup delay
     await asyncio.sleep(10)
-    
     while True:
+        is_market_hours = False
         try:
-            # Prioritize Nifty 50 or recently viewed
-            symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST[:50]] 
-            logger.info(f"[WARMER] Warming {len(symbols_to_warm)} symbols via ProcessPool...")
-            
+            now = datetime.datetime.now(IST)
+            is_weekend = now.weekday() >= 5
+            hour = now.hour
+            # Market hours (9:00 to 16:00 IST)
+            is_market_hours = (9 <= hour < 16) and (not is_weekend)
+            # Deep warm once a day (configurable hour)
+            is_deep_warm = (hour == WARMER_DEEP_HOUR) and (not is_weekend)
+            # Determine symbols to warm
+            if is_market_hours:
+                logger.info("[WARMER] Market Open (IST): warming Top %d symbols", WARMER_TOP_N_DURING_MARKET)
+                symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST[:WARMER_TOP_N_DURING_MARKET]]
+                batch_sleep = WARMER_BATCH_SLEEP_MARKET
+            else:
+                if is_deep_warm:
+                    logger.info("[WARMER] Off-Peak (IST) - DEEP WARM: warming all %d symbols", len(ALL_STOCKS_LIST))
+                    symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST]
+                    batch_sleep = WARMER_BATCH_SLEEP_OFFPEAK
+                else:
+                    # Off-peak light warm: warm a subset per cycle to avoid constant full re-runs
+                    # We'll cycle through the universe across multiple cycles.
+                    logger.info("[WARMER] Off-Peak (IST) - Light warm cycle")
+                    symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST]  # keep list; we will batch it
+                    batch_sleep = WARMER_BATCH_SLEEP_OFFPEAK
             loop = asyncio.get_running_loop()
-            
-            # USE COMPUTE_EXECUTOR (Process), NOT BACKGROUND_EXECUTOR (Thread)
-            # We don't care about the return values, just that they cache the data
-            futures = [
-                loop.run_in_executor(COMPUTE_EXECUTOR, run_full_analysis, symbol)
-                for symbol in symbols_to_warm
-            ]
-            
-            # Run in batches to avoid clogging the CPU for user requests
-            # Simple batching logic:
-            batch_size = 5
-            for i in range(0, len(futures), batch_size):
-                batch = futures[i:i + batch_size]
-                await asyncio.gather(*batch, return_exceptions=True)
-                await asyncio.sleep(2) # Breathe between batches
-            
-            logger.info(f"[WARMER] Cycle complete.")
-            
+            # iterate over in batches
+            for i in range(0, len(symbols_to_warm), WARMER_BATCH_SIZE):
+                batch = symbols_to_warm[i:i + WARMER_BATCH_SIZE]
+                # Kick off analysis of the batch using the compute executor
+                futures = [
+                    loop.run_in_executor(COMPUTE_EXECUTOR, run_full_analysis, symbol)
+                    for symbol in batch
+                ]
+                try:
+                    # Wait for the batch to complete within timeout; return_exceptions=True so we get results/errors
+                    results = await asyncio.wait_for(asyncio.gather(*futures, return_exceptions=True), timeout=WARMER_BATCH_TIMEOUT_SEC)
+                except asyncio.TimeoutError:
+                    logger.error("[WARMER] Batch timed out after %d seconds. Moving to next batch.", WARMER_BATCH_TIMEOUT_SEC)
+                    # We can't directly cancel the underlying thread tasks, but we should continue and cool down
+                    await asyncio.sleep(WARMER_RATE_LIMIT_COOLDOWN_SEC)
+                    # Move to next batch
+                    continue
+                except Exception as e:
+                    logger.error("[WARMER] Unexpected gather error: %s\n%s", e, traceback.format_exc())
+                    await asyncio.sleep(5)
+                    continue
+                # Symbol-level results logging + rate-limit detection
+                rate_limited = False
+                for sym, res in zip(batch, results):
+                    if isinstance(res, Exception):
+                        # Detect common rate-limit or HTTP throttling hints
+                        msg = str(res)
+                        low = msg.lower()
+                        if "429" in msg or "rate limit" in low or "too many requests" in low or "throttl" in low:
+                            logger.error("[WARMER] Rate-limit hit on %s: %s", sym, msg)
+                            rate_limited = True
+                        else:
+                            logger.error("[WARMER] Error warming %s: %s", sym, msg)
+                    else:
+                        # Successful warm; log minimal info to avoid too-verbose logs
+                        logger.debug("[WARMER] Warmed %s (result type=%s)", sym, type(res).__name__)
+
+                if rate_limited:
+                    logger.warning("[WARMER] Rate-limited; cooling down for %d seconds before resuming.", WARMER_RATE_LIMIT_COOLDOWN_SEC)
+                    await asyncio.sleep(WARMER_RATE_LIMIT_COOLDOWN_SEC)
+                    # abort this warming cycle to avoid repeated hits
+                    break
+                # breathe between batches
+                await asyncio.sleep(batch_sleep)
+            logger.info("[WARMER] Cycle complete (is_deep_warm=%s, is_market_hours=%s)", is_deep_warm, is_market_hours)
+        except asyncio.CancelledError:
+            logger.info("[WARMER] Cancelled - exiting periodic_warmer cleanly.")
+            raise
         except Exception as e:
-            logger.error(f"[WARMER] Error: {e}")
-        
-        await asyncio.sleep(CACHE_WARMING_INTERVAL_SECONDS)
+            logger.error("[WARMER] Critical Loop Error: %s\n%s", e, traceback.format_exc())
+        # Decide how long to sleep before next cycle
+        try:
+            if is_market_hours:
+                interval = WARMER_MARKET_INTERVAL_SEC
+            else:
+                # If we did a deep warm, sleep longer so deep warms don't repeat too often
+                if 'is_deep_warm' in locals() and is_deep_warm:
+                    interval = WARMER_DEEP_SLEEP_HOURS * 3600
+                else:
+                    interval = WARMER_OFFPEAK_INTERVAL_SEC
+        except Exception:
+            interval = WARMER_OFFPEAK_INTERVAL_SEC
+
+        # Respect cancellation while sleeping by breaking into small sleeps
+        sleep_left = interval
+        while sleep_left > 0:
+            try:
+                await asyncio.sleep(min(30, sleep_left))
+            except asyncio.CancelledError:
+                logger.info("[WARMER] Cancelled during sleep - exiting.")
+                raise
+            sleep_left -= 30
+
+# ---- Lifespan with clean shutdown / cancelation ----
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     build_smart_index_map()
     global cache_warmer_task
-    logger.info(f"Starting API Executor ({API_THREADS} threads) and Background Executor ({BG_THREADS} threads)...")
     
-    # Start background task
-    # cache_warmer_task = asyncio.create_task(periodic_warmer())
-    # logger.info("Background Cache Warmer started.")
+    logger.info("Starting API Executor and Background Executor...")
     
-    yield
+    # ✅ CONDITIONAL START
+    if ENABLE_CACHE_WARMER:
+        cache_warmer_task = asyncio.create_task(periodic_warmer())
+        logger.info("🔥 Cache Warmer: ENABLED")
+    else:
+        cache_warmer_task = None  # ✅ Explicitly set to None
+        logger.info("⏸️  Cache Warmer: DISABLED (development mode)")
     
-    # Shutdown logic
-    logger.info("Shutting down Executors...")
-    API_EXECUTOR.shutdown(wait=False)
-    COMPUTE_EXECUTOR.shutdown(wait=False) # Add this line
-    BACKGROUND_EXECUTOR.shutdown(wait=False)
+    try:
+        yield
+    finally:
+        # ✅ CONDITIONAL SHUTDOWN
+        if cache_warmer_task is not None:
+            cache_warmer_task.cancel()
+            try:
+                await cache_warmer_task
+            except asyncio.CancelledError:
+                logger.info("Cache warmer canceled cleanly.")
+            except Exception as e:
+                logger.warning("Cache warmer raised during cancel: %s", e)
+        
+        # Shutdown executors
+        try:
+            API_EXECUTOR.shutdown(wait=False)
+            COMPUTE_EXECUTOR.shutdown(wait=False)
+            BACKGROUND_EXECUTOR.shutdown(wait=False)
+        except Exception:
+            logger.warning("Executor shutdown issue", exc_info=True)
+        
+        logger.info("Shutdown complete.")
 
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
@@ -327,114 +448,186 @@ ALL_STOCKS_MAP = {s[0]: s[1] for s in ALL_STOCKS_LIST}
 
 def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any]:
     """
-    Runs the complete multi-horizon analysis for one stock.
-    SYNCHRONOUS function - meant to be run in an Executor.
+    Worker function running in a separate process.
+    Fully self-contained: Manages its own DB session and Memory state.
     """
-    analysis_data = {
-        "symbol": symbol,
-        "fundamentals": {},
-        "indicators": {},
-        "full_report": {},
-        "trade_recommendation": {},
-        "meta_scores": {},
-        "macro_trend_status": "N/A",
-        "macro_close": None,
-        "partial_error": False,
-        "error_details": []
-    }
-    horizons = ["intraday", "short_term", "long_term", "multibagger"]
-    # --- SMART LOGIC STARTS HERE ---
-    
-    # 1. Check if we need to auto-detect the index
-    # (If user selected "All Stocks", "Nifty 500", or "Default", we try to find a better fit)
-    target_index = index_name
-    clean_sym = symbol.strip().upper()
-    
-    if index_name in ["NSEStock", "default", "nifty500"]:
-        smart_index = STOCK_TO_INDEX_MAP.get(clean_sym)
-        if smart_index:
-            target_index = smart_index
-
-    # 2. Convert Index Name -> Ticker Symbol (e.g., "smallcap100" -> "^CNXSC")
-    bench_symbol = INDEX_TICKERS.get(target_index, INDEX_TICKERS["default"])
-
-    # 1. Fundamentals
+    db = None
     try:
-        analysis_data["fundamentals"] = compute_fundamentals(symbol)
-    except Exception as e:
-        analysis_data["partial_error"] = True
-        analysis_data["error_details"].append(f"Fundamentals Failed: {e}")
-        logger.error(f"[{symbol}] Fundamentals failed: {e}")
-    
-    # 2. Indicators
-    all_indicators = {}
-    analysis_data["raw_indicators_by_horizon"] = {}
-    for h in horizons:
-        try:
-            h_indicators = compute_indicators(symbol, horizon=h, benchmark_symbol=bench_symbol)
-            analysis_data["raw_indicators_by_horizon"][h] = h_indicators
-            
-            # 🔧 Overwrite Warning Implementation (Preserved from your code)
-            for key, new_val in h_indicators.items():
-                if key in all_indicators:
-                    old_val = all_indicators[key]
-                    old_v = old_val.get('value')
-                    new_v = new_val.get('value')
-                    # Compare values for debugging warning
-                    if str(old_v) != str(new_v):
-                        logger.debug(f"[{symbol}] WARNING: Overwrote indicator '{key}' from horizon '{h}'! Old value: {old_v}, New value: {new_v}")
-                all_indicators.update(h_indicators)
-            
-        except Exception as e:
-            analysis_data["partial_error"] = True
-            analysis_data["error_details"].append(f"Indicators for {h} Failed: {e}")
-            logger.warning(f"[{symbol}] Failed to compute indicators for horizon '{h}': {e}")
-
-    analysis_data["indicators"] = all_indicators
-    
-    # 3. Hybrids
-    if analysis_data["fundamentals"] and analysis_data["indicators"]:
-        try:
-            hybrids = enrich_hybrid_metrics(analysis_data["fundamentals"], analysis_data["indicators"])
-            analysis_data["fundamentals"].update(hybrids)
-        except Exception as e:
-            analysis_data["error_details"].append(f"Hybrid Metric Calculation Failed: {e}")
-    
-    # 4. Macro Context
-    try:
-        nifty_metric = analysis_data["indicators"].get("nifty_trend_score")
-        if nifty_metric:
-            analysis_data["macro_trend_status"] = nifty_metric.get("desc", "N/A")
-            analysis_data["macro_close"] = nifty_metric.get("value")
-            if not analysis_data["macro_trend_status"] or analysis_data["macro_trend_status"] == "N/A":
-                analysis_data["macro_trend_status"] = "Neutral"
-    except Exception:
-        pass
-
-    # 5. Profile Scores, Meta Scores, Trade Plan
-    if analysis_data["fundamentals"] and analysis_data["indicators"]:
-        try:
-            full_report = compute_all_profiles(symbol, analysis_data["fundamentals"], analysis_data["indicators"])
-            analysis_data["full_report"] = full_report
-            
-            analysis_data["meta_scores"] = {
-                "value": score_value_profile(analysis_data["fundamentals"]),
-                "growth": score_growth_profile(analysis_data["fundamentals"]),
-                "quality": score_quality_profile(analysis_data["fundamentals"]),
-                "momentum": score_momentum_profile(analysis_data["fundamentals"], analysis_data["indicators"])
-            }
-            
-            best_profile = full_report.get("profiles", {}).get(full_report.get("best_fit", "short_term"), {})
-            trade_plan = generate_trade_plan(best_profile, analysis_data["indicators"], analysis_data["macro_trend_status"])
-            analysis_data["trade_recommendation"] = trade_plan
+        db = SessionLocal()
+        analysis_data = {
+            "symbol": symbol,
+            "fundamentals": {},
+            "indicators": {},
+            "full_report": {},
+            "trade_recommendation": {},
+            "meta_scores": {},
+            "macro_trend_status": "N/A",
+            "macro_close": None,
+            "partial_error": False,
+            "error_details": []
+        }
+        horizons = ["intraday", "short_term", "long_term", "multibagger"]
+        # --- SMART LOGIC STARTS HERE ---
         
+        # 1. Check if we need to auto-detect the index
+        # (If user selected "All Stocks", "Nifty 500", or "Default", we try to find a better fit)
+        target_index = index_name
+        clean_sym = symbol.strip().upper()
+        
+        if index_name in ["NSEStock", "default", "nifty500"]:
+            smart_index = STOCK_TO_INDEX_MAP.get(clean_sym)
+            if smart_index:
+                target_index = smart_index
+
+        # 2. Convert Index Name -> Ticker Symbol (e.g., "smallcap100" -> "^CNXSC")
+        bench_symbol = INDEX_TICKERS.get(target_index, INDEX_TICKERS["default"])
+
+        # 1. Fundamentals
+        try:
+            analysis_data["fundamentals"] = compute_fundamentals(symbol)
         except Exception as e:
             analysis_data["partial_error"] = True
-            analysis_data["error_details"].append(f"Scoring/Trade Plan Failed: {e}")
-            logger.error(f"[{symbol}] Scoring/Trade Plan failed: {e}")
+            analysis_data["error_details"].append(f"Fundamentals Failed: {e}")
+            logger.error(f"[{symbol}] Fundamentals failed: {e}")
+        
+        # 2. Indicators
+        all_indicators = {}
+        analysis_data["raw_indicators_by_horizon"] = {}
+        for h in horizons:
+            try:
+                h_indicators = compute_indicators(symbol, horizon=h, benchmark_symbol=bench_symbol)
+                analysis_data["raw_indicators_by_horizon"][h] = h_indicators
+                
+                # 🔧 Overwrite Warning Implementation (Preserved from your code)
+                for key, new_val in h_indicators.items():
+                    if key in all_indicators:
+                        old_val = all_indicators[key]
+                        old_v = old_val.get('value')
+                        new_v = new_val.get('value')
+                        # Compare values for debugging warning
+                        if str(old_v) != str(new_v):
+                            logger.debug(f"[{symbol}] WARNING: Overwrote indicator '{key}' from horizon '{h}'! Old value: {old_v}, New value: {new_v}")
+                    all_indicators.update(h_indicators)
+                
+            except Exception as e:
+                analysis_data["partial_error"] = True
+                analysis_data["error_details"].append(f"Indicators for {h} Failed: {e}")
+                logger.warning(f"[{symbol}] Failed to compute indicators for horizon '{h}': {e}")
 
-    return analysis_data
+        analysis_data["indicators"] = all_indicators
+        
+        # 3. Hybrids
+        if analysis_data["fundamentals"] and analysis_data["indicators"]:
+            try:
+                hybrids = enrich_hybrid_metrics(analysis_data["fundamentals"], analysis_data["indicators"])
+                analysis_data["fundamentals"].update(hybrids)
+            except Exception as e:
+                analysis_data["error_details"].append(f"Hybrid Metric Calculation Failed: {e}")
+        
+        # 4. Macro Context
+        try:
+            nifty_metric = analysis_data["indicators"].get("nifty_trend_score")
+            if nifty_metric:
+                analysis_data["macro_trend_status"] = nifty_metric.get("desc", "N/A")
+                analysis_data["macro_close"] = nifty_metric.get("value")
+                if not analysis_data["macro_trend_status"] or analysis_data["macro_trend_status"] == "N/A":
+                    analysis_data["macro_trend_status"] = "Neutral"
+        except Exception:
+            pass
 
+        # 5. Profile Scores, Meta Scores, Trade Plan
+        if analysis_data["fundamentals"] and analysis_data["indicators"]:
+            try:
+                full_report = compute_all_profiles(symbol, analysis_data["fundamentals"], analysis_data["indicators"])
+                analysis_data["full_report"] = full_report
+                
+                analysis_data["meta_scores"] = {
+                    "value": score_value_profile(analysis_data["fundamentals"]),
+                    "growth": score_growth_profile(analysis_data["fundamentals"]),
+                    "quality": score_quality_profile(analysis_data["fundamentals"]),
+                    "momentum": score_momentum_profile(analysis_data["fundamentals"], analysis_data["indicators"])
+                }
+                
+                best_profile = full_report.get("profiles", {}).get(full_report.get("best_fit", "short_term"), {})
+                trade_plan = generate_trade_plan(best_profile, analysis_data["indicators"], analysis_data["macro_trend_status"])
+                analysis_data["trade_recommendation"] = trade_plan
+            
+            except Exception as e:
+                analysis_data["partial_error"] = True
+                analysis_data["error_details"].append(f"Scoring/Trade Plan Failed: {e}")
+                logger.error(f"[{symbol}] Scoring/Trade Plan failed: {e}")
+        
+        # 6. SAVE TO SQLITE (The Missing Link)
+        # We save the result HERE, inside the worker, using the safe Local Session.
+        # This ensures the Cache Warmer actually populates the Grid.
+        if "full_report" in analysis_data:
+            _save_analysis_to_db(db, symbol, analysis_data, index_name)
+        return analysis_data
+    
+    except Exception as e:
+        logger.error(f"[{symbol}] Worker Error: {e}")
+        return {"symbol": symbol, "error": str(e)}
+        
+    finally:
+        # 4. cleanup
+        if db:
+            db.close()
+
+# Helper function to handle the DB write inside the worker
+def _save_analysis_to_db(db: Session, symbol: str, data: Dict[str, Any], index_name: str):
+    try:
+        full_rep = data.get("full_report", {})
+        profiles = full_rep.get("profiles", {})
+        best_profile = profiles.get(full_rep.get("best_fit", "short_term"), {})
+        trade_plan = data.get("trade_recommendation", {})
+        indicators = data.get("indicators", {})
+        
+        final_score = best_profile.get("final_score", 0)
+        
+        # Flatten Logic (Same as your original set_cached, but using the passed 'db' session)
+        horizon_data = {
+            "intra_score": profiles.get("intraday", {}).get("final_score"),
+            "short_score": profiles.get("short_term", {}).get("final_score"),
+            "long_score": profiles.get("long_term", {}).get("final_score"),
+            "multi_score": profiles.get("multibagger", {}).get("final_score"),
+            "macro_index_name": index_name.upper(),
+            "error_details": "; ".join(data.get("error_details", []))
+        }
+        
+        # Calculate Sl Distance
+        entry = trade_plan.get("entry")
+        current_price = indicators.get("price", {}).get("value") or entry
+        sl_val = trade_plan.get("stop_loss")
+        sl_dist_str = "-"
+        if current_price and sl_val:
+            dist = abs(current_price - sl_val) / current_price * 100
+            sl_dist_str = f"{dist:.1f}%"
+        horizon_data["sl_dist"] = sl_dist_str
+
+        # Upsert Logic
+        entry_row = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
+        
+        if not entry_row:
+            entry_row = SignalCache(symbol=symbol)
+            db.add(entry_row)
+        
+        entry_row.score = int(final_score * 10) if final_score else 0
+        entry_row.recommendation = (best_profile.get("category", "HOLD") +"--"+ best_profile.get("profile", ""))
+        entry_row.best_horizon = full_rep.get("best_fit", "short_term")
+        entry_row.signal_text = trade_plan.get("signal", "N/A")
+        entry_row.conf_score = int(final_score * 10) # Simplified conf
+        entry_row.rr_ratio = trade_plan.get("rr_ratio")
+        entry_row.entry_price = entry
+        entry_row.stop_loss = sl_val
+        entry_row.horizon_scores = horizon_data
+        
+        # Explicit timestamp update (Phase 1 Improvement C)
+        entry_row.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        
+        db.commit()
+    except Exception as e:
+        logger.error(f"[{symbol}] DB Save Failed: {e}")
+        db.rollback()
 
 # --- ENDPOINTS ---
 
@@ -505,7 +698,7 @@ async def quick_scores(payload: QuickScoresRequest):
             
             # Calculate SL Distance % (Visual Aid)
             # We use 'Price' from indicators, or fallback to 'entry'
-            current_price = indicators.get("Price", {}).get("value")
+            current_price = indicators.get("price", {}).get("value")
             if not current_price: current_price = entry_val
 
             sl_dist_str = "-"

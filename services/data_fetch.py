@@ -17,6 +17,7 @@ import math
 import os
 import json
 import logging
+import pytz
 from cachetools import LRUCache
 from typing import Dict, Optional, Tuple, List, Any
 from functools import lru_cache, partial
@@ -26,7 +27,7 @@ import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
 
-# --- NEW: Import the Parquet Engine ---
+# --- Import the Parquet Engine ---
 from services.data_layer import ParquetStore
 
 # Config imports with safe fallbacks
@@ -43,10 +44,11 @@ logger = logging.getLogger(__name__)
 # -----------------------------
 # Global cache
 # -----------------------------
-GLOBAL_OHLC_CACHE = LRUCache(maxsize=50)
+OHLC_CACHE_SIZE = int(os.getenv("OHLC_CACHE_SIZE", "500"))  # default: 500 for Nifty500
+GLOBAL_OHLC_CACHE = LRUCache(maxsize=OHLC_CACHE_SIZE)
 CACHE_LOCK = threading.Lock()
-SHORT_TTL = 15 * 60    
-LONG_TTL = 6 * 60 * 60 
+SHORT_TTL = 15 * 60
+LONG_TTL = 6 * 60 * 60
 
 # -----------------------------
 # Utility helpers
@@ -63,7 +65,6 @@ def _enforce_cache_limits(df: pd.DataFrame, interval: str) -> pd.DataFrame:
     # Intraday: ~7 days (approx 2500 rows)
     # Daily: ~10 years (approx 2500 rows)
     MAX_ROWS = 2500 
-    
     if len(df) > MAX_ROWS:
         return df.tail(MAX_ROWS).copy()
     return df
@@ -71,30 +72,46 @@ def _enforce_cache_limits(df: pd.DataFrame, interval: str) -> pd.DataFrame:
 def _get_cache_key(symbol: str, period: str, interval: str) -> str:
     return f"{symbol}_{period}_{interval}".upper()
 
+
+# Item #7: IST-aware Market Check
 def _is_market_open_now():
-    now = datetime.datetime.now()
+    IST = pytz.timezone("Asia/Kolkata")
+    now = datetime.datetime.now(IST)
     if now.weekday() >= 5: return False
-    if 9 <= now.hour < 16: return True
-    return False
+    return 9 <= now.hour < 16
 
 def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
+    """
+    ✅ PATCHED: UTC-aware comparison to match Parquet Store's UTC index.
+    """
     if not ENABLE_CACHE: return False
     if df is None or getattr(df, "empty", True): return False
 
     try:
-        last_ts = pd.to_datetime(df.index[-1]).tz_localize(None)
-        now = datetime.datetime.now()
+        # 1. Get last timestamp from DataFrame
+        last_ts = pd.to_datetime(df.index[-1])
+        
+        # 2. Ensure UTC-aware (matches data_layer.py enforcement)
+        if last_ts.tz is None:
+            last_ts = last_ts.tz_localize("UTC")
+        else:
+            last_ts = last_ts.tz_convert("UTC")
+            
+        # 3. Get current time in UTC
+        now = datetime.datetime.now(datetime.timezone.utc)
         
         # Total minutes since the last candle
         age_minutes = (now - last_ts).total_seconds() / 60
         
-        # Future protection
-        if age_minutes < -10: return False 
+        # 5. Future protection (clock skew)
+        if age_minutes < -10: 
+            logger.warning(f"Data timestamp is in the future by {abs(age_minutes):.0f}m - possible clock skew")
+            return False 
 
         is_intraday = "m" in interval
         
         if is_intraday:
-            # If market is OPEN (Mon-Fri, 9:15-15:30), strict check
+            # Note: _is_market_open_now relies on local server time
             if _is_market_open_now():
                 return age_minutes < 30 # Must be recent
             
@@ -105,7 +122,6 @@ def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
             return False
             
         else: # Daily
-            # If today is Sat/Sun, anything from Friday is fine
             if now.weekday() >= 5: 
                 return age_minutes < (72 * 60) # 3 days buffer
             
@@ -113,6 +129,7 @@ def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
             return age_minutes < (24 * 60)
 
     except Exception as e:
+        logger.debug(f"Freshness check failed: {e}")
         return False
 # -----------------------------
 # Retry wrapper
@@ -120,12 +137,24 @@ def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
 def _retry(fn, retries=3, backoff=1.5, name: Optional[str] = None):
     last_exc = None
     for attempt in range(retries):
-        try: return fn()
+        try: 
+            return fn()
         except Exception as e:
             last_exc = e
+            error_msg = str(e).lower()
+            # ✅ Explicit Detection of Yahoo Rate Limits
+            is_rate_limit = any(x in error_msg for x in ["429", "rate limit", "too many requests"])
             if attempt < retries - 1:
-                logger.debug(f"[RETRY] {name or fn.__name__} attempt {attempt+1}/{retries} failed: {e}")
-                time.sleep(backoff * (2 ** attempt))
+                if is_rate_limit:
+                    # 🛑 CRITICAL: If Rate Limited, wait significantly longer (e.g., 60s)
+                    # Instant retries will result in an IP Ban.
+                    wait_time = 60.0
+                    logger.warning(f"[RATE LIMIT] {name or 'Fetch'}: 429 Detected. Cooling down for {wait_time}s...")
+                else:
+                    # Standard exponential backoff for network blips
+                    wait_time = backoff * (2 ** attempt)
+                    logger.debug(f"[RETRY] {name or fn.__name__} attempt {attempt+1}/{retries} failed: {e}")
+                time.sleep(wait_time)
             else:
                 logger.warning(f"[FAIL] {name or fn.__name__}: {e}")
                 raise
@@ -305,9 +334,9 @@ def _wrap_calc(arg, name: Optional[str] = None):
                 try:
                     raw = _retry(lambda: fn(*args, **kwargs), name=metric_key)
                 except Exception as e:
-                    return {"value": None, "score": 0, "desc": f"Error: {e}", "alias": alias_name, "source": "core"}
+                    return {"value": None, "score": None, "desc": f"Error: {e}", "alias": alias_name, "source": "core"}
                 if raw is None:
-                    return {"value": None, "score": 0, "desc": f"{metric_key} -> None", "alias": alias_name, "source": "core"}
+                    return {"value": None, "score": None, "desc": f"{metric_key} -> None", "alias": alias_name, "source": "core"}
                 metric = _normalize_single_metric(raw, metric_key)
                 metric["alias"] = alias_name
                 metric["source"] = "core"
@@ -321,7 +350,7 @@ def _wrap_calc(arg, name: Optional[str] = None):
         try:
             raw = _retry(lambda: fn(), name=name)
         except Exception as e:
-            return {name: {"value": None, "score": 0, "desc": f"Error: {e}", "alias": metric_group_alias, "source": "technical"}}
+            return {name: {"value": None, "score": None, "desc": f"Error: {e}", "alias": metric_group_alias, "source": "technical"}}
         out = {}
         if raw is None: return out
         for sub_key, sub_val in raw.items():

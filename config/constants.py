@@ -4,12 +4,16 @@
 # RSI, MACD, BB etc. existing constants assumed here
 
 # --- Stochastic Oscillator Defaults ---
+import os
+
+
 STOCH_FAST = {"k_period": 5, "d_period": 3, "smooth": 3}
 STOCH_SLOW = {"k_period": 14, "d_period": 3, "smooth": 3}
 STOCH_THRESHOLDS = {"overbought": 80, "oversold": 20}
 
 # config/constants.py
-ENABLE_CACHE = False
+ENABLE_CACHE = True
+ENABLE_CACHE_WARMER = os.getenv("ENABLE_CACHE_WARMER", "false").lower() == "true"
 
 STOCH_THRESHOLDS = {
     "overbought": 80,
@@ -19,8 +23,9 @@ STOCH_THRESHOLDS = {
 # ATR-based stoploss/target multipliers
 ATR_MULTIPLIERS = {
     "intraday": {"tp": 1.2, "sl": 0.6},
-    "shortterm": {"tp": 2.0, "sl": 1.0},
-    "longterm": {"tp": 3.0, "sl": 1.5},
+    "short_term": {"tp": 2.0, "sl": 1.0},
+    "long_term": {"tp": 3.0, "sl": 1.5},
+    "multibagger": {"tp": 4.0, "sl": 2.0},  # optional
 }
 
 flowchart_mapping = {
@@ -124,7 +129,7 @@ TECHNICAL_WEIGHTS = {
     "bb_low": 0.4,
     "bb_width": 0.3,
     "entry_confirm": 0.5,
-    "dma_20_50_cross": 0.8,
+    "ema_20_50_cross": 0.8,
     "dma_200_slope": 0.8,
     "ichi_cloud": 1.0,
     "obv_div": 0.6,
@@ -140,67 +145,103 @@ TECHNICAL_WEIGHTS = {
     "reg_slope": 0.8,
 }
 
-# -----------------------------
-# Master Metric Map (Internal Key -> UI Alias)
-# -----------------------------
 TECHNICAL_METRIC_MAP = {
+    # Price / meta
     "price": "Current Price",
-    # Indicators from compute_... functions
+    # Trend / Moving averages “DMA” should be considered Daily Moving Average (SMA),But your dynamic logic never generates dma_XX anymore we're using:EMA for daily (intraday/short_term) WMA-label for weekly (long_term) MMA-label for monthly (multibagger)
+    "dma_20": "20 DMA",
+    "dma_50": "50 DMA",
+    "dma_200": "200 DMA",
+    "dma_10": "10 DMA",
+    "dma_40": "40 DMA",
+    "wma_50": "50WMA",
+    "price_vs_50wma_pct": "Price vs 50WMA (%)",
+    "price_vs_200dma_pct": "Price vs 200 DMA (%)",
+    "dma_200_slope": "200 DMA Slope",
+    # === Dynamic MA Mapping (Fully Horizon-Aware) ===
+    # Intraday / Short Term (EMA-based)
+    "ema_20": "20 EMA (Short-Term Trend)",
+    "ema_50": "50 EMA (Medium-Term Trend)",
+    "ema_200": "200 EMA (Long-Term Trend)",
+    # EMA Crossovers (Intraday / Short-Term)
+    "ema_20_50_cross": "EMA 20/50 Crossover",
+    "ema_20_200_cross": "EMA 20/200 Crossover",
+    "ema_50_200_cross": "EMA 50/200 Crossover",
+    # EMA Trend Stacking
+    "ema_20_50_200_trend": "EMA Trend Alignment (20 > 50 > 200)",
+    # Long-Term Horizon (Weekly MAs) — WMA prefix, SMA math
+    "wma_10": "10-Week MA",
+    "wma_40": "40-Week MA",
+    "wma_50": "50-Week MA",
+    # Weekly Crossover
+    "wma_10_40_cross": "Weekly MA Crossover (10/40)",
+    # Weekly Trend Stacking
+    "wma_10_40_50_trend": "Weekly Trend Alignment (10 > 40 > 50)",
+    # Multibagger Horizon (Monthly MAs) — MMA prefix, SMA math
+    "mma_6": "6-Month MA",
+    "mma_12": "12-Month MA",
+    # Monthly Crossover
+    "mma_6_12_cross": "Monthly MA Crossover (6/12)",
+    # Monthly Trend Stacking
+    "mma_6_12_12_trend": "Monthly Trend Alignment (6 > 12 > 12)",
+    # Generic Crossover Trend Key (Used by dynamic MA Trend)
+    "ma_cross_trend": "Composite MA Trend Signal",
+    "ema_20_slope": "20 EMA Slope",
+    "ema_50_slope": "50 EMA Slope",
+    "wma_50_slope": "50 WMA Slope",
+    "mma_12_slope": "12-Month MA Slope",
+    # Momentum
     "rsi": "RSI",
+    "rsi_slope": "RSI Slope",
+    "dma_20_50_cross": "20/50 DMA Cross",
+    "dma_10_40_cross": "10/40 DMA Cross",
+    "short_ma_cross": "Short MA Cross",
+    "macd": "MACD",
+    "macd_cross": "MACD Cross",
+    "macd_hist_z": "MACD Hist Z-Score",
+    "macd_histogram": "MACD Histogram (Raw)",
     "mfi": "MFI",
-    "short_ma_cross": "Short MA Cross (5/20)",
-    "adx": "ADX",
-    "adx_signal": "ADX Signal",
     "stoch_k": "Stoch %K",
     "stoch_d": "Stoch %D",
     "stoch_cross": "Stoch Crossover",
-    "ema_20": "20 EMA",
-    "ema_50": "50 EMA",
-    "ema_200": "200 EMA",
-    "ema_cross_trend": "EMA Crossover Trend",
-    "vwap": "VWAP",
-    "vwap_bias": "VWAP Bias",
+    "cci": "CCI",
+    "adx": "ADX",
+    "adx_signal": "ADX Signal",
+    "di_plus": "DI+",
+    "di_minus": "DI-",
+
+    # Volatility / volume
+    "atr_14": "ATR (14)",
+    "atr_pct": "ATR %",
+    "true_range": "True Range (Raw)",
+    "true_range_pct": "True Range % of Price",
+    "hv_10": "Historical Volatility (10D)",
+    "hv_20": "Historical Volatility (20D)",
+    "rvol": "Relative Volume (RVOL)",
+    "vol_spike_ratio": "Volume Spike Ratio",
+    "vol_spike_signal": "Volume Spike Signal",
+    "vol_trend": "Volume Trend",
+    "vpt": "VPT",
+    "cmf_signal": "Chaikin Money Flow (CMF)",
+    "obv_div": "OBV Divergence",
+
+    # Bands / Channel
     "bb_high": "BB High",
     "bb_mid": "BB Mid",
     "bb_low": "BB Low",
     "bb_width": "BB Width",
-    "rvol": "Relative Volume (RVOL)",
-    "obv_div": "OBV Divergence",
-    "vpt": "VPT",
-    "vol_spike_ratio": "Volume Spike Ratio",
-    "vol_spike_signal": "Volume Spike Signal",
-    "atr_14": "ATR (14)",
-    "atr_pct": "ATR %",
+    "bb_percent_b": "Bollinger %B",
+    "ttm_squeeze": "TTM Squeeze Signal",
+    "kc_upper": "Keltner Upper",
+    "kc_lower": "Keltner Lower",
+    "donchian_signal": "Donchian Channel Breakout",
     "ichi_cloud": "Ichimoku Cloud",
     "ichi_span_a": "Ichimoku Span A",
     "ichi_span_b": "Ichimoku Span B",
     "ichi_tenkan": "Tenkan-sen",
     "ichi_kijun": "Kijun-sen",
-    "price_action": "Price Action",
-    "macd": "MACD",
-    "macd_cross": "MACD Cross",
-    "macd_hist_z": "MACD Hist Z-Score",
-    "macd_histogram": "MACD Histogram (Raw Momentum)",
-    # Inline indicators from compute_indicators
-    "price_vs_200dma_pct": "Price vs 200 DMA (%)",
-    "dma_200": "200 DMA",
-    "vol_trend": "Volume Trend",
-    "vol_vs_avg20": "Volume vs Avg20",
-    "dma_20": "20 DMA",
-    "dma_50": "50 DMA",
-    "dma_20_50_cross": "20/50 DMA Cross",
-    "rel_strength_nifty": "Relative Strength vs NIFTY (%)",
-    "entry_confirm": "Entry Price (Confirm)",
-    "dma_200_slope": "200 DMA Trend (Slope)", # Key for Short Term
-    "200dma_slope": "200 DMA Trend (Slope)",
-    "sl_2x_atr": "Suggested SL (2xATR)",
-    "supertrend_signal": "SuperTrend Signal",
-    "cci": "Commodity Channel Index (CCI)",
-    "bb_percent_b": "Bollinger %B",
-    "cmf_signal": "Chaikin Money Flow (CMF)",
-    "donchian_signal": "Donchian Channel Breakout",
-    "reg_slope": "Regression Slope (Trend Angle)",
-    "nifty_trend_score": "NIFTY Trend Score",
+
+    # Levels / pivots
     "pivot_point": "Pivot Point (Daily)",
     "resistance_1": "Resistance 1 (Fib)",
     "resistance_2": "Resistance 2 (Fib)",
@@ -208,18 +249,33 @@ TECHNICAL_METRIC_MAP = {
     "support_1": "Support 1 (Fib)",
     "support_2": "Support 2 (Fib)",
     "support_3": "Support 3 (Fib)",
-    # --- New Timing Indicators ---
+    "entry_confirm": "Entry Price (Confirm)",
+    "gap_percent": "Gap %",
+
+    # Misc / signals
     "psar_trend": "Parabolic SAR Trend",
     "psar_level": "PSAR Level",
-    "ttm_squeeze": "TTM Squeeze Signal",
-    "kc_upper": "Keltner Upper",
-    "kc_lower": "Keltner Lower",
-    "ema_20_slope": "20 EMA Slope (Angle)",
-    "ema_50_slope": "50 EMA Slope (Angle)",
-    "true_range": "True Range (Raw)",
-    "true_range_pct": "True Range % of Price",
-    "hv_10": "Historical Volatility (10D)",
-    "hv_20": "Historical Volatility (20D)",
+    "supertrend_signal": "SuperTrend Signal",
+    "supertrend_value": "Supertrend Value",
+    "price_action": "Price Action",
+    "vwap": "VWAP",
+    "vwap_bias": "VWAP Bias",
+
+    # Relative / benchmark
+    "rel_strength_nifty": "Relative Strength vs NIFTY (%)",
+    "nifty_trend_score": "NIFTY Trend Score",
+
+    # Composite placeholders (some are computed in signal_engine but include them so profile keys don't break)
+    "trend_strength": "Trend Strength",
+    "momentum_strength": "Momentum Strength",
+    "volatility_quality": "Volatility Quality",
+    "fundamental_momentum": "Fundamental Momentum",
+    "price_vs_avg": "Price vs Average",
+
+    # Utility / reporting
+    "sl_2x_atr": "Suggested SL (2xATR)",
+    "technical_score": "Technical Score",
+    "Horizon": "Horizon"
 }
 
 CORE_TECHNICAL_SETUP_METRICS = [
@@ -275,60 +331,58 @@ _total = sum(FUNDAMENTAL_WEIGHTS.values())
 if abs(_total - 1.0) > 1e-3:
     FUNDAMENTAL_WEIGHTS = {k: v / _total for k, v in FUNDAMENTAL_WEIGHTS.items()}
 
-
-# -------------------------
-# Updated alias map (short_key -> human label)
-# -------------------------
 FUNDAMENTAL_ALIAS_MAP = {
-    # Valuation
     "pe_ratio": "P/E Ratio",
     "pb_ratio": "Price to Book (P/B)",
     "peg_ratio": "PEG Ratio",
+    "ps_ratio": "Price-to-Sales (P/S)",
+    "pe_vs_sector": "P/E vs Sector",
     "fcf_yield": "FCF Yield (%)",
     "dividend_yield": "Dividend Yield (%)",
-    # Profitability / Returns
+    "dividend_payout": "Dividend Payout (%)",
+    "market_cap": "Market Cap",
+    "market_cap_cagr": "Market Cap CAGR (%)",
+    # Profitability / returns
+    "roe_history": "ROE History",
     "roe": "Return on Equity (ROE)",
     "roce": "Return on Capital Employed (ROCE)",
     "roic": "Return on Invested Capital (ROIC)",
     "net_profit_margin": "Net Profit Margin (%)",
     "operating_margin": "Operating Margin (%)",
-    # Growth (mostly provided by metrics_ext, kept mapping)
-    "eps_growth_5y": "EPS Growth (5Y CAGR)",
+    "ebitda_margin": "EBITDA Margin (%)",
+    "fcf_margin": "FCF Margin (%)",
+    # Growth
+    "revenue_growth_5y": "Revenue Growth (5Y CAGR)",
     "profit_growth_3y": "Profit Growth (3Y CAGR)",
+    "eps_growth_5y": "EPS Growth (5Y CAGR)",
+    "eps_growth_3y": "EPS Growth (3Y CAGR)",
     "fcf_growth_3y": "FCF Growth (3Y CAGR)",
-    "market_cap_cagr": "Market Cap CAGR (%)",
-    # Leverage / Liquidity
+    "quarterly_growth": "Quarterly Growth (EPS/Rev)",
+    # Health / liquidity
     "de_ratio": "Debt to Equity",
     "interest_coverage": "Interest Coverage Ratio",
     "current_ratio": "Current Ratio",
     "ocf_vs_profit": "Operating CF vs Net Profit",
-    # Efficiency / Quality
-    "asset_turnover": "Asset Turnover Ratio",
+    # Quality / efficiency
     "piotroski_f": "Piotroski F-Score",
-    "r&d_intensity": "R&D Intensity (%)",
+    "asset_turnover": "Asset Turnover Ratio",
+    "r_d_intensity": "R&D Intensity (%)",
     "earnings_stability": "Earnings Stability",
-    # Ownership / Market
+    # Ownership / market
     "promoter_holding": "Promoter Holding (%)",
+    "promoter_pledge": "Promoter Pledge (%)",
     "institutional_ownership": "Institutional Ownership (%)",
-    "beta": "Beta",
-    "52w_position": "52W Position (off-high %)",
-    "analyst_rating": "Analyst Rating (Momentum)",
-    "quarterly_growth": "Quarterly Growth (EPS/Rev)",
     "short_interest": "Short Interest",
-    "trend_strength": "Trend Strength (EMA 50/200)",
-    "net_profit_margin": "Net Profit Margin (%)",
-    "operating_margin": "Operating Margin (%)",
-    "ebitda_margin": "EBITDA Margin (%)",
-    "pe_vs_sector": "P/E vs Sector Avg",
-    "dividend_payout": "Dividend Payout (%)",
-    "yield_vs_avg": "Yield vs 5Y Avg",
-    "revenue_growth_5y": "Revenue Growth (5Y CAGR)",
+    "analyst_rating": "Analyst Rating (Momentum)",
+    "52w_position": "52W Position (off-high %)",
+    "beta": "Beta",
     "days_to_earnings": "Days to Next Earnings",
+    "ps_ratio": "Price-to-Sales (P/S)",
+    # reporting/meta
+    "base_score": "Base Fundamental Score",
+    "final_score": "Final Fundamental Score",
+    "_meta": "Meta"
 }
-
-# -------------------------
-# Field candidates map for YFinance / DataFrame key normalization
-# -------------------------
 FUNDAMENTAL_FIELD_CANDIDATES = {
     # Income Statement
     "revenue": [
@@ -527,131 +581,67 @@ SECTOR_PE_AVG = {
 }
 
 HORIZON_PROFILE_MAP = {
-    # ============================
-    #  INTRADAY PROFILE
-    # ============================
     "intraday": {
         "metrics": {
-            # --- Core directional bias & volatility ---
-            "vwap_bias": 0.18,  # VWAP-based intraday trend direction
-            "price_action": 0.15,  # Candlestick structure / closing strength
-            "supertrend_signal": 0.00,  # Trend alignment on short frame
-            "stoch_cross": 0.00,  # Momentum exhaustion / entry zone
-            "macd_histogram": 0.00,  # Intraday momentum intensity
-            "rsi_slope": 0.00,  # Strength of RSI momentum turn
-            # --- Liquidity & volatility context ---
-            "vol_spike_ratio": 0.08,  # Relative volume compared to mean
-            "rvol": 0.05,  # Confirmation of active participation
-            "bb_percent_b": 0.05,  # Position in Bollinger Band (overbought/oversold)
-            "adx": 0.05,  # Trend presence confirmation
-            "gap_percent": 0.0,  # <-- REMOVED (set to 0, it's a filter not a score)
-            "ichi_cloud": 0.02,
-            "momentum_strength": 0.24,
+            "vwap_bias": 0.18,
+            "price_action": 0.15,
+            "rsi_slope": 0.12,
+            "vol_spike_ratio": 0.08,
+            "rvol": 0.05,
+            "bb_percent_b": 0.05,
+            "adx": 0.05,
+            "ttm_squeeze": 0.04,
+            "momentum_strength": 0.20,      # composite (signal_engine should compute and add into indicators before scoring)
             "volatility_quality": 0.15,
         },
         "penalties": {
-            "atr_pct": {
-                "operator": "<",
-                "value": 0.75,
-                "penalty": 0.5,
-            },  # Avoid ultra-low volatility days
-            "rvol": {
-                "operator": "<",
-                "value": 0.8,
-                "penalty": 0.3,
-            },  # Avoid dead volume setups
+            "atr_pct": {"operator": "<", "value": 0.75, "penalty": 0.5},
+            "rvol": {"operator": "<", "value": 0.8, "penalty": 0.3},
             "bb_width": {"operator": "<", "value": 3.0, "penalty": 0.2},
-            "gap_percent": {
-                "operator": "<",
-                "value": 1.0,
-                "penalty": 0.4,
-            },  # <-- Kept as a penalty
+            "gap_percent": {"operator": "<", "value": 1.0, "penalty": 0.4},
             "nifty_trend_score": {"operator": "<", "value": 4, "penalty": 0.3},
         },
         "thresholds": {"buy": 7.5, "hold": 5.5, "sell": 3.5},
-        "notes": "Momentum, liquidity and volatility-driven scalping framework. Ideal for 5–15 min setups.",
     },
-    # ============================
-    #  SHORT-TERM PROFILE
-    # ============================
+
     "short_term": {
         "metrics": {
-            # --- NEW Composites (Priority) ---
             "trend_strength": 0.20,
             "momentum_strength": 0.05,
             "volatility_quality": 0.10,
-            # --- Remaining Core Technicals (Must Keep) ---
             "macd_cross": 0.10,
-            "dma_20_50_cross": 0.08,
+            "ema_20_50_cross": 0.08,
             "price_vs_200dma_pct": 0.05,
-            "reg_slope": 0.05,
-            "psar_trend": {"weight": 0.05, "direction": "normal"},
-            "ttm_squeeze": {"weight": 0.05, "direction": "normal"},
-            # --- RESTORED FUNDAMENTAL / HYBRID CONTEXT ---
+            "psar_trend": 0.05,
+            "ttm_squeeze": 0.05,
             "quarterly_growth": 0.05,
             "analyst_rating": 0.04,
             "fcf_yield": 0.03,
             "pe_vs_sector": 0.03,
             "nifty_trend_score": 0.04,
-            # --- RESTORED VOLUME/FLOW CONTEXT ---
             "cmf_signal": 0.05,
             "obv_div": 0.05,
             "rvol": 0.05,
             "bb_percent_b": 0.05,
-            "ps_ratio": {"weight": 0.03, "direction": "invert"},
-            # --- CLEANUP (Set to 0.0) ---
-            "supertrend_signal": 0.00,
-            "adx": 0.00,
-            "rsi_slope": 0.00,
-            "bb_width": 0.00,
+            "ps_ratio": 0.03,
+            "rsi_slope": 0.05,      # Helps detect momentum acceleration
+            "ema_20_slope": 0.05,   # Helps detect trend velocity
         },
         "penalties": {
-            "days_to_earnings": {
-                "operator": "<",
-                "value": 7,
-                "penalty": 1.0,
-            },  # Avoid pre-earnings risk
-            "bb_percent_b": {
-                "operator": ">",
-                "value": 0.95,
-                "penalty": 0.3,
-            },  # Avoid overextended zones
-            "beta": {
-                "operator": ">",
-                "value": 1.8,
-                "penalty": 0.1,
-            },  # Avoid extreme volatility
-            "52w_position": {
-                "operator": ">",
-                "value": 85,
-                "penalty": 0.15,
-            },  # Avoid extended highs
-            "adx": {
-                "operator": "<",
-                "value": 20,
-                "penalty": 0.3,
-            },  # Weak trend = penalty
-            "vol_spike_ratio": {
-                "operator": "<",
-                "value": 1.2,
-                "penalty": 0.2,
-            },  # Avoid dead-volume setups
+            "days_to_earnings": {"operator": "<", "value": 7, "penalty": 1.0},
+            "bb_percent_b": {"operator": ">", "value": 0.95, "penalty": 0.3},
+            "beta": {"operator": ">", "value": 1.8, "penalty": 0.1},
+            "52w_position": {"operator": ">", "value": 85, "penalty": 0.15},
+            "adx": {"operator": "<", "value": 20, "penalty": 0.3},
+            "vol_spike_ratio": {"operator": "<", "value": 1.2, "penalty": 0.2},
             "price_vs_200dma_pct": {"operator": "<", "value": 0, "penalty": 0.4},
-            "short_interest": {
-                "operator": ">",
-                "value": 10.0,
-                "penalty": 0.2,
-            },  # <-- ADDED (Risk flag)
+            "short_interest": {"operator": ">", "value": 10.0, "penalty": 0.2},
         },
         "thresholds": {"buy": 7.0, "hold": 5.5, "sell": 4.0},
-        "notes": "Catalyst-driven swing trades combining trend continuation, volume expansion, and short-term growth signals.",
     },
-    # ============================
-    #  LONG-TERM PROFILE
-    # ============================
+
     "long_term": {
         "metrics": {
-            # --- Core profitability & balance sheet quality ---
             "roe": 0.08,
             "roce": 0.08,
             "roic": 0.08,
@@ -663,44 +653,29 @@ HORIZON_PROFILE_MAP = {
             "piotroski_f": 0.05,
             "promoter_holding": 0.05,
             "dividend_yield": 0.05,
-            "dividend_payout": 0.05,  # <-- Renamed key to match fundamentals.py
+            "dividend_payout": 0.05,
             "earnings_stability": 0.05,
             "current_ratio": 0.04,
             "de_ratio": 0.04,
-            # --- Trend confirmations (technical + hybrid) ---
             "price_vs_200dma_pct": 0.05,
             "dma_200_slope": 0.04,
             "rel_strength_nifty": 0.04,
             "supertrend_signal": 0.03,
-            "trend_consistency": 0.03,
-            "earnings_consistency_index": 0.03,
         },
         "penalties": {
             "fcf_yield": {"operator": "<", "value": 2, "penalty": 0.3},
             "roe": {"operator": "<", "value": 10, "penalty": 0.3},
             "price_vs_200dma_pct": {"operator": "<", "value": 0, "penalty": 0.4},
-            "dividend_payout": {
-                "operator": ">",
-                "value": 80.0,
-                "penalty": 0.3,
-            },  # <-- Renamed key
+            "dividend_payout": {"operator": ">", "value": 80.0, "penalty": 0.3},
             "beta": {"operator": ">", "value": 1.5, "penalty": 0.15},
             "promoter_pledge": {"operator": ">", "value": 15.0, "penalty": 0.2},
-            "ocf_vs_profit": {
-                "operator": "<",
-                "value": 0.8,
-                "penalty": 0.4,
-            },  # <-- ADDED (Critical Quality check)
+            "ocf_vs_profit": {"operator": "<", "value": 0.8, "penalty": 0.4},
         },
         "thresholds": {"buy": 7.5, "hold": 6.0, "sell": 4.0},
-        "notes": "Quality + stability + compounding trend structure. Ideal for multi-month positional holdings.",
     },
-    # ============================
-    #  MULTIBAGGER PROFILE
-    # ============================
+
     "multibagger": {
         "metrics": {
-            # --- Core secular growth + capital efficiency ---
             "revenue_growth_5y": 0.12,
             "eps_growth_5y": 0.10,
             "fcf_growth_3y": 0.08,
@@ -713,15 +688,11 @@ HORIZON_PROFILE_MAP = {
             "piotroski_f": 0.05,
             "earnings_stability": 0.04,  # Prevent over-cyclicals
             "rel_strength_nifty": 0.04,
-            "dma_200_slope": 0.04,
-            "fundamental_momentum": 0.04,  # Hybrid: accelerating fundamental growth
-            "fcf_yield_vs_volatility": 0.04,  # Hybrid: cash flow stability vs volatility
+            "mma_12_slope": 0.04,
+            "fundamental_momentum": 0.04,
             "institutional_ownership": 0.03,
             "quarterly_growth": 0.03,
-            "ocf_vs_profit": {
-                "weight": 0.06,
-                "direction": "normal",
-            },  # <-- ADDED (Cash flow check)
+            "ocf_vs_profit": 0.06,
         },
         "penalties": {
             "peg_ratio": {"operator": ">", "value": 2.0, "penalty": 0.3},
@@ -729,11 +700,7 @@ HORIZON_PROFILE_MAP = {
             "de_ratio": {"operator": ">", "value": 1.0, "penalty": 0.2},
             "52w_position": {"operator": ">", "value": 85, "penalty": 0.2},
             "market_cap": {"operator": ">", "value": 5e11, "penalty": 0.3},
-            "market_cap_floor": {
-                "operator": "<",
-                "value": 5e9,
-                "penalty": 0.3,
-            },  # <-- ADDED (Liquidity floor)
+            "market_cap_floor": {"operator": "<", "value": 5e9, "penalty": 0.3},
             "roe": {"operator": "<", "value": 12, "penalty": 0.2},
             "rel_strength_nifty": {"operator": "<", "value": 0, "penalty": 0.3},
             "institutional_ownership": {"operator": ">", "value": 85, "penalty": 0.3},
@@ -741,14 +708,30 @@ HORIZON_PROFILE_MAP = {
             "promoter_pledge": {"operator": ">", "value": 10.0, "penalty": 0.3},
         },
         "thresholds": {"buy": 8.0, "hold": 6.5, "sell": 4.5},
-        "notes": "High-growth, high-efficiency compounding opportunities with strong sponsor alignment and volatility-adjusted quality.",
-    },
+    }
 }
+
 HORIZON_FETCH_CONFIG = {
-    "intraday": {"period": "5d", "interval": "15m", "label":"Intraday"},
-    "short_term": {"period": "3mo", "interval": "1d", "label": "Short Term"},
-    "long_term": {"period": "2y", "interval": "1wk", "label": "Long Term"},
-    "multibagger": {"period": "5y", "interval": "1mo", "label": "Multibagger"},
+    "intraday": {
+        "period": "1mo",   # CHANGED from '5d'. Gives ~500 bars (25 * 20 days). Plenty for EMA200 + Warmup.
+        "interval": "15m", 
+        "label": "Intraday"
+    },
+    "short_term": {
+        "period": "5y",    # CHANGED from '3mo' to 2y. Gives ~250 candles. Enough for 200 DMA.
+        "interval": "1d", 
+        "label": "Short Term"
+    },
+    "long_term": {
+        "period": "5y",    # changed. from 2y to 5y ~104 weekly bars. (Note: WMA 200 needs ~4 years, but you use WMA 50 here, so 2y is fine)
+        "interval": "1wk", 
+        "label": "Long Term"
+    },
+    "multibagger": {
+        "period": "10y",   # CHANGED from '5y' to be safe, though 5y (60 months) is usually enough for MMA 12.
+        "interval": "1mo", 
+        "label": "Multibagger"
+    },
 }
 
 

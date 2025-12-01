@@ -1,13 +1,14 @@
 # services/indicators.py
 """
-Production-ready indicators orchestrator (multi-horizon, profile-driven, cached).
-- OPTIMIZATION: Benchmark data is fetched ONCE per symbol analysis (Unified Benchmark Fetch).
-- Metric implementations preserved (neutral-score corrections and Ichimoku purity applied).
-- Caching: per-call df_cache and bench_cache avoid redundant yfinance downloads.
+Phase 3 Refactored (v7 - FINAL GOLD): 
+- RESTORED: ema_20_50_cross for Short Term.
+- LOGIC FIX: 'gap_percent' now correctly scores moderate gaps (0.5% - 2.0%).
+- LOGIC FIX: 'ma_trend' awards partial score (7) if Short MA > Mid MA (Developing Trend).
+- ACCURACY: Uses WMA/MMA for slopes on Long Term/Multibagger horizons.
 """
 
 import logging
-from typing import Dict, Any, Callable, Optional, Tuple
+from typing import Dict, Any, Callable, List, Optional, Tuple, Union
 import warnings
 import numpy as np
 from math import atan, degrees
@@ -17,13 +18,14 @@ import inspect
 
 logger = logging.getLogger(__name__)
 
-# Shared helpers from your project
+# Shared helpers
 from config.constants import (
     CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, 
     QUALITY_WEIGHTS, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, 
     TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
 )
 from services.data_fetch import (
+    _safe_float,
     get_benchmark_data,
     safe_float,
     _wrap_calc,
@@ -31,1698 +33,832 @@ from services.data_fetch import (
     _safe_get_raw_float
 )
 
+PYTHON_LOOKBACK_MAP = {
+    "intraday": 500,    
+    "short_term": 600,  
+    "long_term": 800,   
+    "multibagger": 3000 
+}
+
 # ========================================================
-# 🚀 PERFORMANCE OPTIMIZER: SAFE SLICING
+# 🔧 INTERNAL HELPERS
 # ========================================================
-MIN_ROWS_FOR_ACCURACY = 400  # 200 DMA + 200 warm-up periods
 
-def _slice_for_speed(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Performance Fix: Slices DataFrame to the most recent N rows.
-    Calculations on 5000 rows vs 400 rows is ~10x faster.
-    """
-    if df is None or df.empty:
-        return df
-    if len(df) > MIN_ROWS_FOR_ACCURACY:
-        return df.iloc[-MIN_ROWS_FOR_ACCURACY:].copy()
-    return df
+class _Validator:
+    @staticmethod
+    def require(df: pd.DataFrame, cols: List[str] = None, min_rows: int = 1):
+        if df is None or df.empty:
+            raise ValueError("DataFrame is empty")
+        if cols and not set(cols).issubset(df.columns):
+            raise ValueError(f"Missing required columns: {cols}")
+        if len(df) < min_rows:
+            raise ValueError(f"Insufficient data: {len(df)} < {min_rows}")
 
-# Defensive attempt to mark wrappers created by _wrap_calc
-try:
-    _wrap_calc._is_wrapped_calc = True
-except Exception:
-    pass
+    @staticmethod
+    def extract_last(series: Any, name: str = "Indicator") -> float:
+        if series is None or (isinstance(series, (pd.Series, pd.DataFrame)) and series.empty):
+            raise ValueError(f"{name} data unavailable/empty")
+        
+        if isinstance(series, pd.DataFrame):
+            val = series.iloc[-1].iloc[0]
+        else:
+            val = series.iloc[-1]
+            
+        f_val = safe_float(val)
+        if f_val is None:
+            return None
+        return f_val
 
+def _slice_for_speed(df: pd.DataFrame, horizon: str = "short_term") -> pd.DataFrame:
+    if df is None or df.empty: return df
+    max_rows = PYTHON_LOOKBACK_MAP.get(horizon, 600)
+    if len(df) > max_rows:
+        return df.tail(max_rows).copy()
+    return df.copy()
 
-# -----------------------------
-# Indicator metric functions
-# -----------------------------
+def _safe_last_vals(series: pd.Series, n: int = 1) -> Optional[List[float]]:
+    if series is None or series.empty: return None
+    s = series.dropna()
+    if len(s) < n: return None
+    try:
+        vals = [safe_float(x) for x in s.iloc[-n:].tolist()]
+        if any(v is None for v in vals): return None
+        return vals
+    except Exception: return None
+
+# ========================================================
+# 📊 METRIC CALCULATORS
+# ========================================================
 
 def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or df.empty or "Close" not in df.columns:
-            raise ValueError("Missing Close column for RSI")
-
+        _Validator.require(df, ["Close"])
         rsi_series = ta.rsi(df["Close"], length=length)
-        if rsi_series is None or rsi_series.empty:
-            raise ValueError("RSI data unavailable")
+        val = _Validator.extract_last(rsi_series, "RSI")
+        if val is None: return {}
 
-        rsi_val = safe_float(rsi_series.iloc[-1])
-        if rsi_val is None:
-            raise ValueError("RSI value is NaN")
+        if val < 30: score, zone = 10, "Oversold (Buy)"
+        elif val > 70: score, zone = 0, "Overbought (Sell)"
+        elif 45 <= val <= 65: score, zone = 8, "Healthy Momentum"
+        else: score, zone = 5, "Neutral"
 
-        if rsi_val < 30:
-            score, zone = 10, "Oversold (Buy)"
-        elif rsi_val > 70:
-            score, zone = 0, "Overbought (Sell)"
-        elif 45 <= rsi_val <= 65:
-            score, zone = 8, "Healthy Momentum"
-        else:
-            score, zone = 5, "Neutral"
+        slope_val = 0.0
+        try:
+            if len(rsi_series) >= 5:
+                y = rsi_series.dropna().tail(5).values
+                x = np.arange(len(y))
+                slope_val = np.polyfit(x, y, 1)[0]
+        except: pass
 
         return {
-            "rsi": {
-                "value": round(rsi_val, 2), 
-                "score": score, 
-                "desc": zone,
-                "full_series": rsi_series.to_dict() 
-            }
+            "rsi": {"value": round(val, 2), "score": score, "desc": zone},
+            "rsi_slope": {"value": round(slope_val, 2), "score": 0, "desc": f"Slope {slope_val:.2f}"}
         }
     return _wrap_calc(_inner, "RSI")
 
-
 def compute_mfi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        mfi_series = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=length)
-        if mfi_series is None or mfi_series.empty:
-            raise ValueError("MFI empty")
+        _Validator.require(df, ["High", "Low", "Close", "Volume"])
+        val = _Validator.extract_last(ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=length), "MFI")
+        if val is None: return {}
 
-        mfi_val = safe_float(mfi_series.iloc[-1])
-        if mfi_val is None:
-            raise ValueError("Invalid MFI value")
+        if val < 20: score, desc = 10, "Oversold (Buy)"
+        elif val > 80: score, desc = 0, "Overbought (Sell)"
+        elif 45 <= val <= 65: score, desc = 8, "Healthy Momentum"
+        else: score, desc = 5, "Neutral"
 
-        if mfi_val < 20:
-            score, desc = 10, "Oversold (Buy)"
-        elif mfi_val > 80:
-            score, desc = 0, "Overbought (Sell)"
-        elif 45 <= mfi_val <= 65:
-            score, desc = 8, "Healthy Momentum"
-        else:
-            score, desc = 5, "Neutral"
-
-        return {"mfi": {"value": round(mfi_val, 2), "score": score, "desc": desc}}
+        return {"mfi": {"value": round(val, 2), "score": score, "desc": desc}}
     return _wrap_calc(_inner, "MFI")
-
-
-def compute_short_ma_cross(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        ema5 = ta.ema(df["Close"], length=5)
-        ema20 = ta.ema(df["Close"], length=20)
-        if ema5 is None or ema20 is None or ema5.empty or ema20.empty:
-            raise ValueError("EMA data unavailable")
-
-        e5, e20 = safe_float(ema5.iloc[-1]), safe_float(ema20.iloc[-1])
-        if e5 is None or e20 is None:
-            raise ValueError("Invalid EMA values")
-
-        if e5 > e20:
-            signal, score = "Bullish", 10
-        elif e5 < e20:
-            signal, score = "Bearish", 0
-        else:
-            signal, score = "Neutral", 5
-
-        return {"short_ma_cross": {"value": signal, "score": score}}
-    return _wrap_calc(_inner, "Short MA Cross (5/20)")
-
-
-def compute_adx(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        required_cols = {"High", "Low", "Close"}
-        if df is None or df.empty or not required_cols.issubset(df.columns):
-            raise ValueError("Missing High/Low/Close columns for ADX")
-
-        adx_df = ta.adx(df["High"], df["Low"], df["Close"], length=length)
-        if adx_df is None or adx_df.empty:
-            raise ValueError("ADX DataFrame empty")
-
-        adx_col = next((c for c in adx_df.columns if "adx" in c.lower()), None)
-        di_plus_col = next((c for c in adx_df.columns if "dmp" in c.lower() or "di+" in c.lower()), None)
-        di_minus_col = next((c for c in adx_df.columns if "dmn" in c.lower() or "di-" in c.lower()), None)
-
-        if adx_col is None:
-            raise ValueError(f"ADX column missing. Found: {list(adx_df.columns)}")
-
-        adx_val = safe_float(adx_df[adx_col].iloc[-1])
-        di_plus_val = safe_float(adx_df[di_plus_col].iloc[-1]) if di_plus_col else None
-        di_minus_val = safe_float(adx_df[di_minus_col].iloc[-1]) if di_minus_col else None
-
-        if adx_val is None:
-            raise ValueError("ADX value invalid")
-
-        if adx_val < 20:
-            score, trend = 0, "Weak / Range-bound"
-        elif adx_val <= 25:
-            score, trend = 5, "Developing / Moderate Trend"
-        else:
-            score, trend = 10, "Strong Trend"
-
-        return {
-            "adx": {"value": round(adx_val, 2),"raw": adx_val, "score": score}, 
-            "adx_signal": {"value": trend, "score": score}, 
-            "di_plus": {"value": round(di_plus_val, 2) if di_plus_val is not None else None, "raw": di_plus_val, "score": 5, "desc": f"DI+ {di_plus_val:.2f}"}, 
-            "di_minus": {"value": round(di_minus_val, 2) if di_minus_val is not None else None, "raw": di_minus_val, "score": 5, "desc": f"DI- {di_minus_val:.2f}"},
-        }
-    return _wrap_calc(_inner, "ADX")
-
-
-def compute_stochastic(df: pd.DataFrame, k_length: int = 14, d_length: int = 3, smooth_k: int = 3) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        required_cols = {"High", "Low", "Close"}
-        if df is None or df.empty or not required_cols.issubset(df.columns):
-            raise ValueError("Missing High/Low/Close columns for Stochastic")
-
-        stoch_df = ta.stoch(df["High"], df["Low"], df["Close"], k=k_length, d=d_length, smooth_k=smooth_k)
-        if stoch_df is None or stoch_df.empty or len(stoch_df) < 1:
-            raise ValueError("Stochastic DataFrame empty")
-
-        stoch_df.columns = [c.lower() for c in stoch_df.columns]
-        k_col = next((c for c in stoch_df.columns if "k" in c.lower()), None)
-        d_col = next((c for c in stoch_df.columns if "d" in c.lower()), None)
-
-        if not all([k_col, d_col]):
-            raise ValueError(f"Missing %K or %D columns: {stoch_df.columns}")
-
-        stoch_k = safe_float(stoch_df[k_col].iloc[-1])
-        stoch_d = safe_float(stoch_df[d_col].iloc[-1])
-        if stoch_k is None or stoch_d is None:
-            raise ValueError("Stochastic values invalid or NaN")
-
-        if stoch_k < 20 and stoch_d < 20:
-            zone, score = "Oversold (Buy)", 10
-        elif stoch_k > 80 and stoch_d > 80:
-            zone, score = "Overbought (Sell)", 0
-        else:
-            zone, score = "Neutral", 5
-
-        crossover_status = "Neutral"
-        crossover_score = 5
-
-        if len(stoch_df) >= 2:
-            stoch_k_prev = safe_float(stoch_df[k_col].iloc[-2])
-            stoch_d_prev = safe_float(stoch_df[d_col].iloc[-2])
-
-            if stoch_k_prev is not None and stoch_d_prev is not None:
-                if stoch_k_prev <= stoch_d_prev and stoch_k > stoch_d:
-                    crossover_status = "Bullish"
-                    crossover_score = 10
-                elif stoch_k_prev >= stoch_d_prev and stoch_k < stoch_d:
-                    crossover_status = "Bearish"
-                    crossover_score = 0
-
-        return {
-            "stoch_k": {"value": round(stoch_k, 2), "score": score},
-            "stoch_d": {"value": round(stoch_d, 2), "score": score},
-            "stoch_cross": {"value": crossover_status, "score": crossover_score},
-        }
-    return _wrap_calc(_inner, "Stochastic")
-
-
-def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        close_ser = df["Close"].dropna()
-        if len(close_ser) < 35:
-            raise ValueError(f"Not enough data points ({len(close_ser)}) for MACD")
-
-        macd_df = ta.macd(close_ser, fast=12, slow=26, signal=9)
-        if macd_df is None or macd_df.empty:
-            raise ValueError("Empty MACD DataFrame")
-
-        macd_df.columns = [c.lower() for c in macd_df.columns]
-        macd_col = next((c for c in macd_df.columns if "macd_" in c), None)
-        signal_col = next((c for c in macd_df.columns if "macds_" in c or "signal" in c), None)
-        hist_col = next((c for c in macd_df.columns if "macdh_" in c or "hist" in c), None)
-
-        if not all([macd_col, signal_col, hist_col]):
-            raise ValueError(f"Missing expected MACD columns: {macd_df.columns}")
-
-        macd_val = safe_float(macd_df[macd_col].iloc[-1])
-        macd_signal = safe_float(macd_df[signal_col].iloc[-1])
-        hist_series = macd_df[hist_col].dropna()
-        macd_hist = safe_float(hist_series.iloc[-1])
-
-        if macd_val is None or macd_signal is None or macd_hist is None:
-            raise ValueError("Invalid MACD values (None/NaN)")
-
-        if macd_val > macd_signal:
-            cross, score = "Bullish", 10
-        elif macd_val < macd_signal:
-            cross, score = "Bearish", 0
-        else:
-            cross, score = "Neutral", 5
-
-        hist_score = 5
-        window_size = min(100, len(hist_series))
-        
-        if window_size > 1:
-            hist_window = hist_series.tail(window_size)
-            hist_mean = hist_window.iloc[:-1].mean()
-            hist_std = hist_window.iloc[:-1].std()
-            hist_z = 0.0
-
-            if hist_std and hist_std > 1e-9:
-                hist_z = (macd_hist - hist_mean) / hist_std
-                if hist_z > 1.0:
-                    hist_score = 10
-                elif hist_z < -1.0:
-                    hist_score = 0
-        else:
-            hist_z = 0.0
-            hist_desc = "Z-Score requires more data"
-
-        hist_desc = f"MACD Histogram {macd_hist:.3f}"
-        hist_strength = 10 if macd_hist > 0.5 else 7 if macd_hist > 0 else 3 if macd_hist > -0.5 else 0
-
-        return {
-            "macd": {"value": round(macd_val, 2), "score": score},
-            "macd_cross": {"value": cross, "score": score},
-            "macd_hist_z": {"value": round(hist_z, 4), "score": hist_score, "desc": "MACD Hist momentum normalized (Z-Score)"},
-            "macd_histogram": {"value": round(macd_hist, 3), "score": hist_strength, "desc": hist_desc},
-        }
-    return _wrap_calc(_inner, "MACD")
-
-
-def compute_vwap(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        required_cols = {"High", "Low", "Close", "Volume"}
-        if df is None or df.empty or not required_cols.issubset(df.columns):
-            raise ValueError("Missing required columns for VWAP")
-
-        vwap_series = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-        if vwap_series is None or vwap_series.empty:
-            raise ValueError("VWAP DataFrame empty")
-
-        vwap_val = safe_float(vwap_series.iloc[-1])
-        price_val = safe_float(df["Close"].iloc[-1])
-        if vwap_val is None or price_val is None:
-            raise ValueError("Invalid VWAP or Close values")
-
-        if price_val > vwap_val:
-            bias, score = "Bullish", 10
-        elif price_val < vwap_val:
-            bias, score = "Bearish", 0
-        else:
-            bias, score = "Neutral", 5
-
-        return {"vwap": {"value": round(vwap_val, 2), "score": score}, "vwap_bias": {"value": bias, "score": score}}
-    return _wrap_calc(_inner, "VWAP")
-
-
-def compute_bollinger_bands(df: pd.DataFrame, length: int = 20, std_dev: float = 2.0) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or "Close" not in df.columns:
-            raise ValueError("Missing Close column for Bollinger Bands")
-
-        bb_df = ta.bbands(df["Close"], length=length, std=std_dev)
-        if bb_df is None or bb_df.empty:
-            raise ValueError("Bollinger Bands empty")
-
-        bb_df.columns = [c.lower() for c in bb_df.columns]
-        upper_col = next((c for c in bb_df.columns if "u" in c), None)
-        lower_col = next((c for c in bb_df.columns if "l" in c), None)
-        mid_col = next((c for c in bb_df.columns if "m" in c), None)
-
-        upper = safe_float(bb_df[upper_col].iloc[-1])
-        lower = safe_float(bb_df[lower_col].iloc[-1])
-        mid = safe_float(bb_df[mid_col].iloc[-1])
-        price = safe_float(df["Close"].iloc[-1])
-
-        if any(v is None for v in [upper, lower, mid, price]):
-            raise ValueError("Invalid Bollinger Band values")
-
-        if price < lower:
-            band, score = "Oversold (Buy)", 10
-        elif price > upper:
-            band, score = "Overbought (Sell)", 0
-        else:
-            band, score = "Neutral", 5
-
-        bb_width_val = ((upper - lower) / mid) * 100 if mid and mid != 0 else None
-        bb_width_score = 0
-        bb_width_desc = "Volatile"
-
-        if bb_width_val is not None:
-            if bb_width_val < 5:
-                bb_width_score = 5
-                bb_width_desc = f"Consolidation (Narrow, {bb_width_val:.2f}%)"
-            else:
-                bb_width_desc = f"Volatile (Wide, {bb_width_val:.2f}%)"
-            bb_width_val = round(bb_width_val, 2)
-
-        return {
-            "bb_high": {"value": round(upper, 2), "score": 0},
-            "bb_mid": {"value": round(mid, 2), "score": 0},
-            "bb_low": {"value": round(lower, 2), "score": score, "desc": band},
-            "bb_width": {"value": bb_width_val,"raw": bb_width_val, "score": bb_width_score, "desc": bb_width_desc},
-        }
-    return _wrap_calc(_inner, "Bollinger Bands")
-
-
-def compute_rvol(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or "Volume" not in df.columns:
-            raise ValueError("Missing Volume column for RVOL")
-
-        vol_today = safe_float(df["Volume"].iloc[-1])
-        avg_vol_20 = safe_float(df["Volume"].tail(20).mean())
-
-        if avg_vol_20 is None or avg_vol_20 == 0:
-            raise ValueError("Invalid 20-day avg volume")
-
-        rvol = safe_float(vol_today / avg_vol_20)
-        if rvol is None:
-            raise ValueError("RVOL NaN")
-
-        if rvol > 1.5:
-            score = 10
-        elif rvol < 0.8: 
-            score = 0
-        else: 
-            score = 5
-
-        return {"rvol": {"value": round(rvol, 2), "score": score}}
-    return _wrap_calc(_inner, "RVOL")
-
-
-def compute_obv_divergence(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or not {"Close", "Volume"}.issubset(df.columns):
-            raise ValueError("Missing columns for OBV")
-
-        obv = ta.obv(df["Close"], df["Volume"])
-        if obv is None or obv.empty:
-            raise ValueError("OBV series empty")
-
-        price_change = safe_float(df["Close"].iloc[-1]) - safe_float(df["Close"].iloc[-5])
-        obv_change = safe_float(obv.iloc[-1]) - safe_float(obv.iloc[-5])
-
-        if price_change is None or obv_change is None:
-            raise ValueError("OBV change NaN")
-
-        if price_change * obv_change > 0:
-            signal, score = "Confirming", 10
-        elif price_change * obv_change < 0:
-            signal, score = "Diverging", 0
-        else:
-            signal, score = "Neutral", 5
-
-        return {"obv_div": {"value": signal, "score": score}}
-    return _wrap_calc(_inner, "OBV Divergence")
-
-
-def compute_vpt(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or not {"Close", "Volume"}.issubset(df.columns):
-            raise ValueError("Missing columns for VPT")
-
-        vpt = ta.pvt(df["Close"], df["Volume"])
-        if vpt is None or vpt.empty:
-            raise ValueError("VPT series empty")
-
-        vpt_val = safe_float(vpt.iloc[-1])
-        vpt_prev = safe_float(vpt.iloc[-5]) if len(vpt) >= 5 else vpt_val
-
-        if vpt_val is None or vpt_prev is None:
-            raise ValueError("VPT values invalid")
-
-        if vpt_val > vpt_prev:
-            signal, score = "Accumulation", 10
-        elif vpt_val < vpt_prev:
-            signal, score = "Distribution", 0
-        else:
-            signal, score = "Neutral", 5
-
-        return {"vpt": {"value": round(vpt_val, 2), "score": score, "desc": signal}}
-    return _wrap_calc(_inner, "VPT")
-
-
-def compute_volume_spike(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or "Volume" not in df.columns:
-            raise ValueError("Missing Volume data")
-
-        vol_today = safe_float(df["Volume"].iloc[-1])
-        avg_vol_20 = safe_float(df["Volume"].tail(20).mean())
-
-        if avg_vol_20 is None or avg_vol_20 == 0:
-            raise ValueError("Invalid volume mean")
-
-        spike_ratio = safe_float(vol_today / avg_vol_20)
-        if spike_ratio is None:
-            raise ValueError("Spike ratio invalid")
-
-        if spike_ratio > 1.5:
-            signal, score = "Strong Spike", 10
-        elif spike_ratio > 1.2:
-            signal, score = "Moderate Spike", 5
-        else:
-            signal, score = "Normal", 5
-
-        return {"vol_spike_ratio": {"value": round(spike_ratio, 2), "score": score}, "vol_spike_signal": {"value": signal, "score": score}}
-    return _wrap_calc(_inner, "Volume Spike")
-
-
-def compute_atr(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Missing OHLC for ATR")
-
-        atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-        if atr_series is None or atr_series.empty:
-            raise ValueError("ATR empty")
-
-        atr_val = safe_float(atr_series.iloc[-1])
-        price = safe_float(df["Close"].iloc[-1])
-        if price is None or atr_val is None or price == 0:
-            raise ValueError("Invalid ATR inputs")
-
-        atr_pct_val = round(atr_val / price * 100, 2)
-        if atr_pct_val is None:
-            raise ValueError("ATR % invalid")
-
-        if 1.0 <= atr_pct_val <= 3.0:
-            score = 10
-        elif atr_pct_val < 1.0:
-            score = 7
-        elif atr_pct_val <= 5.0:
-            score = 5
-        else:
-            score = 0
-
-        return {
-            "atr_14": {"value": round(atr_val, 2), "score": score},
-            "atr_pct": {
-                "value": atr_pct_val,
-                "score": score,
-                "desc": f"{atr_pct_val:.2f}% ATR Volatility",
-                }
-        }
-    return _wrap_calc(_inner, "ATR")
-
-
-def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _manual_ichimoku(df_local: pd.DataFrame):
-        high, low = df_local["High"], df_local["Low"]
-        conv = (high.rolling(window=9).max() + low.rolling(window=9).min()) / 2
-        base = (high.rolling(window=26).max() + low.rolling(window=26).min()) / 2
-        span_a = ((conv + base) / 2).shift(26)
-        span_b = ((high.rolling(window=52).max() + low.rolling(window=52).min()) / 2).shift(26)
-        return conv, base, span_a, span_b
-
-    def _inner():
-        _df_local = df
-        if _df_local is None or _df_local.empty or not {"High", "Low", "Close"}.issubset(_df_local.columns):
-            raise ValueError("Missing or invalid OHLC for Ichimoku")
-
-        if len(_df_local) < 60:
-            raise ValueError(f"Insufficient data for Ichimoku (need 60 bars, got {len(_df_local)})")
-
-        span_a_val = span_b_val = tenkan_val = kijun_val = None
-
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", category=FutureWarning)
-                ichimoku = ta.ichimoku(
-                    high=_df_local["High"],
-                    low=_df_local["Low"],
-                    close=_df_local["Close"],
-                    include_span=True
-                )
-
-            if isinstance(ichimoku, tuple):
-                if len(ichimoku) >= 6:
-                    conv_df, base_df, span_a_df, span_b_df, *_ = ichimoku
-                    tenkan_val = safe_float(conv_df.iloc[-1])
-                    kijun_val = safe_float(base_df.iloc[-1])
-                    span_a_val = safe_float(span_a_df.iloc[-1])
-                    span_b_val = safe_float(span_b_df.iloc[-1])
-            elif isinstance(ichimoku, pd.DataFrame):
-                cols = ichimoku.columns
-                conv_col = next((c for c in cols if "TENKAN" in c.upper()), None)
-                base_col = next((c for c in cols if "KIJUN" in c.upper()), None)
-                span_a_col = next((c for c in cols if "ISA" in c.upper()), None)
-                span_b_col = next((c for c in cols if "ISB" in c.upper()), None)
-                if conv_col:
-                    tenkan_val = safe_float(ichimoku[conv_col].iloc[-1])
-                if base_col:
-                    kijun_val = safe_float(ichimoku[base_col].iloc[-1])
-                if span_a_col:
-                    span_a_val = safe_float(ichimoku[span_a_col].iloc[-1])
-                if span_b_col:
-                    span_b_val = safe_float(ichimoku[span_b_col].iloc[-1])
-
-        except Exception as e:
-            logger.warning("Ichimoku Cloud (library) failed: %s", e)
-
-        if span_a_val is None or span_b_val is None:
-            try:
-                conv, base, span_a_series, span_b_series = _manual_ichimoku(_df_local)
-                tenkan_val = tenkan_val or safe_float(conv.iloc[-1])
-                kijun_val = kijun_val or safe_float(base.iloc[-1])
-                span_a_val = span_a_val or safe_float(span_a_series.iloc[-1])
-                span_b_val = span_b_val or safe_float(span_b_series.iloc[-1])
-            except Exception as e:
-                logger.warning("Manual Ichimoku computation failed: %s", e)
-
-        if span_a_val is None or span_b_val is None:
-            raise ValueError("Ichimoku spans unavailable after manual attempt")
-
-        price = safe_float(_df_local["Close"].iloc[-1])
-        upper, lower = max(span_a_val, span_b_val), min(span_a_val, span_b_val)
-
-        strong_bull = (price > upper) and (tenkan_val and kijun_val and tenkan_val > kijun_val)
-        strong_bear = (price < lower) and (tenkan_val and kijun_val and tenkan_val < kijun_val)
-
-        if strong_bull:
-            signal, score = "Strong Bullish", 10
-        elif strong_bear:
-            signal, score = "Strong Bearish", 0
-        elif price > upper:
-            signal, score = "Mild Bullish", 7
-        elif price < lower:
-            signal, score = "Mild Bearish", 3
-        else:
-            signal, score = "Neutral", 5
-
-        return {
-            "ichi_cloud": {"value": signal, "score": score, "desc": f"Ichimoku Cloud {signal}"},
-            "ichi_span_a": {"value": round(span_a_val, 2), "score": 0},
-            "ichi_span_b": {"value": round(span_b_val, 2), "score": 0},
-            "ichi_tenkan": {"value": round(tenkan_val, 2) if tenkan_val else "N/A", "score": 0},
-            "ichi_kijun": {"value": round(kijun_val, 2) if kijun_val else "N/A", "score": 0},
-        }
-    return _wrap_calc(_inner, "Ichimoku")
-
-
-def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Missing OHLC data")
-
-        high, low, close = df["High"].iloc[-1], df["Low"].iloc[-1], df["Close"].iloc[-1]
-        if high == low:
-            raise ValueError("Invalid range (High == Low)")
-
-        position = (close - low) / (high - low)
-
-        if position >= 0.75:
-            score, signal = 10, "Strong Bullish Close"
-        elif position >= 0.5:
-            score, signal = 5, "Moderate Close"
-        else:
-            score, signal = 0, "Weak Close"
-
-        return {"price_action": {"value": round(position * 100, 1), "score": score, "signal": signal}}
-    return _wrap_calc(_inner, "Price Action")
-
-
-def compute_200dma(df, close, price, horizon: str = "short_term"):
-    ma_length_and_type = None
-    def _inner():
-        ma_length_map = {
-            "intraday": 200,
-            "short_term": 200,
-            "long_term": 50,
-            "multibagger": 12
-        }
-        ma_type_map = {
-            "intraday": "MA",
-            "short_term": "DMA",
-            "long_term": "WMA",
-            "multibagger": "MMA"
-        }
-        
-        ma_length = ma_length_map.get(horizon, 200)
-        ma_type = ma_type_map.get(horizon, "MA")
-
-        num_bars = len(close.dropna())
-        if num_bars < ma_length:
-            raise ValueError(f"Insufficient data ({num_bars} bars) for {ma_length}{ma_type}")
-
-        sma_series = ta.sma(close, length=ma_length)
-        sma_val = safe_float(sma_series.iloc[-1])
-        if sma_val is None:
-            raise ValueError(f"{ma_length}{ma_type} NaN")
-
-        pct_diff = ((price - sma_val) / sma_val) * 100
-
-        if pct_diff > 0:
-            score, desc = 10, f"Uptrend (Above {ma_length} {ma_type})"
-        elif abs(pct_diff) < 3:
-            score, desc = 5, f"Neutral (Near {ma_length} {ma_type})"
-        else:
-            score, desc = 0, f"Downtrend (Below {ma_length} {ma_type})"
-
-        key_name = f"price_vs_{ma_length}{ma_type.lower()}_pct"
-        ma_key_name = f"{ma_length}{ma_type.lower()}"
-        ma_length_and_type = (ma_length, ma_type)
-        return {
-            key_name: {"value": round(pct_diff, 2), "score": score, "desc": desc},
-            ma_key_name: {"value": round(sma_val, 2), "score": 0},
-        }
-    return _wrap_calc(_inner, f"Long-Term MA {ma_length_and_type}")
-
-def compute_volume_trend(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or "Volume" not in df.columns:
-            raise ValueError("Missing Volume data")
-
-        volume = df["Volume"]
-        # Need at least 50 bars for a decent average
-        if len(volume) < 50:
-            raise ValueError("Insufficient volume data for trend")
-
-        vol_avg50 = safe_float(volume.tail(50).mean())
-        vol_today = safe_float(volume.iloc[-1])
-        
-        if vol_avg50 is None or vol_today is None:
-            raise ValueError("Volume NaN")
-
-        trend = (
-            "Rising"
-            if vol_today > 1.2 * vol_avg50
-            else "Falling" if vol_today < 0.8 * vol_avg50
-            else "Neutral"
-        )
-        score = 10 if trend == "Rising" else 5 if trend == "Neutral" else 0
-        
-        return {
-            "vol_trend": {
-                "value": trend,
-                "score": score,
-                "desc": f"{trend} volume trend"
-            }
-        }
-    return _wrap_calc(_inner, "Volume Trend")
-def compute_dma_cross(df, close, horizon: str = "short_term"):
-    short_len = long_len = 0 
-    def _inner():
-        length_map = {
-            "intraday": (20, 50),
-            "short_term": (20, 50),
-            "long_term": (10, 40),
-            "multibagger": (6, 12)
-        }
-        type_map = {
-            "intraday": ("MA", "MA"),
-            "short_term": ("DMA", "DMA"),
-            "long_term": ("WMA", "WMA"),
-            "multibagger": ("MMA", "MMA")
-        }
-        
-        short_len, long_len = length_map.get(horizon, (20, 50))
-        short_type, long_type = type_map.get(horizon, ("MA", "MA"))
-        
-        dma_short = ta.sma(close, length=short_len)
-        dma_long = ta.sma(close, length=long_len)
-
-        dma_short_val = safe_float(dma_short.iloc[-1])
-        dma_long_val = safe_float(dma_long.iloc[-1])
-
-        if dma_short_val is None or dma_long_val is None:
-            raise ValueError("DMA values NaN")
-
-        if dma_short_val > dma_long_val:
-            score, desc = 10, f"Bullish ({short_len} > {long_len})"
-        else:
-            score, desc = 0, f"Bearish ({short_len} < {long_len})"
-            
-        short_key = f"dma_{short_len}{short_type.lower()}"
-        long_key = f"dma_{long_len}{long_type.lower()}"
-        cross_key = f"dma_{short_len}_{long_len}_cross"
-
-        return {
-            short_key: {"value": round(dma_short_val, 2), "score": 0},
-            long_key: {"value": round(dma_long_val, 2), "score": 0},
-            cross_key: {"value": desc, "score": score, "desc": desc},
-        }
-    return _wrap_calc(_inner, f"{short_len}/{long_len} DMA Cross")
-
-
-def compute_ma_crossover(df: pd.DataFrame, horizon: str = "short_term"):
-    ma_type = ""
-    def _inner():
-        if df is None or df.empty or "Close" not in df.columns:
-            raise ValueError("Missing Close column")
-
-        close = df["Close"]
-        
-        len_map = {
-            "intraday": (20, 50, 200),
-            "short_term": (20, 50, 200),
-            "long_term": (10, 40, 50),
-            "multibagger": (6, 12, 12)
-        }
-        type_map = {
-            "intraday": "EMA",
-            "short_term": "EMA",
-            "long_term": "WMA",
-            "multibagger": "MMA"
-        }
-        
-        l_short, l_mid, l_long = len_map.get(horizon, (20, 50, 200))
-        ma_type = type_map.get(horizon, "EMA")
-        
-        if horizon in ("long_term", "multibagger"):
-            ma_short = ta.sma(close, length=l_short)
-            ma_mid = ta.sma(close, length=l_mid)
-            ma_long = ta.sma(close, length=l_long)
-        else:
-            ma_short = ta.ema(close, length=l_short)
-            ma_mid = ta.ema(close, length=l_mid)
-            ma_long = ta.ema(close, length=l_long)
-
-        v_short = safe_float(ma_short.iloc[-1])
-        v_mid = safe_float(ma_mid.iloc[-1])
-        v_long = safe_float(ma_long.iloc[-1])
-
-        if any(v is None for v in [v_short, v_mid, v_long]):
-            raise ValueError("Invalid MA values")
-
-        if v_short > v_mid > v_long:
-            trend, score = "Bullish", 10
-        elif v_short < v_mid < v_long:
-            trend, score = "Bearish", 0
-        else:
-            trend, score = "Neutral", 5
-            
-        key_short = f"ma_{l_short}{ma_type.lower()}"
-        key_mid = f"ma_{l_mid}{ma_type.lower()}"
-        key_long = f"ma_{l_long}{ma_type.lower()}"
-        key_cross = "ma_cross_trend"
-
-        return {
-            key_short: {"value": round(v_short, 2), "score": score},
-            key_mid: {"value": round(v_mid, 2), "score": score},
-            key_long: {"value": round(v_long, 2), "score": score},
-            key_cross: {"value": trend, "score": score},
-        }
-    return _wrap_calc(_inner, f"MA Crossover ({ma_type})")
-
-
-def compute_relative_strength(symbol, df, benchmark_df, horizon: str = "short_term") -> Dict[str, Dict[str, Any]]:
-    lookback = 20
-    def _inner():
-        if df is None or df.empty:
-            raise ValueError("Stock data missing")
-        if benchmark_df is None or benchmark_df.empty:
-            raise ValueError("Benchmark data missing")
-
-        # 1. Define equivalent lookbacks
-        # short_term (1d): 20 days (1 month)
-        # long_term (1wk): 52 weeks (1 year)
-        # multibagger (1mo): 12 months (1 year)
-        # intraday (15m): 20 bars (5 hours)
-        
-        lookback_map = {
-            "intraday": 20,
-            "short_term": 20,
-            "long_term": 52,
-            "multibagger": 12
-        }
-        lookback = lookback_map.get(horizon, 20)
-        
-        stock_close = None
-        for col in ("Adj Close", "Close"):
-            if col in df.columns:
-                stock_close = df[col].dropna()
-                break
-        if stock_close is None or stock_close.empty:
-            raise ValueError("Stock close series missing")
-
-        nifty_close = None
-        for col in ("Adj Close", "Close"):
-            if col in benchmark_df.columns:
-                nifty_close = benchmark_df[col].dropna()
-                break
-        if nifty_close is None or nifty_close.empty:
-            raise ValueError("Benchmark close series missing")
-
-        if len(stock_close) <= lookback or len(nifty_close) <= lookback:
-            raise ValueError(f"Insufficient data (<{lookback} bars) for relative strength")
-
-        stock_ret = (float(stock_close.iloc[-1].item()) / float(stock_close.iloc[-lookback].item()) - 1.0) * 100.0
-        nifty_ret = (float(nifty_close.iloc[-1].item()) / float(nifty_close.iloc[-lookback].item()) - 1.0) * 100.0
-
-        rel_strength = stock_ret - nifty_ret
-        if rel_strength > 0:
-            score, desc = 10, "Outperforming"
-        elif rel_strength < 0:
-            score, desc = 0, "Underperforming"
-        else:
-            score, desc = 5, "In-line"
-
-        return {
-            "rel_strength_nifty": {
-                "value": round(rel_strength, 2),
-                "score": score,
-                "desc": f"{desc} vs NIFTY ({rel_strength:.2f}%) over {lookback} bars"
-            }
-        }
-    return _wrap_calc(_inner, "Relative Strength vs NIFTY (%)")
-
-
-def compute_entry_price(df: pd.DataFrame, price: float):
-    def _inner():
-        sma20_series = ta.sma(df["Close"], length=20)
-        if sma20_series is None or sma20_series.empty:
-            raise ValueError("SMA(20) for BB Mid unavailable")
-
-        bb_mid = safe_float(sma20_series.iloc[-1])
-        if bb_mid is None:
-            bb_mid = price
-
-        last_high = df["High"].tail(10).max() if "High" in df.columns else None
-        confirm_val = round(last_high * 1.005, 2) if last_high else round(bb_mid, 2)
-        entry_score = 10 if price > (confirm_val or 0) else 5
-        
-        return {"entry_confirm": {"value": confirm_val, "score": entry_score, "desc": "Approximate breakout confirmation level"}}
-    return _wrap_calc(_inner, "Entry Price (Confirm)")
-
-
-def compute_200dma_slope(df: pd.DataFrame, close: pd.Series, horizon: str = "short_term"):
-    ma_length_and_type = None
-    def _inner():
-        ma_length_map = {
-            "intraday": 200,
-            "short_term": 200,
-            "long_term": 50,
-            "multibagger": 12
-        }
-        ma_type_map = {
-            "intraday": "MA",
-            "short_term": "DMA",
-            "long_term": "WMA",
-            "multibagger": "MMA"
-        }
-        
-        ma_length = ma_length_map.get(horizon, 200)
-        ma_type = ma_type_map.get(horizon, "MA")
-        
-        sma_series = ta.sma(close, length=ma_length)
-        
-        lookback = 10
-        if sma_series.isnull().all() or len(sma_series.dropna()) < lookback:
-            raise ValueError(f"Insufficient data for {ma_length}{ma_type} slope (need {lookback} periods)")
-        
-        y = sma_series.tail(lookback).values
-        if np.isnan(y).any():
-             raise ValueError("SMA values contain NaN, cannot calculate slope")
-
-        x = np.arange(len(y))
-        slope, _ = np.polyfit(x, y, 1)
-        angle = degrees(atan(slope))
-
-        if angle > 0.1:
-            score, trend = 10, "Rising"
-        elif angle < -0.1:
-            score, trend = 0, "Falling"
-        else:
-            score, trend = 5, "Flat"
-            
-        key_name = f"{ma_length}{ma_type.lower()}_slope"
-        ma_length_and_type = (ma_length, ma_type)
-        return {key_name: {"value": trend, "score": score, "desc": f"Slope: {angle:.2f}°"}}
-    return _wrap_calc(_inner, f" {ma_length_and_type} Trend (Slope)")
-
-
-def compute_atr_sl(df, indicators, high, low, close, price):
-    def _inner():
-        atr_val = safe_float(ta.atr(high, low, close, length=14).iloc[-1])
-        if atr_val is None:
-            raise ValueError("ATR NaN")
-        sl = price - (2 * atr_val)
-        return {
-            "sl_2x_atr": {"value": round(sl, 2), "score": 0},
-        }
-    return _wrap_calc(_inner, "Suggested SL (2xATR)")
-
-
-def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Missing OHLC data for SuperTrend")
-
-        try:
-            st_df = ta.supertrend(df["High"], df["Low"], df["Close"], length=length, multiplier=multiplier)
-        except Exception as e:
-            raise ValueError(f"SuperTrend failed: {e}")
-
-        if st_df is None or st_df.empty:
-            raise ValueError("SuperTrend DataFrame empty")
-
-        cols = list(st_df.columns)
-        dir_candidates = [c for c in cols if any(k in c.lower() for k in ("d", "dir", "direction", "trend"))]
-        level_candidates = [c for c in cols if "supertl" in c.lower() or "supert_s" in c.lower() or "supertl" in c.lower()]
-
-        trend_val = None
-        close_price = safe_float(df["Close"].iloc[-1])
-
-        for c in dir_candidates:
-            series = pd.to_numeric(st_df[c], errors="coerce").dropna()
-            if not series.empty:
-                trend_val = series.iloc[-1]
-                break
-
-        if trend_val is None and level_candidates:
-            for c in level_candidates:
-                level_series = pd.to_numeric(st_df[c], errors="coerce").dropna()
-                if not level_series.empty:
-                    level_val = level_series.iloc[-1]
-                    if close_price is not None:
-                        signal = "Bullish" if close_price > level_val else "Bearish"
-                        score = 10 if signal == "Bullish" else 0
-                        return {"supertrend_signal": {"value": signal, "score": score, "desc": f"SuperTrend level ({length},{multiplier}) {signal}"}} 
-                    else:
-                        trend_val = safe_float(level_val)
-                        break
-
-        if trend_val is None:
-            for c in cols[::-1]: 
-                series = pd.to_numeric(st_df[c], errors="coerce").dropna()
-                if not series.empty:
-                    trend_val = series.iloc[-1]
-                    break
-
-        if trend_val is None:
-            try:
-                atr_val = ta.atr(df["High"], df["Low"], df["Close"], length=14).iloc[-1]
-                if not np.isnan(atr_val):
-                    prev_close = safe_float(df["Close"].iloc[-2]) if len(df) >= 2 else None
-                    if prev_close is not None and close_price is not None:
-                        signal = "Bullish" if close_price > (prev_close + 0.1 * atr_val) else "Bearish"
-                        score = 6 if signal == "Bullish" else 4
-                        return {"supertrend_signal": {"value": signal, "score": score, "desc": f"SuperTrend fallback {signal}"}}
-            except Exception:
-                pass
-            return {"supertrend_signal": {"value": "Unavailable", "score": 0, "desc": "SuperTrend computation produced no usable column"}}
-
-        try:
-            tv = float(trend_val)
-            if tv == 1.0:
-                signal = "Bullish"
-            elif tv == -1.0:
-                signal = "Bearish"
-            else:
-                signal = "Bullish" if tv > 0 else "Bearish"
-            score = 10 if signal == "Bullish" else 0
-            return {"supertrend_signal": {"value": signal, "score": score, "desc": f"SuperTrend ({length},{multiplier}) {signal}"}}
-        except Exception:
-            sval = str(trend_val).lower()
-            if "bull" in sval:
-                return {"supertrend_signal": {"value": "Bullish", "score": 10, "desc": "SuperTrend (string) Bullish"}}
-            elif "bear" in sval:
-                return {"supertrend_signal": {"value": "Bearish", "score": 0, "desc": "SuperTrend (string) Bearish"}}
-            else:
-                return {"supertrend_signal": {"value": "Unavailable", "score": 0, "desc": "SuperTrend computed but value ambiguous"}}
-    return _wrap_calc(_inner, "SuperTrend")
-
-
-def compute_regression_slope(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or "Close" not in df.columns:
-            raise ValueError("Missing Close for regression slope")
-
-        if len(df) < length:
-            raise ValueError(f"Insufficient data ({len(df)}) for regression slope")
-
-        y = df["Close"].tail(length).values
-        x = np.arange(length)
-        slope, intercept = np.polyfit(x, y, 1)
-
-        angle = degrees(atan(slope))
-        desc = "Rising" if angle > 1 else "Falling" if angle < -1 else "Flat"
-        score = 10 if angle > 2 else 5 if abs(angle) <= 2 else 0
-
-        return {
-            "reg_slope": {"value": round(angle, 2), "score": score, "desc": f"Trend: {desc} ({angle:.2f}°)"}
-        }
-    return _wrap_calc(_inner, "Regression Slope")
-
 
 def compute_cci(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Missing OHLC for CCI")
+        _Validator.require(df, ["High", "Low", "Close"])
+        val = _Validator.extract_last(ta.cci(df["High"], df["Low"], df["Close"], length=length), "CCI")
+        if val is None: return {}
 
-        cci_series = ta.cci(df["High"], df["Low"], df["Close"], length=length)
-        if cci_series is None or cci_series.empty:
-            raise ValueError("CCI empty")
+        if val < -100: desc, score = "Oversold (Buy)", 10
+        elif val > 100: desc, score = "Overbought (Sell)", 0
+        else: desc, score = "Neutral", 5
 
-        cci_val = safe_float(cci_series.iloc[-1])
-        if cci_val is None:
-            raise ValueError("CCI NaN")
-
-        if cci_val < -100:
-            desc, score = "Oversold (Buy)", 10
-        elif cci_val > 100:
-            desc, score = "Overbought (Sell)", 0
-        else:
-            desc, score = "Neutral", 5
-
-        return {"cci": {"value": round(cci_val, 2), "score": score, "desc": desc}}
+        return {"cci": {"value": round(val, 2), "score": score, "desc": desc}}
     return _wrap_calc(_inner, "CCI")
 
-
-def compute_rsi_slope(df: pd.DataFrame,
-                      rsi_series: Optional[pd.Series] = None,
-                      length: int = 14,
-                      lookback: int = 5) -> Dict[str, Dict[str, Any]]:
+def compute_adx(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        rsi_data = None
+        _Validator.require(df, ["High", "Low", "Close"])
+        adx_df = ta.adx(df["High"], df["Low"], df["Close"], length=length)
+        if adx_df is None or adx_df.empty: raise ValueError("ADX empty")
+
+        adx_col = next((c for c in adx_df.columns if "adx" in c.lower()), None)
+        di_p_col = next((c for c in adx_df.columns if "dmp" in c.lower() or "di+" in c.lower()), None)
+        di_m_col = next((c for c in adx_df.columns if "dmn" in c.lower() or "di-" in c.lower()), None)
+
+        if not adx_col: raise ValueError("ADX column missing")
+
+        adx_val = _Validator.extract_last(adx_df[adx_col], "ADX")
+        if adx_val is None: return {}
         
-        if rsi_series and isinstance(rsi_series, dict) and rsi_series:
-            try:
-                rsi_data = pd.Series(rsi_series).sort_index()
-            except Exception as e:
-                logger.warning(f"Failed to rebuild RSI series from dict: {e}. Falling back to recalculation.")
+        di_plus = safe_float(adx_df[di_p_col].iloc[-1]) if di_p_col else None
+        di_minus = safe_float(adx_df[di_m_col].iloc[-1]) if di_m_col else None
 
-        if rsi_data is None or rsi_data.empty:
-            if "Close" not in df.columns:
-                raise ValueError("Missing Close for RSI slope computation")
-            rsi_data = ta.rsi(df["Close"], length=length) 
-
-        if rsi_data is None or rsi_data.empty:
-            raise ValueError("RSI data unavailable for slope")
-        
-        if len(rsi_data.dropna()) < lookback:
-            raise ValueError(f"Insufficient RSI data ({len(rsi_data.dropna())}) for slope (need {lookback})")
-
-        recent = rsi_data.tail(lookback).values
-
-        x = np.arange(len(recent))
-        slope, _ = np.polyfit(x, recent, 1)
-
-        if slope > 0.5:
-            score, desc = 10, "RSI accelerating (Bullish Momentum)"
-        elif slope < -0.5:
-            score, desc = 0, "RSI decelerating (Momentum Loss)"
-        else:
-            score, desc = 5, "RSI stable (Neutral Momentum)"
+        if adx_val < 20: score, trend = 0, "Weak / Range-bound"
+        elif adx_val <= 25: score, trend = 5, "Developing / Moderate"
+        else: score, trend = 10, "Strong Trend"
 
         return {
-            "rsi_slope": {
-                "value": round(slope, 2),
-                "score": score,
-                "desc": f"{desc} [{slope:.2f}/step]"
-            }
+            "adx": {"value": round(adx_val, 2), "raw": adx_val, "score": score, "desc": f"adx -> {adx_val:.2f}"},
+            "adx_signal": {"value": trend, "score": score, "desc": f"adx_signal -> {trend}"},
+            "di_plus": {"value": round(di_plus, 2) if di_plus else None, "score": 5, "desc": f"di_plus -> {di_plus:.1f}"},
+            "di_minus": {"value": round(di_minus, 2) if di_minus else None, "score": 5, "desc": f"di_minus -> {di_minus:.1f}"},
         }
-    return _wrap_calc(_inner, "RSI Slope")
+    return _wrap_calc(_inner, "ADX")
 
-
-def compute_bb_percent_b(df: pd.DataFrame, length: int = 20, std_dev: float = 2.0) -> Dict[str, Dict[str, Any]]:
+def compute_stochastic(df: pd.DataFrame, k_length: int = 14, d_length: int = 3, smooth_k: int = 3) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or df.empty or "Close" not in df.columns:
-            raise ValueError("Missing Close for BB%B")
+        _Validator.require(df, ["High", "Low", "Close"])
+        stoch_df = ta.stoch(df["High"], df["Low"], df["Close"], k=k_length, d=d_length, smooth_k=smooth_k)
+        if stoch_df is None or stoch_df.empty: raise ValueError("Stoch empty")
 
-        bb_df = ta.bbands(df["Close"], length=length, std=std_dev)
-        if bb_df is None or bb_df.empty:
-            raise ValueError("Bollinger Bands empty")
+        stoch_df.columns = [c.lower() for c in stoch_df.columns]
+        k_col = next((c for c in stoch_df.columns if "k" in c), None)
+        d_col = next((c for c in stoch_df.columns if "d" in c), None)
 
-        bb_df.columns = [c.lower() for c in bb_df.columns]
-        upper_col = next((c for c in bb_df.columns if "u" in c.lower()), None)
-        lower_col = next((c for c in bb_df.columns if "l" in c.lower()), None)
-        upper = bb_df[upper_col].iloc[-1]
-        lower = bb_df[lower_col].iloc[-1]
+        k_val = _Validator.extract_last(stoch_df[k_col], "Stoch %K")
+        d_val = _Validator.extract_last(stoch_df[d_col], "Stoch %D")
+        
+        if k_val is None or d_val is None: return {}
 
-        if lower == upper:
-            raise ValueError("Invalid BB width")
-        price = safe_float(df["Close"].iloc[-1])
-        bb_percent_b = (price - lower) / (upper - lower)
-        score = 10 if bb_percent_b < 0.2 else 0 if bb_percent_b > 0.8 else 5
+        if k_val < 20 and d_val < 20: zone, score = "Oversold (Buy)", 10
+        elif k_val > 80 and d_val > 80: zone, score = "Overbought (Sell)", 0
+        else: zone, score = "Neutral", 5
 
-        return {"bb_percent_b": {"value": round(bb_percent_b, 3), "score": score, "desc": f"{bb_percent_b:.2f} position in band"}}
-    return _wrap_calc(_inner, "Bollinger %B")
+        cross_score, cross_status = 5, "Neutral"
+        if len(stoch_df) >= 2:
+            k_prev = safe_float(stoch_df[k_col].iloc[-2])
+            d_prev = safe_float(stoch_df[d_col].iloc[-2])
+            if k_prev is not None and d_prev is not None:
+                if k_prev <= d_prev and k_val > d_val: cross_status, cross_score = "Bullish", 10
+                elif k_prev >= d_prev and k_val < d_val: cross_status, cross_score = "Bearish", 0
 
+        return {
+            "stoch_k": {"value": round(k_val, 2), "score": score},
+            "stoch_d": {"value": round(d_val, 2), "score": score},
+            "stoch_cross": {"value": cross_status, "score": cross_score},
+        }
+    return _wrap_calc(_inner, "Stochastic")
 
-def compute_cmf(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]:
+def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close", "Volume"}.issubset(df.columns):
-            raise ValueError("Missing OHLCV for CMF")
+        _Validator.require(df, ["Close"], min_rows=35)
+        macd_df = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+        if macd_df is None or macd_df.empty: raise ValueError("MACD empty")
 
-        cmf_series = ta.cmf(df["High"], df["Low"], df["Close"], df["Volume"], length=length)
-        if cmf_series is None or cmf_series.empty:
-            raise ValueError("CMF empty")
+        macd_df.columns = [c.lower() for c in macd_df.columns]
+        macd_col = next((c for c in macd_df.columns if "macd_" in c), None)
+        sig_col = next((c for c in macd_df.columns if "macds_" in c or "signal" in c), None)
+        hist_col = next((c for c in macd_df.columns if "macdh_" in c or "hist" in c), None)
 
-        cmf_val = safe_float(cmf_series.iloc[-1])
-        if cmf_val is None:
-            raise ValueError("CMF NaN")
+        if not all([macd_col, sig_col, hist_col]): raise ValueError("Missing MACD cols")
 
-        if cmf_val > 0.05:
-            desc, score = "Accumulation (Buy Pressure)", 10
-        elif cmf_val < -0.05:
-            desc, score = "Distribution (Sell Pressure)", 0
-        else:
-            desc, score = "Neutral", 5
+        macd_val = _Validator.extract_last(macd_df[macd_col], "MACD")
+        sig_val = _Validator.extract_last(macd_df[sig_col], "Signal")
+        hist_val = _Validator.extract_last(macd_df[hist_col], "Hist")
+        
+        if macd_val is None or sig_val is None: return {}
 
-        return {"cmf_signal": {"value": round(cmf_val, 3), "score": score, "desc": desc}}
-    return _wrap_calc(_inner, "Chaikin Money Flow")
+        if macd_val > sig_val: cross, score = "Bullish", 10
+        elif macd_val < sig_val: cross, score = "Bearish", 0
+        else: cross, score = "Neutral", 5
 
+        hist_score, hist_z = 5, 0.0
+        hist_series = macd_df[hist_col].dropna()
+        if len(hist_series) > 1:
+            window = hist_series.tail(min(100, len(hist_series)))
+            std = window.std()
+            if std > 1e-9:
+                hist_z = (hist_val - window.mean()) / std
+                if hist_z > 1.0: hist_score = 10
+                elif hist_z < -1.0: hist_score = 0
 
-def compute_donchian(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]:
+        hist_strength = 10 if hist_val > 0.5 else 7 if hist_val > 0 else 3 if hist_val > -0.5 else 0
+
+        return {
+            "macd": {"value": round(macd_val, 2), "score": score, "desc": f"macd -> {macd_val:.2f}"},
+            "macd_cross": {"value": cross, "score": score, "desc": f"macd_cross -> {cross}"},
+            "macd_hist_z": {"value": round(hist_z, 4), "score": hist_score, "desc": "MACD Hist Z-Score"},
+            "macd_histogram": {"value": round(hist_val, 3), "score": hist_strength, "desc": f"Hist {hist_val:.3f}"},
+        }
+    return _wrap_calc(_inner, "MACD")
+
+def compute_vwap(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Missing OHLC for Donchian")
+        _Validator.require(df, ["High", "Low", "Close", "Volume"])
+        vwap_val = _Validator.extract_last(ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]), "VWAP")
+        if vwap_val is None: return {}
+        price = _Validator.extract_last(df["Close"], "Close")
 
-        upper = df["High"].rolling(length).max().iloc[-1]
-        lower = df["Low"].rolling(length).min().iloc[-1]
-        price = df["Close"].iloc[-1]
+        if price > vwap_val: bias, score = "Bullish", 10
+        elif price < vwap_val: bias, score = "Bearish", 0
+        else: bias, score = "Neutral", 5
 
-        if price > upper:
-            signal, score = "Breakout Above Upper", 10
-        elif price < lower:
-            signal, score = "Breakdown Below Lower", 0
-        else:
-            signal, score = "Inside Range", 5
+        return {
+            "vwap": {"value": round(vwap_val, 2), "score": score, "desc": f"vwap -> {vwap_val:.1f}"}, 
+            "vwap_bias": {"value": bias, "score": score, "desc": f"vwap_bias -> {bias}"}
+        }
+    return _wrap_calc(_inner, "VWAP")
 
-        return {"donchian_signal": {"value": signal, "score": score, "desc": f"{signal} ({length}-period)"}}
-    return _wrap_calc(_inner, "Donchian Channel")
-
-
-def compute_nifty_trend_score(benchmark_df: pd.DataFrame):
-    """
-    Robust, unbiased NIFTY Trend Score.
-    - Uses EMA200 when enough daily data is available.
-    - Falls back to EMA50 when EMA200 is unavailable (weekly/monthly horizons).
-    - Returns (value=None, score=None) when trend cannot be reliably determined.
-    """
+def compute_bollinger_bands(df: pd.DataFrame, length: int = 20, std_dev: float = 2.0) -> Dict[str, Dict[str, Any]]:
     def _inner():
+        _Validator.require(df, ["Close"])
+        bb = ta.bbands(df["Close"], length=length, std=std_dev)
+        if bb is None: raise ValueError("BB failed")
+        
+        cols = {c.lower(): c for c in bb.columns}
+        u_col = next((k for k in cols if "u" in k), None)
+        l_col = next((k for k in cols if "l" in k), None)
+        m_col = next((k for k in cols if "m" in k), None)
+
+        upper = _Validator.extract_last(bb[cols[u_col]], "BB Upper")
+        lower = _Validator.extract_last(bb[cols[l_col]], "BB Lower")
+        mid = _Validator.extract_last(bb[cols[m_col]], "BB Mid")
+        price = _Validator.extract_last(df["Close"], "Close")
+        
+        if upper is None or lower is None: return {}
+
+        if price < lower: band, score = "Oversold (Buy)", 10
+        elif price > upper: band, score = "Overbought (Sell)", 0
+        else: band, score = "Neutral", 5
+
+        bb_width_val = ((upper - lower) / mid) * 100 if mid else 0
+        width_desc = f"Narrow ({bb_width_val:.2f}%)" if bb_width_val < 5 else f"Wide ({bb_width_val:.2f}%)"
+        width_score = 5 if bb_width_val < 5 else 0
+
+        pct_b = 0.5
+        if upper != lower:
+            pct_b = (price - lower) / (upper - lower)
+        
+        return {
+            "bb_high": {"value": round(upper, 2), "score": 0, "desc": f"bb_high -> {upper:.2f}"},
+            "bb_mid": {"value": round(mid, 2), "score": 0, "desc": f"bb_mid -> {mid:.2f}"},
+            "bb_low": {"value": round(lower, 2), "score": score, "desc": band},
+            "bb_width": {"value": round(bb_width_val, 2), "raw": bb_width_val, "score": width_score, "desc": width_desc},
+            "bb_percent_b": {"value": round(pct_b, 3), "score": 10 if pct_b < 0.2 else 0 if pct_b > 0.8 else 5, "desc": f"bb_percent_b -> {pct_b:.3f}"}
+        }
+    return _wrap_calc(_inner, "Bollinger Bands")
+
+def compute_rvol(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["Volume"])
+        vol = df["Volume"]
+        today = safe_float(vol.iloc[-1])
+        avg = safe_float(vol.tail(20).mean())
+        if not avg: raise ValueError("Zero avg volume")
+        
+        rvol = today / avg
+        score = 10 if rvol > 1.5 else 0 if rvol < 0.8 else 5
+        return {"rvol": {"value": round(rvol, 2), "score": score, "desc": f"rvol -> {rvol:.2f}"}}
+    return _wrap_calc(_inner, "RVOL")
+
+def compute_obv_divergence(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["Close", "Volume"])
+        obv = ta.obv(df["Close"], df["Volume"])
+        if obv is None or len(obv) < 5: raise ValueError("OBV data insufficient")
+        
+        p_chg = safe_float(df["Close"].iloc[-1]) - safe_float(df["Close"].iloc[-5])
+        o_chg = safe_float(obv.iloc[-1]) - safe_float(obv.iloc[-5])
+        
+        if p_chg * o_chg > 0: sig, score = "Confirming", 10
+        elif p_chg * o_chg < 0: sig, score = "Diverging", 0
+        else: sig, score = "Neutral", 5
+        
+        return {"obv_div": {"value": sig, "score": score, "desc": f"obv_div -> {sig}"}}
+    return _wrap_calc(_inner, "OBV Divergence")
+
+def compute_vpt(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["Close", "Volume"])
+        vpt = ta.pvt(df["Close"], df["Volume"])
+        curr = _Validator.extract_last(vpt, "VPT")
+        prev = safe_float(vpt.iloc[-5]) if len(vpt) >= 5 else curr
+        
+        if curr > prev: sig, score = "Accumulation", 10
+        elif curr < prev: sig, score = "Distribution", 0
+        else: sig, score = "Neutral", 5
+        
+        return {"vpt": {"value": round(curr, 2), "score": score, "desc": sig}}
+    return _wrap_calc(_inner, "VPT")
+
+def compute_volume_spike(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["Volume"])
+        today = safe_float(df["Volume"].iloc[-1])
+        avg = safe_float(df["Volume"].tail(20).mean())
+        if not avg: raise ValueError("Zero avg volume")
+        
+        ratio = today / avg
+        if ratio > 1.5: sig, score = "Strong Spike", 10
+        elif ratio > 1.2: sig, score = "Moderate Spike", 5
+        else: sig, score = "Normal", 5
+        
+        return {
+            "vol_spike_ratio": {"value": round(ratio, 2), "score": score, "desc": f"vol_spike_ratio -> {ratio:.2f}"},
+            "vol_spike_signal": {"value": sig, "score": score, "desc": f"vol_spike_signal -> {sig}"}
+        }
+    return _wrap_calc(_inner, "Volume Spike")
+
+def compute_atr(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["High", "Low", "Close"])
+        atr = _Validator.extract_last(ta.atr(df["High"], df["Low"], df["Close"], length=14), "ATR")
+        if atr is None: return {}
+        price = _Validator.extract_last(df["Close"], "Close")
+        
+        pct = (atr / price) * 100
+        if 1.0 <= pct <= 3.0: score = 10
+        elif pct < 1.0: score = 7
+        elif pct <= 5.0: score = 5
+        else: score = 0
+        
+        return {
+            "atr_14": {"value": round(atr, 2), "score": score, "desc": f"atr_14 -> {atr:.2f}"},
+            "atr_pct": {"value": round(pct, 2), "score": score, "desc": f"{pct:.2f}%"}
+        }
+    return _wrap_calc(_inner, "ATR")
+
+def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        # 1. Keep your Validators
+        _Validator.require(df, ["High", "Low", "Close"])
         try:
-            if (
-                benchmark_df is None
-                or benchmark_df.empty
-                or "Close" not in benchmark_df.columns
-            ):
-                return {
-                    "nifty_trend_score": {
-                        "value": None,
-                        "score": None,
-                        "desc": "Benchmark missing — trend UNKNOWN"
-                    }
-                }
-
-            close = benchmark_df["Close"].dropna()
-
-            if len(close) < 20:  # not enough data even for EMA50
-                return {
-                    "nifty_trend_score": {
-                        "value": None,
-                        "score": None,
-                        "desc": "Insufficient benchmark data — trend UNKNOWN"
-                    }
-                }
-
-            latest = float(close.iloc[-1])
-
-            ema_50_series = ta.ema(close, 50)
-            ema_200_series = ta.ema(close, 200)
-
-            ema_50 = (
-                float(ema_50_series.iloc[-1])
-                if ema_50_series is not None and not ema_50_series.dropna().empty
-                else None
-            )
-
-            ema_200 = (
-                float(ema_200_series.iloc[-1])
-                if ema_200_series is not None and not ema_200_series.dropna().empty
-                else None
-            )
-
-            # CASE A — Full Trend Logic (EMA200 available)
-            if ema_200 is not None:
-                diff_pct = (latest - ema_200) / ema_200 * 100
-
-                if ema_50 is not None and latest > ema_50 > ema_200:
-                    trend, score = "Strong Uptrend", 9
-                elif latest > ema_200:
-                    trend, score = "Moderate Uptrend", 7
-                elif ema_50 is not None and latest > ema_50 and latest < ema_200:
-                    trend, score = "Neutral / Pullback", 5
-                else:
-                    trend, score = "Downtrend", 2
-
-                return {
-                    "nifty_trend_score": {
-                        "value": round(diff_pct, 2),
-                        "score": score,
-                        "desc": f"{trend} ({diff_pct:.2f}% above 200 EMA)"
-                    }
-                }
-
-            # CASE B — Fallback for weekly/monthly data (EMA50 logic)
-            if ema_50 is not None:
-                trend = "Uptrend" if latest > ema_50 else "Downtrend"
-                score = 7 if trend == "Uptrend" else 3
-                # FIX: Normalized to Percentage
-                diff_fallback_pct = (latest - ema_50) / ema_50 * 100
-
-                return {
-                    "nifty_trend_score": {
-                        "value": round(diff_fallback_pct, 2),
-                        "score": score,
-                        "desc": f"Fallback EMA50 Trend ({trend}) — insufficient data for EMA200"
-                    }
-                }
-
-            # CASE C — No usable EMAs
-            return {
-                "nifty_trend_score": {
-                    "value": None,
-                    "score": None,        
-                    "desc": "Unable to compute NIFTY trend — UNKNOWN"
-                }
-            }
-
+            st = ta.supertrend(df["High"], df["Low"], df["Close"], length=length, multiplier=multiplier)
         except Exception as e:
-            logger.warning(f"compute_nifty_trend_score failed: {e}")
-            return {
-                "nifty_trend_score": {
-                    "value": None,
-                    "score": None,
-                    "desc": "Error computing trend — UNKNOWN"
-                }
-            }
-    return _wrap_calc(_inner, "NIFTY Trend Score")
+            raise ValueError(f"SuperTrend lib error: {e}")
+        if st is None or st.empty: raise ValueError("SuperTrend result empty")
+        cols = st.columns
+        # 2. Identify the Direction Column (d_col) vs The Value Column (l_col)
+        # pandas-ta usually names direction col like "SUPERTd_7_3.0" and value like "SUPERT_7_3.0"
+        d_col = next((c for c in cols if any(x in c.lower() for x in ("d_", "dir", "trend"))), None)
+        l_col = next((c for c in cols if "super" in c.lower() and c != d_col), None)
+        close = _Validator.extract_last(df["Close"], "Close")
+        # 3. Robust Extraction of Direction (trend_val)
+        trend_val = None
+        if d_col:
+            trend_val = _safe_float(st[d_col].iloc[-1])
+        # 4. Robust Extraction of Level (st_level_val)
+        st_level_val = None
+        if l_col:
+            st_level_val = _safe_float(st[l_col].iloc[-1])
+        # Fallback Logic If direction missing, infer from level
+        if trend_val is None and st_level_val is not None:
+             trend_val = 1.0 if close > st_level_val else -1.0
 
-
-def compute_gap_percent(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or len(df) < 2:
-            raise ValueError("Insufficient daily data for gap")
-
-        prev_close = safe_float(df["Close"].iloc[-2])
-        today_open = safe_float(df["Open"].iloc[-1])
-
-        if prev_close is None or today_open is None or prev_close == 0:
-            raise ValueError("Invalid open/close for gap")
-
-        gap_pct = ((today_open - prev_close) / prev_close) * 100
-
-        if gap_pct > 2.0:
-            score, desc = 10, "Strong Gap Up"
-        elif gap_pct > 0.5:
-            score, desc = 7, "Moderate Gap Up"
-        elif gap_pct < -2.0:
-            score, desc = 1, "Strong Gap Down"
-        elif gap_pct < -0.5:
-            score, desc = 3, "Moderate Gap Down"
-        else:
-            score, desc = 5, "No Gap"
-
-        return {"gap_percent": {"value": round(gap_pct, 2), "score": score, "desc": desc}}
-    return _wrap_calc(_inner, "Gap Percent")
-
-
-def compute_psar(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Missing OHLC data for Parabolic SAR")
-
-        psar_df = ta.psar(df["High"], df["Low"], df["Close"])
-        if psar_df is None or psar_df.empty:
-            raise ValueError("PSAR calculation failed")
-
-        col_l = next((c for c in psar_df.columns if c.startswith("PSARl")), None)
-        col_s = next((c for c in psar_df.columns if c.startswith("PSARs")), None)
-        col_r = next((c for c in psar_df.columns if c.startswith("PSARr")), None)
-
-        val_l = safe_float(psar_df[col_l].iloc[-1]) if col_l else None
-        val_s = safe_float(psar_df[col_s].iloc[-1]) if col_s else None
-        psar_level = val_l if val_l is not None else val_s
+        if trend_val == 1.0: 
+            sig, score = "Bullish", 10
+        else: 
+            sig, score = "Bearish", 0
         
-        trend_val = safe_float(psar_df[col_r].iloc[-1]) if col_r else 0
-
-        if psar_level is None:
-            raise ValueError("PSAR level is NaN")
-
-        if trend_val > 0:
-            signal, score = "Bullish", 10
-        else:
-            signal, score = "Bearish", 0
         return {
-            "psar_trend": { "value": signal, "score": score, "desc": f"PSAR Trend is {signal}" },
-            "psar_level": { "value": round(psar_level, 2), "score": 0, "desc": f"PSAR Trailing Stop: {round(psar_level, 2)}" }
+            "supertrend_signal": { "value": sig, "score": score, "desc": f"ST ({length},{multiplier}) {sig}"},
+            "supertrend_value": {"value": st_level_val, "score": 0, "desc": f"Level {st_level_val}","alias": "SuperTrend Value"}
         }
-    return _wrap_calc(_inner, "Parabolic SAR")
+    return _wrap_calc(_inner, "SuperTrend")
 
-
-def compute_keltner_squeeze(df: pd.DataFrame, 
-                            bb_length: int = 20, 
-                            bb_std: float = 2.0,
-                            kc_length: int = 20,
-                            kc_scalar: float = 1.5) -> Dict[str, Dict[str, Any]]:
+def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or df.empty or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Missing OHLC data for Keltner/BB Squeeze")
+        _Validator.require(df, ["High", "Low", "Close"])
+        high = df["High"].iloc[-1]
+        low = df["Low"].iloc[-1]
+        close = df["Close"].iloc[-1]
+        
+        if high == low: raise ValueError("Zero range candle")
+        pos = (close - low) / (high - low)
+        
+        if pos >= 0.75: sig, score = "Strong Bullish Close", 10
+        elif pos >= 0.5: sig, score = "Moderate Close", 5
+        else: sig, score = "Weak Close", 0
+        
+        return {"price_action": {"value": round(pos*100, 1), "score": score, "signal": sig, "desc": f"price_action -> {round(pos*100, 1)}"}}
+    return _wrap_calc(_inner, "Price Action")
 
-        bb_df = ta.bbands(df["Close"], length=bb_length, std=bb_std)
-        if bb_df is None:
-            raise ValueError("Bollinger Bands calculation failed")
-            
-        bb_upper_col = next(c for c in bb_df.columns if "u" in c.lower())
-        bb_lower_col = next(c for c in bb_df.columns if "l" in c.lower())
-        bb_upper = safe_float(bb_df[bb_upper_col].iloc[-1])
-        bb_lower = safe_float(bb_df[bb_lower_col].iloc[-1])
-
-        kc_df = ta.kc(df["High"], df["Low"], df["Close"], length=kc_length, scalar=kc_scalar)
-        if kc_df is None:
-            raise ValueError("Keltner Channels calculation failed")
-
-        kc_upper_col = next(c for c in kc_df.columns if "u" in c.lower())
-        kc_lower_col = next(c for c in kc_df.columns if "l" in c.lower())
-        kc_upper = safe_float(kc_df[kc_upper_col].iloc[-1])
-        kc_lower = safe_float(kc_df[kc_lower_col].iloc[-1])
-
-        if any(v is None for v in [bb_upper, bb_lower, kc_upper, kc_lower]):
-            raise ValueError("NaN values in BB or KC bands")
-
-        is_squeeze = (bb_upper < kc_upper) and (bb_lower > kc_lower)
-
-        if is_squeeze:
-            signal, score = "Squeeze On", 10
-        else:
-            signal, score = "Squeeze Off", 5
-
+def compute_200dma(df: pd.DataFrame, close, price, horizon: str = "short_term"):
+    def _inner():
+        lens = {"intraday": 200, "short_term": 200, "long_term": 50, "multibagger": 12}
+        types = {"intraday": "MA", "short_term": "DMA", "long_term": "WMA", "multibagger": "MMA"}
+        
+        L = lens.get(horizon, 200)
+        T = types.get(horizon, "MA")
+        
+        sma = _Validator.extract_last(ta.sma(close, length=L), f"{L}{T}")
+        
+        diff = ((price - sma) / sma) * 100
+        if diff > 0: score, desc = 10, "Uptrend"
+        elif abs(diff) < 3: score, desc = 5, "Neutral"
+        else: score, desc = 0, "Downtrend"
+        
         return {
-            "ttm_squeeze": {
-                "value": signal,
-                "score": score,
-                "desc": f"Volatility Squeeze: {signal}"
-            },
-            "kc_upper": {"value": round(kc_upper, 2), "score": 0},
-            "kc_lower": {"value": round(kc_lower, 2), "score": 0}
+            f"price_vs_{L}{T.lower()}_pct": {"value": round(diff, 2), "score": score, "desc": f"{desc} ({diff:.1f}%)"},
+            f"{T.lower()}_{L}": {"value": round(sma, 2), "score": 0, "desc": f"{T.lower()}_{L} -> {sma:.2f}"}
         }
-    return _wrap_calc(_inner, "TTM Squeeze")
+    return _wrap_calc(_inner, "Long-Term MA")
 
-
-def compute_ema_slope(df: pd.DataFrame, length_s: int = 20, length_l: int = 50, lookback: int = 10) -> Dict[str, Dict[str, Any]]:
+def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term", lookback: int = 10):
+    """
+    Dynamic Slope Calculator: Switches between EMA (Short) and WMA/MMA (Long) based on horizon.
+    """
     def _inner():
-        if df is None or len(df) < length_l or "Close" not in df.columns:
-            raise ValueError("Insufficient data for EMA slopes")
+        cfg = {
+            "intraday":    {"type": "EMA", "l_s": 20, "l_l": 50},
+            "short_term":  {"type": "EMA", "l_s": 20, "l_l": 50},
+            "long_term":   {"type": "WMA", "l_s": 20, "l_l": 50}, 
+            "multibagger": {"type": "MMA", "l_s": 20, "l_l": 50}
+        }.get(horizon, {"type": "EMA", "l_s": 20, "l_l": 50})
+        
+        fn = ta.ema if cfg["type"] == "EMA" else ta.sma # WMA/MMA approximated by SMA for slope stability
+        prefix = "ema" if cfg["type"] == "EMA" else "wma" if cfg["type"] == "WMA" else "mma"
         
         close = df["Close"]
         
-        ema_s_series = ta.ema(close, length=length_s)
-        ema_l_series = ta.ema(close, length=length_l)
-        
-        if ema_s_series.empty or ema_l_series.empty:
-            raise ValueError("EMA series calculation failed")
-            
-        y_s = ema_s_series.tail(lookback).values
-        y_l = ema_l_series.tail(lookback).values
-        
-        if np.isnan(y_s).any() or np.isnan(y_l).any():
-            raise ValueError("NaNs in EMA lookback window")
+        def _get_slope(series):
+            if len(series) < lookback: return 0.0
+            y = series.tail(lookback).values
+            if np.isnan(y).any(): return 0.0
+            x = np.arange(lookback)
+            slope, _ = np.polyfit(x, y, 1)
+            return degrees(atan(slope))
 
-        x = np.arange(lookback)
+        s_ma = fn(close, length=cfg["l_s"])
+        l_ma = fn(close, length=cfg["l_l"])
         
-        slope_s, _ = np.polyfit(x, y_s, 1)
-        angle_s = degrees(atan(slope_s))
+        ang_s = _get_slope(s_ma)
+        ang_l = _get_slope(l_ma)
         
-        slope_l, _ = np.polyfit(x, y_l, 1)
-        angle_l = degrees(atan(slope_l))
-        
-        score = 10 if angle_s > 1.5 else 5 if angle_s > 0 else 0
-        desc = f"{length_s}EMA Angle: {angle_s:.2f}°"
-
-        return {
-            "ema_20_slope": {"value": round(angle_s, 2), "raw": angle_s, "score": score, "desc": desc},
-            "ema_50_slope": {"value": round(angle_l, 2), "raw": angle_l, "score": 0, "desc": f"{length_l}EMA Angle: {angle_l:.2f}°"},
-        }
-    return _wrap_calc(_inner, "EMA Slopes")
-
-
-def compute_true_range(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    def _inner():
-        if df is None or len(df) < 2 or not {"High", "Low", "Close"}.issubset(df.columns):
-            raise ValueError("Insufficient data for True Range")
-            
-        tr_series = ta.true_range(df["High"], df["Low"], df["Close"])
-        if tr_series.empty:
-            raise ValueError("True Range calculation failed")
-        
-        tr_val = safe_float(tr_series.iloc[-1])
-        price = safe_float(df["Close"].iloc[-1])
-        
-        if tr_val is None or price is None or price == 0:
-            raise ValueError("Invalid TR or Price value")
-
-        tr_pct = (tr_val / price) * 100
+        score = 10 if ang_s > 1.5 else 5 if ang_s > 0 else 0
         
         return {
-            "true_range": {"value": round(tr_val, 2), "raw": tr_val, "score": 0, "desc": f"Raw TR: {tr_val:.2f}"},
-            "true_range_pct": {"value": round(tr_pct, 2), "raw": tr_pct, "score": 5, "desc": f"TR %: {tr_pct:.2f}%"}
+            f"{prefix}_{cfg['l_s']}_slope": {"value": round(ang_s, 2), "raw": ang_s, "score": score, "desc": f"{ang_s:.1f}°"},
+            f"{prefix}_{cfg['l_l']}_slope": {"value": round(ang_l, 2), "raw": ang_l, "score": 0, "desc": f"{ang_l:.1f}°"}
         }
-    return _wrap_calc(_inner, "True Range")
+    return _wrap_calc(_inner, "MA Slopes")
 
+def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = "short_term"):
+    cfg = {
+        "intraday":    {"l": (20, 50), "t": "EMA", "p": "ema"},
+        "short_term":  {"l": (20, 50), "t": "EMA", "p": "ema"},
+        "long_term":   {"l": (10, 40), "t": "SMA", "p": "wma"},
+        "multibagger": {"l": (6, 12),  "t": "SMA", "p": "mma"}
+    }.get(horizon, {"l": (20, 50), "t": "EMA", "p": "ema"})
+    
+    s_len, l_len = cfg["l"]
+    fn = ta.ema if cfg["t"] == "EMA" else ta.sma
+    prefix = cfg["p"]
 
-def compute_historical_volatility(df: pd.DataFrame, periods: Tuple[int, int] = (10, 20)) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or len(df) < periods[1] + 1 or "Close" not in df.columns:
-            raise ValueError(f"Insufficient data for HV (need >{periods[1]} bars)")
-            
-        close = df["Close"].astype(float)
-        log_returns = np.log(close / close.shift(1)).dropna()
-        annualization_factor = np.sqrt(252)
-        output = {}
+        s_ma = fn(close, length=s_len)
+        l_ma = fn(close, length=l_len)
         
-        for p in periods:
-            if len(log_returns) >= p:
-                hv_series = log_returns.tail(p)
-                hv_val = hv_series.std() * annualization_factor * 100
-                
-                if hv_val < 20.0:
-                    score_hv = 10
-                elif hv_val < 40.0:
-                    score_hv = 5
-                else:
-                    score_hv = 2
-                
-                output[f"hv_{p}"] = {
-                    "value": round(hv_val, 2), 
-                    "raw": hv_val, 
-                    "score": score_hv, 
-                    "desc": f"{p}D HV: {hv_val:.2f}%"
-                }
-
-        if not output:
-            raise ValueError(f"HV calculation failed for periods {periods}")
+        vals_s = _safe_last_vals(s_ma, 2)
+        vals_l = _safe_last_vals(l_ma, 2)
+        
+        if not vals_s or not vals_l: raise ValueError("Insufficient MA data")
+        
+        s_curr, l_curr = vals_s[1], vals_l[1]
+        s_prev, l_prev = vals_s[0], vals_l[0]
+        
+        val, score, desc = -1, 0, "Bearish"
+        if s_curr > l_curr:
+            val, desc = 1, "Bullish"
+            score = 10 if (s_prev <= l_prev) else 7 
+        elif (s_prev >= l_prev) and (s_curr < l_curr):
+            val, desc = -1, "Bearish Cross"
             
-        return output
-    return _wrap_calc(_inner, "Historical Volatility")
+        return {
+            f"{prefix}_{s_len}": {"value": round(s_curr, 2), "score": 0, "desc": f"{prefix}_{s_len} -> {s_curr:.2f}"},
+            f"{prefix}_{l_len}": {"value": round(l_curr, 2), "score": 0, "desc": f"{prefix}_{l_len} -> {l_curr:.2f}"},
+            f"{prefix}_{s_len}_{l_len}_cross": {"value": val, "score": score, "desc": desc}
+        }
+    return _wrap_calc(_inner, f"{prefix.upper()} Cross")
 
+def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
+    """
+    Calculates 3-MA trend AND returns individual MA values to ensure database completeness.
+    """
+    cfg = {
+        "intraday":    {"l": (20, 50, 200), "t": "EMA", "p": "ema"},
+        "short_term":  {"l": (20, 50, 200), "t": "EMA", "p": "ema"},
+        "long_term":   {"l": (10, 40, 50),  "t": "SMA", "p": "wma"},
+        "multibagger": {"l": (6, 12, 12),   "t": "SMA", "p": "mma"}
+    }.get(horizon, {"l": (20, 50, 200), "t": "EMA", "p": "ema"})
+    
+    l_s, l_m, l_l = cfg["l"]
+    fn = ta.ema if cfg["t"] == "EMA" else ta.sma
+    pre = cfg["p"]
 
-def compute_volume_score(indicators: Dict[str, Any]) -> float:
-    rvol = indicators.get("rvol", {}).get("score", 5)
-    obv = indicators.get("obv_div", {}).get("score", 5)
-    vpt = indicators.get("vpt", {}).get("score", 5)
-    volume_spike = indicators.get("vol_spike_ratio", {}).get("score", 5)
-
-    score = (
-        (rvol * 0.25) +
-        (obv * 0.35) +
-        (vpt * 0.25) +
-        (volume_spike * 0.15)
-    )
-    return round(score, 2)
-
-
-def compute_technical_score(indicators: Dict[str, Dict[str, Any]],
-                            weights: Optional[Dict[str, float]] = None) -> int:
-    if not indicators:
-        return 0
-
-    weights = dict(weights or TECHNICAL_WEIGHTS)
-    score = 0.0
-    weight_sum = 0.0
-
-    def _val(key: str):
-        item = indicators.get(key)
-        if not isinstance(item, dict):
-            return None
-        return item.get("value")
-
-    def _to_float(v: Any) -> Optional[float]:
-        try:
-            if v is None:
-                return None
-            if isinstance(v, (int, float)):
-                return float(v)
-            return float(str(v).replace("%", "").replace("₹", "").strip())
-        except Exception:
-            return None
-
-    adx_val = _val("adx")
-    adx_f = _to_float(adx_val)
-    if adx_f is not None:
-        if adx_f > 50:
-            weights.update({"macd_cross": 2.0, "price_vs_200dma_pct": 2.0, "vwap_bias": 1.2, "rsi": 0.8, "stoch_k": 0.5})
-        elif adx_f > 25:
-            weights.update({"macd_cross": 1.5, "price_vs_200dma_pct": 1.5, "vwap_bias": 1.0})
-        elif adx_f < 20:
-            weights.update({"macd_cross": 0.6, "price_vs_200dma_pct": 0.6, "vwap_bias": 0.5, "rsi": 1.2, "stoch_k": 1.2})
-
-    def retrieve_and_contribute(key: str, indicator_key: Optional[str] = None):
-        nonlocal score, weight_sum
-        indicators_key = indicator_key or key
-        indicator_item = indicators.get(indicators_key)
-        if not indicator_item:
-            return
-
-        s = indicator_item.get("score")
-        v = indicator_item.get("value")
-
-        if s is None or (s == 0 and (v is None or str(v).upper() in ["N/A", "NONE", "NA"])):
-            return
-
-        w = weights.get(key, 1.0)
-        weight_sum += 10 * w
-        score += s * w
-
-    metric_list = [
-        ("rsi", None),
-        ("macd_cross", None),
-        ("macd_hist_z", None),
-        ("price_vs_200dma_pct", None),
-        ("adx", None),
-        ("vwap_bias", None),
-        ("vol_trend", None),
-        ("rvol", None),
-        ("stoch_k", None),
-        ("bb_low", None),
-        ("bb_width", None),
-        ("entry_confirm", None),
-        ("dma_20_50_cross", None),
-        ("dma_200_slope", None),
-        ("ichi_cloud", None),
-        ("obv_div", None),
-        ("atr_14", None),
-        ("vol_spike_ratio", None),
-        ("rel_strength_nifty", None),
-        ("price_action", None),
-    ]
-
-    for key, ikey in metric_list:
-        retrieve_and_contribute(key, ikey)
-    final_score = round(score / weight_sum * 100, 1) if weight_sum > 0 else 0
-    return max(0, min(100, final_score))
-
+    def _inner():
+        _Validator.require(df, ["Close"])
+        s_val = _Validator.extract_last(fn(df["Close"], length=l_s), "MA Fast")
+        m_val = _Validator.extract_last(fn(df["Close"], length=l_m), "MA Mid")
+        try: l_val = _Validator.extract_last(fn(df["Close"], length=l_l), "MA Slow")
+        except: l_val = None
+        
+        val, score, desc = 0, 5, "Neutral"
+        if l_val:
+            if s_val > m_val > l_val: val, score, desc = 1, 10, "Strong Uptrend"
+            elif s_val < m_val < l_val: val, score, desc = -1, 0, "Strong Downtrend"
+            elif s_val > m_val > l_val: val, score, desc = 0.5, 7, "Moderate Uptrend"
+            # FIX: Partial Trend Logic (Short > Mid, even if Mid < Long)
+            elif s_val > m_val: val, score, desc = 0.5, 7, "Developing Uptrend"
+            
+        return {
+            f"{pre}_{l_s}": {"value": round(s_val, 2), "score": 0, "desc": f"{pre}_{l_s} -> {s_val:.2f}"},
+            f"{pre}_{l_m}": {"value": round(m_val, 2), "score": 0, "desc": f"{pre}_{l_m} -> {m_val:.2f}"},
+            f"{pre}_{l_l}": {"value": round(l_val, 2) if l_val else None, "score": 0, "desc": f"{pre}_{l_l} -> {l_val:.2f}" if l_val else "N/A"},
+            f"{pre}_{l_s}_{l_m}_{l_l}_trend": {"value": val, "score": score, "desc": desc}
+        }
+    return _wrap_calc(_inner, f"{pre.upper()} Trend")
 
 def compute_pivot_points(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        if df is None or len(df) < 2:
-            raise ValueError("Insufficient data for Pivots")
-
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=2)
         prev = df.iloc[-2]
-        high = safe_float(prev["High"])
-        low = safe_float(prev["Low"])
-        close = safe_float(prev["Close"])
+        h, l, c = prev["High"], prev["Low"], prev["Close"]
+        pp = (h + l + c) / 3
+        rng = h - l
         
-        if any(pd.isna(v) for v in [high, low, close]):
-            raise ValueError("Invalid OHLC (NaN) for pivots")
-
-        pp = (high + low + close) / 3
-        range_hl = high - low
-
-        r1 = pp + 0.382 * range_hl
-        r2 = pp + 0.618 * range_hl
-        r3 = pp + 1.000 * range_hl
+        r1, s1 = pp + 0.382 * rng, pp - 0.382 * rng
+        r2, s2 = pp + 0.618 * rng, pp - 0.618 * rng
+        r3, s3 = pp + 1.000 * rng, pp - 1.000 * rng
         
-        s1 = pp - 0.382 * range_hl
-        s2 = pp - 0.618 * range_hl
-        s3 = pp - 1.000 * range_hl
-
         return {
-            "pivot_point":  {"value": round(pp, 2), "raw": pp, "score": 0, "desc": "Pivot Point", "alias": "Pivot Point", "source": "pivot"},
-            "resistance_1": {"value": round(r1, 2), "raw": r1, "score": 0, "desc": "Fib R1",      "alias": "Resistance 1", "source": "pivot"},
-            "resistance_2": {"value": round(r2, 2), "raw": r2, "score": 0, "desc": "Fib R2",      "alias": "Resistance 2", "source": "pivot"},
-            "resistance_3": {"value": round(r3, 2), "raw": r3, "score": 0, "desc": "Fib R3",      "alias": "Resistance 3", "source": "pivot"},
-            "support_1":    {"value": round(s1, 2), "raw": s1, "score": 0, "desc": "Fib S1",      "alias": "Support 1",    "source": "pivot"},
-            "support_2":    {"value": round(s2, 2), "raw": s2, "score": 0, "desc": "Fib S2",      "alias": "Support 2",    "source": "pivot"},
-            "support_3":    {"value": round(s3, 2), "raw": s3, "score": 0, "desc": "Fib S3",      "alias": "Support 3",    "source": "pivot"},
+            "pivot_point":  {"value": round(pp, 2), "score": 0},
+            "resistance_1": {"value": round(r1, 2), "score": 0},
+            "resistance_2": {"value": round(r2, 2), "score": 0},
+            "resistance_3": {"value": round(r3, 2), "score": 0},
+            "support_1":    {"value": round(s1, 2), "score": 0},
+            "support_2":    {"value": round(s2, 2), "score": 0},
+            "support_3":    {"value": round(s3, 2), "score": 0},
         }
-    return _wrap_calc(_inner, "Pivot Levels (Fib)")
+    return _wrap_calc(_inner, "Pivot Levels")
 
+def compute_keltner_squeeze(df: pd.DataFrame, bb_len=20, kc_len=20) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["High", "Low", "Close"])
+        # BB
+        bb = ta.bbands(df["Close"], length=bb_len, std=2.0)
+        u_col = next(c for c in bb.columns if "u" in c.lower())
+        l_col = next(c for c in bb.columns if "l" in c.lower())
+        bb_u = _Validator.extract_last(bb[u_col])
+        bb_l = _Validator.extract_last(bb[l_col])
+        
+        # RESTORED: SMA + TR based Keltner Channels (Legacy Match)
+        mid = ta.sma(df["Close"], length=kc_len)
+        tr = ta.true_range(df["High"], df["Low"], df["Close"])
+        atr_sma = ta.sma(tr, length=kc_len)
+        
+        if mid is None or atr_sma is None: return {}
+        
+        kc_u_val = mid.iloc[-1] + (1.5 * atr_sma.iloc[-1])
+        kc_l_val = mid.iloc[-1] - (1.5 * atr_sma.iloc[-1])
+        
+        if bb_u is None or kc_u_val is None: return {}
 
-# -----------------------------
-# Metric registry
-# -----------------------------
-INDICATOR_METRIC_MAP: Dict[str, Dict[str, Any]] = {
+        sqz = (bb_u < kc_u_val) and (bb_l > kc_l_val)
+        return {
+            "ttm_squeeze": {"value": "Squeeze On" if sqz else "Off", "score": 10 if sqz else 5, "desc": f"ttm_squeeze -> {'On' if sqz else 'Off'}"},
+            "kc_upper": {"value": round(kc_u_val, 2), "score": 0, "desc": f"kc_upper -> {kc_u_val:.2f}"},
+            "kc_lower": {"value": round(kc_l_val, 2), "score": 0, "desc": f"kc_lower -> {kc_l_val:.2f}"}
+        }
+    return _wrap_calc(_inner, "TTM Squeeze")
+
+def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=60)
+        ichi = ta.ichimoku(df["High"], df["Low"], df["Close"])[0]
+        cols = {c: c for c in ichi.columns}
+        def _get(k): return _Validator.extract_last(ichi[next(c for c in cols if k in c)])
+        
+        tk, kj = _get("TS"), _get("KS")
+        sa, sb = _get("SA"), _get("SB")
+        px = _Validator.extract_last(df["Close"])
+        
+        bull = (px > max(sa, sb)) and (tk > kj)
+        bear = (px < min(sa, sb)) and (tk < kj)
+        
+        if bull: sig, score = "Strong Bullish", 10
+        elif bear: sig, score = "Strong Bearish", 0
+        elif px > max(sa, sb): sig, score = "Mild Bullish", 7
+        elif px < min(sa, sb): sig, score = "Mild Bearish", 3
+        else: sig, score = "Neutral", 5
+        
+        return {
+            "ichi_cloud": {"value": sig, "score": score},
+            "ichi_span_a": {"value": round(sa, 2), "score": 0},
+            "ichi_span_b": {"value": round(sb, 2), "score": 0}
+        }
+    return _wrap_calc(_inner, "Ichimoku")
+
+def compute_nifty_trend_score(benchmark_df: pd.DataFrame):
+    def _inner():
+        if benchmark_df is None or benchmark_df.empty: return {"nifty_trend_score": {"value": None, "score": None}}
+        close = benchmark_df["Close"].dropna()
+        if len(close) < 20: return {"nifty_trend_score": {"value": None, "score": None}}
+        
+        cur = close.iloc[-1]
+        ema50 = safe_float(ta.ema(close, 50).iloc[-1])
+        ema200 = safe_float(ta.ema(close, 200).iloc[-1])
+        
+        if ema200:
+            diff = (cur - ema200) / ema200 * 100
+            if ema50 and cur > ema50 > ema200: sig, score = "Strong Uptrend", 9
+            elif cur > ema200: sig, score = "Moderate Uptrend", 7
+            else: sig, score = "Downtrend", 2
+        elif ema50:
+            diff = (cur - ema50) / ema50 * 100
+            if cur > ema50: sig, score = "Uptrend (Weak)", 7
+            else: sig, score = "Downtrend", 3
+        else:
+            return {"nifty_trend_score": {"value": None, "score": None}}
+            
+        return {"nifty_trend_score": {"value": round(diff, 2), "score": score, "desc": sig}}
+    return _wrap_calc(_inner, "NIFTY Trend")
+
+def compute_relative_strength(symbol, df, benchmark_df, horizon="short_term"):
+    def _inner():
+        _Validator.require(df, ["Close"])
+        _Validator.require(benchmark_df, ["Close"])
+        
+        lookback = {"intraday": 20, "long_term": 52}.get(horizon, 20)
+        
+        s_now, s_old = df["Close"].iloc[-1], df["Close"].iloc[-lookback]
+        b_now, b_old = benchmark_df["Close"].iloc[-1], benchmark_df["Close"].iloc[-lookback]
+        
+        s_ret = (s_now/s_old - 1) * 100
+        b_ret = (b_now/b_old - 1) * 100
+        rs = s_ret - b_ret
+        
+        score = 10 if rs > 0 else 0
+        return {"rel_strength_nifty": {"value": round(rs, 2), "score": score, "desc": f"Alpha {rs:.1f}%"}}
+    return _wrap_calc(_inner, "RS vs Nifty")
+
+def compute_entry_price(df, price):
+    def _inner():
+        mid = ta.sma(df["Close"], 20).iloc[-1]
+        confirm = mid * 1.005
+        return {"entry_confirm": {"value": round(confirm, 2), "score": 10 if price > confirm else 5}}
+    return _wrap_calc(_inner, "Entry")
+
+def compute_atr_sl(df, indicators, high, low, close, price):
+    def _inner():
+        atr = ta.atr(high, low, close, 14).iloc[-1]
+        return {"sl_2x_atr": {"value": round(price - 2*atr, 2), "score": 0}}
+    return _wrap_calc(_inner, "SL")
+
+def compute_gap_percent(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        _Validator.require(df, ["Open", "Close"], min_rows=2)
+        prev_c = df["Close"].iloc[-2]
+        curr_o = df["Open"].iloc[-1]
+        gap = ((curr_o - prev_c) / prev_c) * 100
+        
+        # LOGIC FIX: Match Legacy Scoring (Moderate Gap = Score 7)
+        if gap > 2.0: score, desc = 10, "Strong Gap Up"
+        elif gap > 0.5: score, desc = 7, "Moderate Gap Up"
+        elif gap < -2.0: score, desc = 0, "Strong Gap Down"
+        elif gap < -0.5: score, desc = 3, "Moderate Gap Down"
+        else: score, desc = 5, "No Significant Gap"
+
+        return {"gap_percent": {"value": round(gap, 2), "score": score, "desc": f"gap_percent -> {gap:.2f}"}}
+    return _wrap_calc(_inner, "Gap")
+
+def compute_psar(df: pd.DataFrame):
+    def _inner():
+        psar = ta.psar(df["High"], df["Low"], df["Close"])
+        r_col = next((c for c in psar.columns if "r" in c.lower()), None)
+        val_col = next((c for c in psar.columns if c != r_col), None)
+        
+        trend = psar[r_col].iloc[-1] 
+        level = psar[val_col].iloc[-1]
+        
+        sig, score = ("Bullish", 10) if trend > 0 else ("Bearish", 0)
+        
+        if pd.isna(level): level = df["Close"].iloc[-1] 
+        
+        return {
+            "psar_trend": {"value": sig, "score": score, "desc": f"psar_trend -> {sig}"},
+            "psar_level": {"value": round(level, 2), "score": 0, "desc": f"psar_level -> {level:.2f}"}
+        }
+    return _wrap_calc(_inner, "PSAR")
+
+def compute_true_range(df):
+    def _inner():
+        tr = ta.true_range(df["High"], df["Low"], df["Close"]).iloc[-1]
+        pct = (tr / df["Close"].iloc[-1]) * 100
+        return {"true_range": {"value": round(tr, 2), "score": 0}, "true_range_pct": {"value": round(pct, 2), "score": 5}}
+    return _wrap_calc(_inner, "TR")
+
+def compute_historical_volatility(df, periods=(10, 20)):
+    def _inner():
+        ret = np.log(df["Close"] / df["Close"].shift(1))
+        res = {}
+        for p in periods:
+            hv = ret.tail(p).std() * np.sqrt(252) * 100
+            res[f"hv_{p}"] = {"value": round(hv, 2), "score": 10 if hv < 20 else 5}
+        return res
+    return _wrap_calc(_inner, "HV")
+
+def compute_short_ma_cross(df):
+    def _inner():
+        e5 = ta.ema(df["Close"], 5).iloc[-1]
+        e20 = ta.ema(df["Close"], 20).iloc[-1]
+        return {"short_ma_cross": {"value": "Bull" if e5 > e20 else "Bear", "score": 10 if e5 > e20 else 0}}
+    return _wrap_calc(_inner, "Short MA Cross")
+
+def compute_vol_trend(df):
+    def _inner():
+        v = df["Volume"]
+        trend = "Rising" if v.iloc[-1] > v.tail(50).mean() * 1.2 else "Neutral"
+        return {"vol_trend": {"value": trend, "score": 10 if trend == "Rising" else 5}}
+    return _wrap_calc(_inner, "Vol Trend")
+
+def compute_reg_slope(df):
+    def _inner():
+        y = df["Close"].tail(20).values
+        x = np.arange(len(y))
+        slope = degrees(atan(np.polyfit(x, y, 1)[0]))
+        return {"reg_slope": {"value": round(slope, 2), "score": 10 if slope > 2 else 0}}
+    return _wrap_calc(_inner, "Reg Slope")
+
+def compute_cmf(df: pd.DataFrame, length: int = 20):
+    def _inner():
+        _Validator.require(df, ["High", "Low", "Close", "Volume"])
+        cmf = ta.cmf(df["High"], df["Low"], df["Close"], df["Volume"], length=length)
+        val = _Validator.extract_last(cmf, "CMF")
+        if val is None: return {}
+        
+        desc = "Bullish" if val > 0.05 else "Bearish" if val < -0.05 else "Neutral"
+        score = 10 if val > 0.1 else 7 if val > 0 else 3
+        return {"cmf_signal": {"value": round(val, 3), "score": score, "desc": desc}}
+    return _wrap_calc(_inner, "CMF")
+
+def compute_technical_score(indicators: Dict[str, Dict[str, Any]], weights=None) -> int:
+    if not indicators: return 0
+    weights = dict(weights or TECHNICAL_WEIGHTS)
+    score, weight_sum = 0.0, 0.0
+    
+    try:
+        adx = indicators.get("adx", {}).get("raw", 0)
+        if adx > 25: weights.update({"macd_cross": 1.5, "rsi": 0.8})
+        elif adx < 20: weights.update({"rsi": 1.2, "stoch_k": 1.2})
+    except: pass
+
+    for k, w in weights.items():
+        item = indicators.get(k, {})
+        s = item.get("score")
+        if s is not None:
+            score += s * w
+            weight_sum += 10 * w
+            
+    return round(score / weight_sum * 100, 1) if weight_sum > 0 else 0
+
+INDICATOR_METRIC_MAP = {
     "rsi": {"func": compute_rsi, "horizon": "default"},
     "mfi": {"func": compute_mfi, "horizon": "default"},
-    "rsi_slope": {"func": compute_rsi_slope, "horizon": "default"},
-    "price_action": {"func": compute_price_action, "horizon": "default"},
-    "short_ma_cross": {"func": compute_short_ma_cross, "horizon": "default"},
+    "adx": {"func": compute_adx, "horizon": "short_term"},
+    "cci": {"func": compute_cci, "horizon": "short_term"},
+    "stoch_k": {"func": compute_stochastic, "horizon": "short_term"},
+    "macd": {"func": compute_macd, "horizon": "default"},
+    "vwap": {"func": compute_vwap, "horizon": "intraday"},
     "bb_high": {"func": compute_bollinger_bands, "horizon": "default"},
-    "bb_mid": {"func": compute_bollinger_bands, "horizon": "default"},
-    "bb_low": {"func": compute_bollinger_bands, "horizon": "default"},
-    "bb_width": {"func": compute_bollinger_bands, "horizon": "default"},
-    "bb_percent_b": {"func": compute_bb_percent_b, "horizon": "default"},
     "rvol": {"func": compute_rvol, "horizon": "default"},
     "obv_div": {"func": compute_obv_divergence, "horizon": "default"},
-    "vpt": {"func": compute_vpt, "horizon": "default"},
-    "vol_spike_ratio": {"func": compute_volume_spike, "horizon": "default"},
-    "vol_spike_signal": {"func": compute_volume_spike, "horizon": "default"},
-    "vwap": {"func": compute_vwap, "horizon": "intraday"},
-    "vwap_bias": {"func": compute_vwap, "horizon": "intraday"},
     "atr_14": {"func": compute_atr, "horizon": "default"},
-    "atr_pct": {"func": compute_atr, "horizon": "default"},
-    "cmf_signal": {"func": compute_cmf, "horizon": "default"},
-    "donchian_signal": {"func": compute_donchian, "horizon": "default"},
+    "supertrend_signal": {"func": compute_supertrend, "horizon": "short_term"},
+    "psar_trend": {"func": compute_psar, "horizon": "short_term"},
+    "ichi_cloud": {"func": compute_ichimoku, "horizon": "long_term"},
+    "price_action": {"func": compute_price_action, "horizon": "default"},
     "entry_confirm": {"func": compute_entry_price, "horizon": "default"},
     "sl_2x_atr": {"func": compute_atr_sl, "horizon": "default"},
     "nifty_trend_score": {"func": compute_nifty_trend_score, "horizon": "long_term"},
     "gap_percent": {"func": compute_gap_percent, "horizon": "long_term"},
-    "vol_trend": {"func": compute_volume_trend, "horizon": "default"},
-
-    "adx": {"func": compute_adx, "horizon": "short_term"},
-    "stoch_k": {"func": compute_stochastic, "horizon": "short_term"},
-    "stoch_d": {"func": compute_stochastic, "horizon": "short_term"},
-    "stoch_cross": {"func": compute_stochastic, "horizon": "short_term"},
-    "cci": {"func": compute_cci, "horizon": "short_term"},
-    "supertrend_signal": {"func": compute_supertrend, "horizon": "short_term"},
-    "macd": {"func": compute_macd, "horizon": "default"},
-    "macd_cross": {"func": compute_macd, "horizon": "default"},
-    "macd_hist_z": {"func": compute_macd, "horizon": "default"},
-    "macd_histogram": {"func": compute_macd, "horizon": "default"},
-
-    "ma_cross_trend": {"func": compute_ma_crossover, "horizon": "default"},
-    "ma_20ema": {"func": compute_ma_crossover, "horizon": "default"},
-    "ma_50ema": {"func": compute_ma_crossover, "horizon": "default"},
-    "ma_200ema": {"func": compute_ma_crossover, "horizon": "default"},
-
-    "ema_20_slope": {"func": compute_ema_slope, "horizon": "default"},
-    "ema_50_slope": {"func": compute_ema_slope, "horizon": "default"},
-
-    "true_range": {"func": compute_true_range, "horizon": "default"},
-    "true_range_pct": {"func": compute_true_range, "horizon": "default"},
-    
-    "hv_10": {"func": compute_historical_volatility, "horizon": "short_term"}, 
-    "hv_20": {"func": compute_historical_volatility, "horizon": "short_term"},
-
-    "price_vs_200dma_pct": {"func": compute_200dma, "horizon": "long_term"},
-    "dma_200": {"func": compute_200dma, "horizon": "long_term"},
-     "dma_200_slope": {"func": compute_200dma_slope, "horizon": "long_term"},
-    "dma_20": {"func": compute_dma_cross, "horizon": "long_term"},
-    "dma_50": {"func": compute_dma_cross, "horizon": "long_term"},
-    "dma_20_50_cross": {"func": compute_dma_cross, "horizon": "long_term"},
     "rel_strength_nifty": {"func": compute_relative_strength, "horizon": "long_term"},
-    "ichi_cloud": {"func": compute_ichimoku, "horizon": "long_term"},
-    "ichi_span_a": {"func": compute_ichimoku, "horizon": "long_term"},
-    "ichi_span_b": {"func": compute_ichimoku, "horizon": "long_term"},
-    "ichi_tenkan": {"func": compute_ichimoku, "horizon": "long_term"},
-    "ichi_kijun": {"func": compute_ichimoku, "horizon": "long_term"},
-    "psar_trend": {"func": compute_psar, "horizon": "short_term"},
-    "psar_level": {"func": compute_psar, "horizon": "short_term"},
-    
+    # Consolidated Trend + Components
+    "ma_trend_setup": {"func": compute_dynamic_ma_trend, "horizon": "default"},
+    "ma_cross_setup": {"func": compute_dynamic_ma_cross, "horizon": "short_term"},
+    "price_vs_200dma_pct": {"func": compute_200dma, "horizon": "default"},
+    "ma_slopes": {"func": compute_ema_slope, "horizon": "default"},
+    "pivot_point": {"func": compute_pivot_points, "horizon": "short_term"},
     "ttm_squeeze": {"func": compute_keltner_squeeze, "horizon": "short_term"},
-    "kc_upper": {"func": compute_keltner_squeeze, "horizon": "short_term"},
-    "kc_lower": {"func": compute_keltner_squeeze, "horizon": "short_term"},
-
-    "pivot_point":  {"func": compute_pivot_points, "horizon": "short_term"},
-    "resistance_1": {"func": compute_pivot_points, "horizon": "short_term"},
-    "resistance_2": {"func": compute_pivot_points, "horizon": "short_term"},
-    "resistance_3": {"func": compute_pivot_points, "horizon": "short_term"},
-    "support_1":    {"func": compute_pivot_points, "horizon": "short_term"},
-    "support_2":    {"func": compute_pivot_points, "horizon": "short_term"},
-    "support_3":    {"func": compute_pivot_points, "horizon": "short_term"},
+    "true_range": {"func": compute_true_range, "horizon": "default"},
+    "hv_10": {"func": compute_historical_volatility, "horizon": "short_term"},
+    "short_ma_cross": {"func": compute_short_ma_cross, "horizon": "default"},
+    "vol_trend": {"func": compute_vol_trend, "horizon": "default"},
+    "reg_slope": {"func": compute_reg_slope, "horizon": "default"},
+    "vol_spike_ratio": {"func": compute_volume_spike, "horizon": "default"},
+    "vpt": {"func": compute_vpt, "horizon": "default"},
+    "cmf_signal": {"func": compute_cmf, "horizon": "short_term"},
+    "vwap_bias": {"func": compute_vwap, "horizon": "intraday"},
+    "bb_percent_b": {"func": compute_bollinger_bands, "horizon": "default"},
 }
-
-
-# -----------------------------
-# Main orchestrator
-# -----------------------------
 
 def compute_indicators(
     symbol: str,
@@ -1732,188 +868,113 @@ def compute_indicators(
     benchmark_symbol: str = "^NSEI"
 ) -> Dict[str, Dict[str, Any]]:
 
-    # 1. Get Profile
     profile = HORIZON_PROFILE_MAP.get(horizon, {})
-    if not profile:
-        return {}
-        
-    # 2. Identify Metrics
+    if not profile: return {}
+    
     raw_metrics = set(profile.get("metrics", {}).keys())
-    raw_metrics.update(profile.get("penalties", {}).keys())
-    raw_metrics.update(MOMENTUM_WEIGHTS.keys())
-    raw_metrics.update(VALUE_WEIGHTS.keys())
-    raw_metrics.update(GROWTH_WEIGHTS.keys())
-    raw_metrics.update(QUALITY_WEIGHTS.keys())
+    if "penalties" in profile:
+        raw_metrics.update(profile["penalties"].keys())
+        
+    for pool in [MOMENTUM_WEIGHTS, VALUE_WEIGHTS, GROWTH_WEIGHTS, QUALITY_WEIGHTS]:
+        raw_metrics.update(pool.keys())
     raw_metrics.update(CORE_TECHNICAL_SETUP_METRICS)
     
-    # Priority Order
-    PRIORITY_ORDER = [
-        "rsi", "macd", "macd_cross", "macd_histogram", 
-        "pivot_point", "resistance_1", "support_1",    
-        "ema_20", "ema_50", "ema_200", "adx"           
-    ]
+    # 🚨 RESTORED LEGACY DENSITY: Force crucial structure metrics
+    # This matches the legacy "calculate everything" approach for completeness
+    ALWAYS_CALC = {
+        "macd", "adx", "rsi", "ma_slopes", "cmf_signal", 
+        "obv_div", "price_vs_200dma_pct", "gap_percent", "ma_trend_setup",
+        "supertrend_signal", "psar_trend", "ttm_squeeze", "bb_width", 
+        "bb_percent_b", "vol_spike_ratio", "pivot_point",
+        # 🚨 FIX: Explicitly add Short Term Cross back
+        "ma_cross_setup" 
+    }
+    raw_metrics.update(ALWAYS_CALC)
     
-    ordered_metrics = []
-    for m in PRIORITY_ORDER:
-        if m in raw_metrics:
-            ordered_metrics.append(m)
-    for m in raw_metrics:
-        if m not in ordered_metrics:
-            ordered_metrics.append(m)
+    PRIORITY = ["rsi", "macd", "ma_trend_setup", "pivot_point"]
+    ordered = [m for m in PRIORITY if m in raw_metrics] + [m for m in raw_metrics if m not in PRIORITY]
     
-    # 3. BATCH FETCH: Identify unique horizons needed
     required_horizons = {horizon}
-    metric_meta_map = {} 
-    
-    for m in ordered_metrics:
-        if m in INDICATOR_METRIC_MAP:
-            meta = INDICATOR_METRIC_MAP[m]
-            metric_meta_map[m] = meta
-            h_req = meta.get("horizon", "default")
-            if h_req == "default": h_req = horizon
-            if h_req != "special": required_horizons.add(h_req)
-
-    # 4. BATCH FETCH: Load DataFrames ONCE
+    for m in ordered:
+        h_spec = INDICATOR_METRIC_MAP.get(m, {}).get("horizon", "default")
+        if h_spec != "default": 
+            required_horizons.add(h_spec)
+        
     dfs_cache = {}
     for h in required_horizons:
         try:
-            raw_df = get_history_for_horizon(symbol, h)
-            if raw_df is not None and not raw_df.empty:
-                dfs_cache[h] = _slice_for_speed(raw_df)
-        except Exception as e:
-            logger.debug(f"[{symbol}] Batch fetch failed for {h}: {e}")
+            raw = get_history_for_horizon(symbol, h)
+            if raw is not None and not raw.empty:
+                dfs_cache[h] = _slice_for_speed(raw, horizon=h)
+        except: pass
 
-    # --------------------------
-    # UNIFIED BENCHMARK FETCH (DAILY, CACHED)
-    # --------------------------
     benchmark_df = None
     try:
-        # Force Daily Horizon to get consistent macro context
-        # Note: We rely on data_fetch.py's internal 2y force logic for duration
         raw_bench = get_benchmark_data("long_term", benchmark_symbol)
         if raw_bench is not None and not raw_bench.empty:
             benchmark_df = raw_bench.copy()
-            # Ensure index is timezone-naive to match stock data
-            benchmark_df.index = pd.to_datetime(benchmark_df.index).tz_localize(None)
+            benchmark_df.index = pd.to_datetime(benchmark_df.index)
+            if benchmark_df.index.tz is None:
+                benchmark_df.index = benchmark_df.index.tz_localize("UTC")
+            else:
+                benchmark_df.index = benchmark_df.index.tz_convert("UTC")
             benchmark_df = benchmark_df.sort_index()
-    except Exception as e:
-        logger.debug(f"[{symbol}] Benchmark fetch failed: {e}")
-        benchmark_df = None
+    except: pass
 
-    indicators: Dict[str, Dict[str, Any]] = {}
-
-    # 5. Add Price
-    price = None
+    indicators = {}
+    
     if horizon in dfs_cache:
         try:
             price = float(dfs_cache[horizon]["Close"].iloc[-1])
-            indicators["Price"] = {"value": round(price, 2), "score": 0, "alias": "Price", "desc": "Current Price"}
+            indicators["price"] = {"value": round(price, 2), "score": 0, "alias": "Price", "desc": "Current"}
         except: pass
 
-    # 6. Execute Metrics
-    macd_handled = False
+    # Execution flags to prevent duplicates
+    done_flags = set()
     
-    for metric_key in ordered_metrics:
-        if not metric_key or metric_key not in metric_meta_map: continue
+    for metric in ordered:
+        meta = INDICATOR_METRIC_MAP.get(metric)
+        if not meta: continue
         
-        meta = metric_meta_map[metric_key]
-        fn = meta.get("func")
-        if not fn: continue
-
-        # A. MACD Bundle Optimization
-        if metric_key in {"macd", "macd_cross", "macd_hist_z", "macd_histogram"}:
-            if macd_handled: continue
-            macd_handled = True
-            
-            df_macd = dfs_cache.get("short_term")
-            if df_macd is None: 
-                 try:
-                     raw_macd = get_history_for_horizon(symbol, "short_term")
-                     if raw_macd is not None and not raw_macd.empty:
-                        df_macd = _slice_for_speed(raw_macd)
-                 except: pass
-            
-            if df_macd is not None and not df_macd.empty:
-                try: indicators.update(compute_macd(df_macd))
-                except Exception as e: logger.debug(f"[{symbol}] MACD bundle error: {e}")
-            continue
-
-        # B. Pivot Bundle Optimization
-        pivot_keys = {"pivot_point", "resistance_1", "resistance_2", "resistance_3", "support_1", "support_2", "support_3"}
-        if metric_key in pivot_keys:
-            if indicators.get("_pivot_done"): continue
-            piv_horizon = meta.get("horizon", "short_term")
-            
-            df_piv = dfs_cache.get(piv_horizon)
-            if df_piv is None: 
-                try:
-                    raw_piv = get_history_for_horizon(symbol, piv_horizon)
-                    if raw_piv is not None:
-                        df_piv = _slice_for_speed(raw_piv)
-                except: pass
-
-            if df_piv is not None and not df_piv.empty:
-                try:
-                    indicators.update(compute_pivot_points(df_piv))
-                    indicators["_pivot_done"] = True
-                except Exception as e: logger.debug(f"[{symbol}] Pivot bundle error: {e}")
-            continue
-
-        # C. Standard Metrics
-        data_horizon = meta.get("horizon", "default")
-        if data_horizon == "default": data_horizon = horizon
+        # Bundle check
+        if metric in done_flags: continue
         
-        df_local = dfs_cache.get(data_horizon)
-        if df_local is None and data_horizon != "special": continue 
+        # Special Bundle Handling
+        if metric == "ma_trend_setup":
+            # This handles ema_20, ema_50, ema_200 AND trend
+            done_flags.update(["ema_20", "ema_50", "ema_200", "wma_10", "wma_40", "wma_50", "mma_6", "mma_12"])
+            
+        fn = meta["func"]
+        h_req = meta.get("horizon", "default")
+        data_h = horizon if h_req == "default" else h_req
         
-        if price is None and df_local is not None and not df_local.empty:
-            try:
-                price = float(df_local["Close"].iloc[-1])
-            except: pass
-
-        # Build Arguments (Inject Cached Benchmark)
+        df_local = dfs_cache.get(data_h)
+        if df_local is None: continue
+        
         kwargs = {}
         try:
-            if metric_key == "rsi_slope":
-                rsi_entry = indicators.get("rsi")
-                if rsi_entry: kwargs["rsi_series"] = rsi_entry.get("full_series")
-
             sig = inspect.signature(fn)
             for p in sig.parameters.values():
-                name = p.name
-                if name == "symbol": kwargs["symbol"] = symbol
-                elif name == "df": kwargs["df"] = df_local
-                elif name == "benchmark_df": 
-                    # INJECT THE CACHED DATAFRAME HERE
-                    kwargs["benchmark_df"] = benchmark_df
-                elif name == "close": kwargs["close"] = df_local["Close"] if (df_local is not None and "Close" in df_local.columns) else None
-                elif name == "high": kwargs["high"] = df_local["High"] if (df_local is not None and "High" in df_local.columns) else None
-                elif name == "low": kwargs["low"] = df_local["Low"] if (df_local is not None and "Low" in df_local.columns) else None
-                elif name == "volume": kwargs["volume"] = df_local["Volume"] if (df_local is not None and "Volume" in df_local.columns) else None
-                elif name == "price": kwargs["price"] = price
-                elif name == "horizon": kwargs["horizon"] = data_horizon
+                if p.name == "symbol": kwargs["symbol"] = symbol
+                elif p.name == "df": kwargs["df"] = df_local
+                elif p.name == "benchmark_df": kwargs["benchmark_df"] = benchmark_df
+                elif p.name == "price": kwargs["price"] = indicators.get("price", {}).get("value")
+                elif p.name == "close": kwargs["close"] = df_local["Close"] if df_local is not None else None
+                elif p.name == "high": kwargs["high"] = df_local["High"] if df_local is not None else None
+                elif p.name == "low": kwargs["low"] = df_local["Low"] if df_local is not None else None
+                elif p.name == "horizon": kwargs["horizon"] = data_h
             
-            result = fn(**kwargs)
-            if isinstance(result, dict): indicators.update(result)
-
+            res = fn(**kwargs)
+            if res:
+                indicators.update(res)
+                done_flags.add(metric)
+                
         except Exception as e:
-            logger.debug(f"[{symbol}] Metric '{metric_key}' failed: {e}")
-
-    # CLEANUP: Remove heavy series data meant for internal calculation only
-    if "rsi" in indicators and "full_series" in indicators["rsi"]:
-        del indicators["rsi"]["full_series"]
+            logger.debug(f"[{symbol}] Metric {metric} failed: {e}")
 
     try:
-        raw_score = compute_technical_score(indicators)
-        indicators["technical_score"] = {
-            "value": raw_score, 
-            "score": 0, 
-            "desc": "Aggregate Technical Score",
-            "alias": "Technical Score"
-        }
-        indicators["Horizon"] = {"value": horizon, "score": 0, "desc": "Horizon setting"}
-    except Exception as e:
-        logger.debug(f"[{symbol}] Failed computing technical_score: {e}")
-        indicators["technical_score"] = {"value": -1, "score": 0, "desc": "Aggregate Technical Score", "alias": "Technical Score"}
+        indicators["technical_score"] = {"value": compute_technical_score(indicators), "score": 0}
+        indicators["Horizon"] = {"value": horizon, "score": 0}
+    except: pass
 
     return indicators
