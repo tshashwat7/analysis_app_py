@@ -28,6 +28,13 @@ ATR_MULTIPLIERS = {
     "intraday": {"tp": 2.0, "sl": 1.5}
 }
 
+ATR_HORIZON_CONFIG = {
+    "intraday": 10,     # Faster reaction for scalping
+    "short_term": 14,   # Standard Swing default
+    "long_term": 20,    # Smoother for weekly charts
+    "multibagger": 12   # Monthly (1 Year Rolling)
+}
+
 flowchart_mapping = {
     # 1️⃣ TECHNICAL INDICATORS
     "RSI": ("quick_score", None, "RSI"),

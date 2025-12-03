@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Shared helpers
 from config.constants import (
-    CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, 
+    ATR_HORIZON_CONFIG, ATR_MULTIPLIERS, CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, 
     QUALITY_WEIGHTS, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, 
     TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
 )
@@ -366,7 +366,7 @@ def compute_volume_spike(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "vol_spike_signal": {"value": sig, "score": score, "desc": f"vol_spike_signal -> {sig}"}
         }
     return _wrap_calc(_inner, "Volume Spike")
-
+# // not needed now
 def compute_atr(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
         _Validator.require(df, ["High", "Low", "Close"])
@@ -385,6 +385,83 @@ def compute_atr(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "atr_pct": {"value": round(pct, 2), "score": score, "desc": f"{pct:.2f}%"}
         }
     return _wrap_calc(_inner, "ATR")
+
+# use dynamic one
+def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict[str, Any]]:
+    def _inner():
+        length = ATR_HORIZON_CONFIG.get(horizon, 14)
+
+        _Validator.require(df, ["High", "Low", "Close"])
+
+        atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=length)
+        atr_val = _Validator.extract_last(atr_series, f"ATR_{length}")
+
+        if atr_val is None: return {}
+
+        price = _Validator.extract_last(df["Close"], "Close")
+        
+        # Guard against zero price
+        if not price: return {}
+        
+        pct = (atr_val / price) * 100
+
+        # Volatility scoring
+        if 1.0 <= pct <= 3.0: score = 10
+        elif pct < 1.0: score = 7
+        elif pct <= 5.0: score = 5
+        else: score = 0
+
+        return {
+            "atr_dynamic": {
+                "value": round(atr_val, 2),
+                "length": length,               # Metadata for UI/Debug
+                "score": score,
+                "alias": f"ATR ({length})",     # Dynamic Label
+                "desc": f"ATR({length}) = {atr_val:.2f}",
+                "source": "technical"
+            },
+            "atr_pct": {
+                "value": round(pct, 2),
+                "score": score,
+                "desc": f"Volatility {pct:.2f}%",
+                "source": "technical"
+            }
+        }
+    return _wrap_calc(_inner, "Dynamic ATR")
+
+def compute_dynamic_sl(df: pd.DataFrame, price: float, horizon: str = "short_term"):
+    def _inner():
+        length = ATR_HORIZON_CONFIG.get(horizon, 14)
+        mult_cfg = ATR_MULTIPLIERS.get(horizon, {"sl": 2.0})
+        # Handle case where mult_cfg is a float or dict (safety check)
+        multiplier = mult_cfg.get("sl", 2.0) if isinstance(mult_cfg, dict) else 2.0
+
+        atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=length)
+        atr_val = safe_float(atr_series.iloc[-1])
+
+        if atr_val is None or price is None: return {}
+
+        sl_price = price - (atr_val * multiplier)
+        
+        # Avoid div by zero
+        if not price: return {}
+        
+        risk_pct = ((price - sl_price) / price) * 100
+
+        return {
+            "sl_atr_dynamic": {
+                "value": round(sl_price, 2),
+                "alias": f"SL ({multiplier}x ATR{length})", # Clear Label
+                "desc": f"Stop Loss using ATR({length})",
+                "source": "technical"
+            },
+            "risk_per_share_pct": {
+                "value": round(risk_pct, 2),
+                "desc": f"Risk {risk_pct:.1f}%",
+                "source": "technical"
+            }
+        }
+    return _wrap_calc(_inner, "Dynamic ATR Stop Loss")
 
 def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0) -> Dict[str, Dict[str, Any]]:
     def _inner():
@@ -868,13 +945,16 @@ INDICATOR_METRIC_MAP = {
     "bb_high": {"func": compute_bollinger_bands, "horizon": "default"},
     "rvol": {"func": compute_rvol, "horizon": "default"},
     "obv_div": {"func": compute_obv_divergence, "horizon": "default"},
-    "atr_14": {"func": compute_atr, "horizon": "default"},
+    # "atr_14": {"func": compute_atr, "horizon": "default"},
+    # "sl_2x_atr": {"func": compute_atr_sl, "horizon": "default"},
+    "atr_dynamic": {"func": compute_dynamic_atr, "horizon": "default"},
+    "sl_atr_dynamic": {"func": compute_dynamic_sl, "horizon": "default"},
+
     "supertrend_signal": {"func": compute_supertrend, "horizon": "short_term"},
     "psar_trend": {"func": compute_psar, "horizon": "short_term"},
     "ichi_cloud": {"func": compute_ichimoku, "horizon": "long_term"},
     "price_action": {"func": compute_price_action, "horizon": "default"},
     "entry_confirm": {"func": compute_entry_price, "horizon": "default"},
-    "sl_2x_atr": {"func": compute_atr_sl, "horizon": "default"},
     "nifty_trend_score": {"func": compute_nifty_trend_score, "horizon": "long_term"},
     "gap_percent": {"func": compute_gap_percent, "horizon": "long_term"},
     "rel_strength_nifty": {"func": compute_relative_strength, "horizon": "long_term"},
@@ -925,7 +1005,7 @@ def compute_indicators(
         "supertrend_signal", "psar_trend", "ttm_squeeze", "bb_width", 
         "bb_percent_b", "vol_spike_ratio", "pivot_point",
         # 🚨 FIX: Explicitly add Short Term Cross back
-        "ma_cross_setup" , "wick_rejection"
+        "ma_cross_setup" , "wick_rejection", "atr_dynamic", "sl_atr_dynamic"
     }
     raw_metrics.update(ALWAYS_CALC)
     

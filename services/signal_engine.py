@@ -32,7 +32,7 @@ from config.constants import (
     VOL_BANDS,
     ATR_MULTIPLIERS,
 )
-from services.time_estimator import estimate_hold_time
+from services.tradeplan.time_estimator import estimate_hold_time
 
 logger = logging.getLogger(__name__)
 
@@ -1043,7 +1043,7 @@ def generate_trade_plan(profile_report: Dict[str, Any],
 
     # --- 1. Robust Data ---
     price_val = ensure_numeric(_get_val(indicators, "price"))
-    atr_val = ensure_numeric(_get_val(indicators, "atr_14"))
+    atr_val = ensure_numeric(_get_val(indicators, "atr_dynamic"))
     
     psar_trend = _get_str(indicators, "psar_trend") or ""
     psar_level = ensure_numeric(_get_val(indicators, "psar_level"), default=None)
@@ -1203,15 +1203,7 @@ def generate_trade_plan(profile_report: Dict[str, Any],
                 })
 
                 # Est time
-                plan["est_time"] = estimate_hold_time(
-                    price_val=price_val,
-                    t1=plan["targets"]["t1"],
-                    t2=plan["targets"]["t2"],
-                    atr_val=atr_val,
-                    horizon=horizon,
-                    indicators=indicators,
-                    strategies=(strategy_report or {}).get("summary", {})
-                )
+                plan["est_time"] = estimate_hold_time(price_val=price_val,t1=plan["targets"]["t1"],t2=plan["targets"]["t2"],atr_val=atr_val,horizon=horizon,indicators=indicators,strategies=(strategy_report or {}).get("summary", {}))
                 logger.info("Accumulation plan created for %s: t1=%s t2=%s sl=%s score=%s strategy=%s force=%s",
                             profile_report.get("ticker", "<t>"), t1, t2, sl_final, final_score, top_strat, force_accumulation)
 

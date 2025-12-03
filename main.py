@@ -570,7 +570,7 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
         # 🔥 5. Profile Scores (Compute this FIRST to find the Best Fit)
         if analysis_data["fundamentals"] and analysis_data["indicators"]:
             try:
-                full_report = compute_all_profiles(symbol, analysis_data["fundamentals"], analysis_data["indicators"])
+                full_report = compute_all_profiles(symbol, analysis_data["fundamentals"], analysis_data["raw_indicators_by_horizon"])
                 analysis_data["full_report"] = full_report
                 
                 # Meta Scores
