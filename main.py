@@ -45,7 +45,7 @@ from services.metrics_ext import compute_extended_metrics_sync
 from services.flowchart_helper import build_flowchart_payload, df_hash
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, SignalCache, init_db
-from services.trategy_analyzer import analyze_strategies
+from services.strategy_analyzer import analyze_strategies
 
 # Environment-configurable parameters (tweak as needed)
 WARMER_BATCH_SIZE = int(os.getenv("WARMER_BATCH_SIZE", "5"))
@@ -503,23 +503,18 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
             "meta_scores": {},
             "macro_trend_status": "N/A",
             "macro_close": None,
+            "strategy_report": {},
             "partial_error": False,
             "error_details": []
         }
         horizons = ["intraday", "short_term", "long_term", "multibagger"]
-        # --- SMART LOGIC STARTS HERE ---
         
-        # 1. Check if we need to auto-detect the index
-        # (If user selected "All Stocks", "Nifty 500", or "Default", we try to find a better fit)
+        # ... (Keep Index/Symbol Logic 1-2 unchanged) ...
         target_index = index_name
         clean_sym = symbol.strip().upper()
-        
         if index_name in ["NSEStock", "default", "nifty500"]:
             smart_index = STOCK_TO_INDEX_MAP.get(clean_sym)
-            if smart_index:
-                target_index = smart_index
-
-        # 2. Convert Index Name -> Ticker Symbol (e.g., "smallcap100" -> "^CNXSC")
+            if smart_index: target_index = smart_index
         bench_symbol = INDEX_TICKERS.get(target_index, INDEX_TICKERS["default"])
 
         # 1. Fundamentals
@@ -538,15 +533,13 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                 h_indicators = compute_indicators(symbol, horizon=h, benchmark_symbol=bench_symbol)
                 analysis_data["raw_indicators_by_horizon"][h] = h_indicators
                 
-                # 🔧 Overwrite Warning Implementation (Preserved from your code)
+                # ... (Keep warning logic) ...
                 for key, new_val in h_indicators.items():
                     if key in all_indicators:
-                        old_val = all_indicators[key]
-                        old_v = old_val.get('value')
+                        old_v = all_indicators[key].get('value')
                         new_v = new_val.get('value')
-                        # Compare values for debugging warning
                         if str(old_v) != str(new_v):
-                            logger.debug(f"[{symbol}] WARNING: Overwrote indicator '{key}' from horizon '{h}'! Old value: {old_v}, New value: {new_v}")
+                            logger.debug(f"[{symbol}] WARNING: Overwrote {key}!")
                     all_indicators.update(h_indicators)
                 
             except Exception as e:
@@ -572,49 +565,66 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                 analysis_data["macro_close"] = nifty_metric.get("value")
                 if not analysis_data["macro_trend_status"] or analysis_data["macro_trend_status"] == "N/A":
                     analysis_data["macro_trend_status"] = "Neutral"
-        except Exception:
-            pass
+        except Exception: pass
 
-        # 5. Profile Scores, Meta Scores, Trade Plan
+        # 🔥 5. Profile Scores (Compute this FIRST to find the Best Fit)
         if analysis_data["fundamentals"] and analysis_data["indicators"]:
             try:
                 full_report = compute_all_profiles(symbol, analysis_data["fundamentals"], analysis_data["indicators"])
                 analysis_data["full_report"] = full_report
                 
+                # Meta Scores
                 analysis_data["meta_scores"] = {
                     "value": score_value_profile(analysis_data["fundamentals"]),
                     "growth": score_growth_profile(analysis_data["fundamentals"]),
                     "quality": score_quality_profile(analysis_data["fundamentals"]),
                     "momentum": score_momentum_profile(analysis_data["fundamentals"], analysis_data["indicators"])
                 }
-                
-                best_profile = full_report.get("profiles", {}).get(full_report.get("best_fit", "short_term"), {})
-                trade_plan = generate_trade_plan(best_profile, analysis_data["indicators"], analysis_data["macro_trend_status"])
-                analysis_data["trade_recommendation"] = trade_plan
-            
             except Exception as e:
                 analysis_data["partial_error"] = True
                 analysis_data["error_details"].append(f"Scoring/Trade Plan Failed: {e}")
-                logger.error(f"[{symbol}] Scoring/Trade Plan failed: {e}")
-        
-        # [NEW] Run Strategy Analysis
+        # 6. [NEW] Strategy Analysis (Dynamic Horizon) We now know the 'best_fit' from step 5, so we use it!
         try:
-            base_inds = analysis_data["indicators"]
-            strategy_report = analyze_strategies(
-                base_inds, 
-                analysis_data["fundamentals"], 
-                horizon="short_term"
-            )
+            # 1. Determine the Best Horizon (Default to short_term if failed)
+            full_rep = analysis_data.get("full_report", {})
+            best_horizon = full_rep.get("best_fit", "short_term")
+            # 2. Grab the specific indicators for that horizon
+            # (This prevents Long Term RSI from overwriting Intraday RSI)
+            target_inds = analysis_data["raw_indicators_by_horizon"].get(best_horizon)
+            if not target_inds:
+                target_inds = analysis_data.get("indicators", {}) # Fallback to merged
+            # 3. Run Strategy Engine on the BEST horizon
+            strategy_report = analyze_strategies(target_inds, analysis_data["fundamentals"], horizon=best_horizon)
             analysis_data["strategy_report"] = strategy_report
+            
         except Exception as e:
             logger.error(f"[{symbol}] Strategy Analyzer Failed: {e}")
             analysis_data["strategy_report"] = {}
 
-        # 6. SAVE TO SQLITE (The Missing Link)
-        # We save the result HERE, inside the worker, using the safe Local Session.
-        # This ensures the Cache Warmer actually populates the Grid.
+        # 7. Generate Trade Plan (Now using the Strategy Report)
+        if "full_report" in analysis_data:
+            try:
+                full_rep = analysis_data["full_report"]
+                best_profile_name = full_rep.get("best_fit", "short_term")
+                best_profile_data = full_rep.get("profiles", {}).get(best_profile_name, {})
+                
+                trade_plan = generate_trade_plan(
+                    best_profile_data, 
+                    analysis_data["indicators"], 
+                    analysis_data.get("macro_trend_status", "N/A"),
+                    horizon=best_profile_name,
+                    strategy_report=analysis_data["strategy_report"],
+                    fundamentals=analysis_data["fundamentals"]
+                )
+                analysis_data["trade_recommendation"] = trade_plan
+                
+            except Exception as e:
+                analysis_data["error_details"].append(f"Trade Plan Failed: {e}")
+
+        # 8. SAVE TO SQLITE (Keep unchanged)
         if "full_report" in analysis_data:
             _save_analysis_to_db(db, symbol, analysis_data, index_name)
+        
         return analysis_data
     
     except Exception as e:
@@ -622,9 +632,7 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
         return {"symbol": symbol, "error": str(e)}
         
     finally:
-        # 4. cleanup
-        if db:
-            db.close()
+        if db: db.close()
 
 # Helper function to handle the DB write inside the worker
 def _save_analysis_to_db(db: Session, symbol: str, data: Dict[str, Any], index_name: str):
@@ -850,7 +858,10 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50", 
         trade_plan = generate_trade_plan(
             profile_report, 
             analysis_data.get("indicators", {}), 
-            analysis_data.get("macro_trend_status", "N/A")
+            analysis_data.get("macro_trend_status", "N/A"),
+            horizon=selected_profile_name,
+            strategy_report=analysis_data.get("strategy_report", {}),
+            fundamentals=analysis_data.get("fundamentals", {})
         )
         final_score = profile_report.get("final_score", 0)
         meta_scores = analysis_data.get("meta_scores", {})

@@ -42,7 +42,7 @@ def _choose_pattern_boost(patterns: Dict[str, Any]) -> float:
     return max(best, 1.0)
 
 
-def calc_est_time_v3(
+def estimate_hold_time(
     price_val: float,
     t1: Optional[float],
     t2: Optional[float],
