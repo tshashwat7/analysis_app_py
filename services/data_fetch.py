@@ -220,6 +220,37 @@ def safe_json(obj):
     elif isinstance(obj, list): return [safe_json(v) for v in obj]
     return obj
 
+def ensure_numeric(x, default=0.0):
+    """
+    Accepts scalar or dict-like metric and returns a numeric value.
+    Works with: raw numbers, None, {"value": v}, {"raw": v}, etc.
+    """
+    try:
+        if x is None:
+            return float(default)
+        # if it's a dict with "value" or "raw"
+        if isinstance(x, dict):
+            for k in ("value", "raw"):
+                if k in x and x[k] is not None:
+                    return float(x[k])
+            # if dict contains nested numeric, try fallback
+            # e.g., {"some": {"value": 1}}
+            for v in x.values():
+                if isinstance(v, (int, float)):
+                    return float(v)
+            return float(default)
+        if isinstance(x, (int, float)):
+            return float(x)
+        # try cast otherwise (e.g., "12.3%")
+        if isinstance(x, str):
+            # strip % and commas
+            s = x.strip().replace("%", "").replace(",", "")
+            return float(s) if s != "" else float(default)
+    except Exception:
+        pass
+    return float(default)
+
+
 def _coerce_value(v: Any) -> Any:
     try:
         import numpy as _np

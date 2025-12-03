@@ -4,203 +4,167 @@
 <meta charset="utf-8"/>
 <title>Result - {{ symbol }}</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+
 <style>
-  body{font-family:'Inter',sans-serif;background:#f5f7fa;color:#222;margin:20px;}
-  .wrap {max-width:1200px;margin:auto;}
-  .row > .col:only-child { flex: 0 0 100%; max-width: 100%; }
-  .card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);padding:20px;margin-bottom:22px;}
-  h2,h3{margin-top:0;color:#333;}
-  table{width:100%;border-collapse:collapse;}
-  th,td{padding:8px;border-bottom:1px solid #eee;text-align:left;}
-  .badge{display:inline-block;padding:6px 10px;border-radius:8px;font-weight:700;}
-  .green{background:#16a34a;color:#fff;}
-  .orange{background:#f59e0b;color:#fff;}
-  .red{background:#dc2626;color:#fff;}
-  .blue{background:#0d6efd;color:#fff;}
-  .confidence-bar {
-    width: 280px;
-    height: 16px;
-    background:#e5e7eb;
-    border-radius:10px;
-    overflow:hidden;
-    display:inline-block;
-    vertical-align:middle;
-    position:relative;
-  }
-  .confidence-fill {
-    height:100%;
-    width:0%;
-    background:linear-gradient(90deg,#22c55e 0%,#facc15 50%,#ef4444 100%);
-    transition:width 1.2s ease-in-out;
-    border-radius:10px;
-  }
-  .conf-text{margin-left:8px;font-weight:700;}
-  .section-title{border-left:4px solid #0d6efd;padding-left:10px;margin-bottom:10px;}
-  .indicator-table th{background:#343a40;color:white;}
-  .row > [class^="col"]:only-child,
-  .row > [class*=" col-"]:only-child { flex: 0 0 100% !important; max-width: 100% !important; }
-  .summary-box {
-  background: #f8fafc;
-  border-left: 3px solid #2b7cff;
-  padding: 8px 10px;
-  margin-top: 6px;
-  font-size: 0.9rem;
-  color: #222;
-  border-radius: 6px;
-  line-height: 1.35;
-}
-.summary-compact {
-  font-size: 0.85rem;
-  color: #444;
-}
-body { padding-bottom: 80px; } 
+  body{font-family:'Inter',system-ui,-apple-system,sans-serif; background:#f0f2f5; color:#1f2937; padding-bottom:100px;}
+  .wrap {max-width:1250px; margin:auto; padding: 20px;}
+  
+  /* Cards */
+  .card { border:none; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.1); transition:transform 0.2s; background:#fff; }
+  .card:hover { box-shadow:0 4px 6px rgba(0,0,0,0.1); }
+  .section-title { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #6b7280; margin-bottom: 12px; border-bottom: 2px solid #f3f4f6; padding-bottom: 8px; }
+
+  /* Badges & Colors */
+  .badge-custom { padding:6px 10px; border-radius:6px; font-weight:600; font-size:0.75rem; }
+  .bg-buy { background-color:#dcfce7; color:#166534; }
+  .bg-sell { background-color:#fee2e2; color:#991b1b; }
+  .bg-hold { background-color:#fef3c7; color:#92400e; }
+  
+  /* Strategy DNA Badges */
+  .strat-fit { border-left: 4px solid #22c55e; background: #f0fdf4; padding: 8px; margin-bottom: 6px; border-radius: 4px; }
+  .strat-no-fit { opacity: 0.5; font-size: 0.8rem; }
+  
+  /* Confidence Bar */
+  .confidence-track { width:100%; height:8px; background:#e5e7eb; border-radius:4px; overflow:hidden; }
+  .confidence-fill { height:100%; transition:width 1s; }
+
+  /* Execution Zone */
+  .exec-number { font-size: 1.4rem; font-weight: 800; letter-spacing: -0.5px; }
+  .exec-label { font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600; }
+  
+  /* Tables */
+  .table-custom th { background: #f9fafb; font-size: 0.75rem; text-transform: uppercase; color: #6b7280; }
+  .table-custom td { font-size: 0.85rem; vertical-align: middle; }
+  
+  /* Sticky Footer */
+  .trade-footer { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-top: 1px solid #e5e7eb; }
 </style>
 </head>
 <body>
+
 <div class="wrap">
 
-<div class="card text-center">
-  <div class="d-flex justify-content-center align-items-center flex-wrap gap-3 mb-2">
-    <h2 class="mb-0">📈 Analysis — {{ symbol }}</h2>
-
-    <!-- ===== Overall (Hybrid 40/40/20) Recommendation ===== -->
-    {% if final_signal == 'BUY' %}
-      <span class="badge green fs-6 px-3">Overall (Hybrid): BUY</span>
-    {% elif final_signal == 'SELL' %}
-      <span class="badge red fs-6 px-3">Overall (Hybrid): SELL</span>
-    {% else %}
-      <span class="badge orange fs-6 px-3">Overall (Hybrid): HOLD</span>
-    {% endif %}
-
-    <!-- ===== Short-Term (Bull/Bear) Sentiment ===== -->
-    {% if bull_signal %}
-      {% if 'bear' in bull_signal.lower() %}
-        <span class="badge red fs-6 px-3">Short-Term: {{ bull_signal }}</span>
-      {% elif 'bull' in bull_signal.lower() %}
-        <span class="badge blue fs-6 px-3">Short-Term: {{ bull_signal }}</span>
-      {% else %}
-        <span class="badge orange fs-6 px-3">Short-Term: {{ bull_signal }}</span>
-      {% endif %}
-    {% endif %}
-
-    <div class="d-flex justify-content-center gap-2 my-3">
-<div class="d-flex justify-content-center gap-2 my-3">
-      {% if full_report and full_report.profiles %}
-          {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
-            {% set profile_data = full_report.profiles[pname] %}
-            
-            {% if profile_data %}
-                {% set p_score = profile_data.final_score | default(0) %}
-                
-                {% set is_active = (selected_horizon == pname) %}
-                
-                <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ pname }}" 
-                   class="btn btn-sm {{ 'btn-primary' if is_active else 'btn-outline-secondary' }}">
-                   {{ pname | replace('_', ' ') | title }}
-                   <span class="badge bg-white text-dark ms-1">{{ p_score | round(1) }}</span>
-                </a>
-            {% endif %}
-          {% endfor %}
-      {% else %}
-          <div class="text-muted small">Scores unavailable due to analysis error.</div>
-      {% endif %}
-    </div>
-    </div>
-  </div>
-
-
-  <div class="d-flex justify-content-center gap-4 flex-wrap mb-2">
-    <div><b>Current Price:</b> ₹{{ indicators.get('Price', {}).get('value') | default('N/A') }}</div>
-    <div><b>52 W High:</b> ₹{{ indicators.get('52W High', {}).get('value') | default('N/A') }}</div>
-    <div><b>52 W Low:</b> ₹{{ indicators.get('52W Low', {}).get('value') | default('N/A') }}</div>
-  </div>
-
-  <div>
-    <strong>Confidence:</strong>
-    <span class="confidence-bar" 
-          title="Base: {{ profile_report.base_score }} | Penalties: -{{ (profile_report.penalty_total * 10)|round(1) }}" 
-          style="cursor: help;">
-      <span id="confidence-fill" class="confidence-fill" style="width: {{ confidence | default(0) }}%;"></span>
-    </span>
-    <span class="conf-text" id="conf-text">{{ confidence | default(0) }}%</span>
-    &nbsp;&nbsp;<strong>Total Score:</strong> {{ total_score | default('N/A') }}
-  </div>
-</div>
-
-{% if error %}
-  <div class="card red" style="color:white;">{{ error }}</div>
-{% else %}
-
-<button id="viewFlowchart" class="btn">View Flowchart</button>
-
-<!-- =======  Dashboard Top Row  ======= -->
-<div class="row row-cols-1 row-cols-md-3 g-3 mt-2">
-
-  <!-- Trade Recommendation -->
-  <!-- <div class="col">
-    <div class="card h-100">
-      <h5 class="section-title">📌 Trade Recommendation</h5>
-      {% set tr = trade_recommendation %}
-      <ul class="small mb-0">
-        <li><b>Rec:</b> {{ tr['recommendation'] | default('N/A') }}</li>
-        <li><b>Reason:</b> {{ tr['reason'] | default('N/A') }}</li>
-        <li><b>Entry Price (used):</b> ₹{{ tr['entry_price_used'] | default('N/A') }}</li>
-        <li><b>Sugegsted SL:</b> ₹{{ tr['suggested_sl'] | default('N/A') }}</li>
-        <li><b>Target:</b> ₹{{ tr['target_price'] | default('N/A') }}</li>
-      </ul>
-      <div class="summary-box summary-compact">
-        {{ summaries.trade }} So, "Entry Price (Confirm)" answers “When should I act?”,
-while "entry_price_used" answers “At what price will I assume entry once confirmed?”
+  <div class="card p-4 mb-3">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+      
+      <div>
+        <div class="d-flex align-items-baseline gap-2">
+          <h2 class="mb-0 fw-bold">{{ symbol }}</h2>
+          <span class="fs-4 fw-light text-secondary">₹{{ indicators.get('price', {}).get('value') | default('N/A') }}</span>
+        </div>
+        <div class="text-muted small mt-1">
+          Index: <b>{{ current_index | upper }}</b> | 
+          52W H/L: {{ fundamentals.get('52w_high') | default('-') }} / {{ fundamentals.get('52w_low') | default('-') }}
+        </div>
       </div>
+
+      <div class="btn-group shadow-sm" role="group">
+        {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
+        {# Use .get() if available, or check if key exists to avoid attribute errors #}
+        {% if full_report.profiles and pname in full_report.profiles %}
+          {% set profile_data = full_report.profiles[pname] %}
+          {% set p_score = profile_data.final_score | default(0) %}
+          
+          {% set is_active = (selected_horizon == pname) %}
+          
+          <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ pname }}" 
+            class="btn btn-sm {{ 'btn-primary fw-bold' if is_active else 'btn-light text-secondary border' }}"
+            style="min-width: 100px;">
+            {{ pname | replace('_', ' ') | title }}
+            <span class="badge {{ 'bg-white text-primary' if is_active else 'bg-secondary text-white' }} ms-1">
+              {{ p_score | round(1) }}
+            </span>
+          </a>
+        {% endif %}
+      {% endfor %}
+      </div>
+
+      <div class="text-end">
+        {% set fs = profile_report.final_score | default(0) %}
+        {% set cat = profile_report.category | default('HOLD') %}
+        <div class="d-flex flex-column align-items-end">
+          <span class="badge rounded-pill fs-6 px-3 py-2 mb-1 {{ 'bg-buy' if cat=='BUY' else ('bg-sell' if cat=='SELL' else 'bg-hold') }}">
+            {{ cat }} ({{ fs }}/10)
+          </span>
+          <div style="width: 140px;">
+            <div class="d-flex justify-content-between small text-muted mb-1">
+              <span>Conf.</span><span>{{ confidence }}%</span>
+            </div>
+            <div class="confidence-track">
+              <div class="confidence-fill" style="width: {{ confidence }}%; background: {{ '#22c55e' if confidence > 60 else '#ef4444' }};"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
-  </div> -->
-    <!-- Score Breakdown -->
+  </div>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% else %}
+
+  <div class="row g-3 mb-3">
     
-    <div class="col">
-      <div class="card h-100">
-        <h5 class="section-title">🧮 Score Calculation ({{ selected_horizon | title }})</h5>
-        <ul class="list-group list-group-flush small">
-          <li class="list-group-item d-flex justify-content-between align-items-center">
-            Base Score
-            <span class="fw-bold">{{ profile_report.base_score | round(2) }}</span>
-          </li>
-          <li class="list-group-item d-flex justify-content-between align-items-center">
-            Penalties Applied
-            <span class="fw-bold text-danger">-{{ (profile_report.penalty_total * 10) | round(2) }}</span>
-          </li>
-          <li class="list-group-item d-flex justify-content-between align-items-center bg-light">
-            <strong>Final Score</strong>
-            <span class="fw-bold fs-5">{{ profile_report.final_score | round(2) }} / 10</span>
-          </li>
-        </ul>
-      <div class="summary-box summary-compact mt-2">
-        This score is specific to the <b>{{ selected_horizon | replace('_', ' ') | title }}</b> profile.
-      </div>
+    <div class="col-md-5">
+      <div class="card h-100 p-3">
+        <h5 class="section-title"><i class="bi bi-diagram-3-fill me-2"></i> Strategy Fit (The "Why")</h5>
+        
+        {% set strat = strategy_report %}
+        {% set summary = strat.summary %}
+        
+        {% if summary and summary.best_strategy %}
+          <div class="mb-3">
+            <span class="text-muted small">Top Strategy:</span>
+            <span class="fw-bold text-primary">{{ summary.best_strategy | replace('_', ' ') | title }}</span>
+            <span class="badge bg-light text-dark border ms-1">{{ summary.best_score }}/100</span>
+          </div>
+
+          <div style="max-height: 200px; overflow-y: auto; padding-right: 5px;">
+            {% for s_name in ['swing', 'day_trading', 'trend_following', 'momentum', 'value', 'position_trading'] %}
+              {% set s_data = strat[s_name] %}
+              {% if s_data and s_data.fit %}
+                <div class="strat-fit">
+                  <div class="d-flex justify-content-between">
+                    <strong>
+                      {% if 'swing' in s_name %}🌊{% elif 'day' in s_name %}⚡{% elif 'trend' in s_name %}📈{% elif 'momentum' in s_name %}🚀{% elif 'value' in s_name %}💰{% endif %} 
+                      {{ s_name | replace('_', ' ') | title }}
+                    </strong>
+                    <span class="small fw-bold">{{ s_data.score }}</span>
+                  </div>
+                  {% if s_data.reasons %}
+                    <div class="small text-muted mt-1">Make sure: {{ s_data.reasons[0] }}</div>
+                  {% endif %}
+                </div>
+              {% endif %}
+            {% endfor %}
+            
+            {% if not summary.all_fits %}
+              <div class="text-center text-muted small py-4">
+                No specific strategy fits this stock well right now.
+              </div>
+            {% endif %}
+          </div>
+
+        {% else %}
+          <div class="text-muted small">Strategy Engine data unavailable.</div>
+        {% endif %}
       </div>
     </div>
 
-    <div class="col">
-      <div class="card h-100">
-        <h5 class="section-title">🏆 Top Drivers</h5>
-        <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
-          <table class="table table-sm small mb-0 table-hover">
-            <thead class="table-light">
-              <tr><th>Metric</th><th>Val</th><th>Score</th></tr>
-            </thead>
+    <div class="col-md-4">
+      <div class="card h-100 p-3">
+        <h5 class="section-title"><i class="bi bi-speedometer2 me-2"></i> {{ selected_horizon | title }} Drivers</h5>
+        <div class="table-responsive">
+          <table class="table table-custom table-hover mb-0">
             <tbody>
               {% for key, score in profile_report.metric_details|dictsort(false, 'value')|reverse %}
-                {% if loop.index <= 8 %}
+                {% if loop.index <= 5 %}
                 <tr>
                   <td>{{ key | replace('_', ' ') | title }}</td>
-                  <td>
-                    {% set ind_val = indicators.get(key, {}).get('value') %}
-                    {% set fund_val = fundamentals.get(key, {}).get('value') %}
-                    {{ ind_val if ind_val else (fund_val if fund_val else '-') }}
-                  </td>
-                  <td>
-                      {% if score >= 8 %}<span class="text-success fw-bold">{{ score }}</span>
-                      {% elif score <= 3 %}<span class="text-danger fw-bold">{{ score }}</span>
-                      {% else %}<span class="text-muted">{{ score }}</span>{% endif %}
+                  <td class="text-end fw-bold {{ 'text-success' if score >= 7 else ('text-danger' if score <= 3 else 'text-muted') }}">
+                    {{ score }}
                   </td>
                 </tr>
                 {% endif %}
@@ -208,455 +172,297 @@ while "entry_price_used" answers “At what price will I assume entry once confi
             </tbody>
           </table>
         </div>
-      </div>
-    </div>
-
-    <div class="col">
-      <div class="card h-100">
-        <h5 class="section-title">⚠️ Risk Penalties</h5>
-        {% if profile_report.applied_penalties %}
-          <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
-            <table class="table table-sm small mb-0">
-              <thead class="table-light"><tr><th>Risk</th><th>Condition</th><th>Hit</th></tr></thead>
-              <tbody>
-                {% for p in profile_report.applied_penalties %}
-                <tr>
-                  <td class="text-danger fw-bold" style="font-size: 0.85rem;">{{ p.metric | replace('_', ' ') | title }}</td>
-                  <td style="font-size: 0.8rem;">{{ p.raw }} {{ p.op }} {{ p.value }}</td>
-                  <td class="text-danger fw-bold">-{{ (p.penalty * 10) | round(1) }}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <div class="d-flex align-items-center justify-content-center h-75 text-success">
-            <div>✅ No Active Penalties</div>
-          </div>
-        {% endif %}
-      </div>
-  </div>
-<div class="col">
-  <div class="card h-100">
-    <h5 class="section-title">📌 Trade Plan New</h5>
-    
-    <div class="mb-3">
-      {% set tr = trade_recommendation %}
-      {% if "BUY" in tr.signal %}
-        <span class="badge bg-success fs-6">Signal: {{ tr.signal | replace("_", " ") }}</span>
-      {% elif "HOLD" in tr.signal %}
-        <span class="badge bg-warning text-dark fs-6">Signal: Hold / Wait</span>
-      {% else %}
-        <span class="badge bg-danger fs-6">Signal: No Trade</span>
-      {% endif %}
-
-      {% if tr.setup_type and tr.setup_type != "GENERIC" %}
-        {% set st = tr.setup_type %}
-        {% set badge_color = 'primary' %} {% if 'SQUEEZE' in st %} {% set badge_color = 'info text-dark' %} {% elif 'BREAKOUT' in st %} {% set badge_color = 'primary' %} {% elif 'PULLBACK' in st %} {% set badge_color = 'success' %} {% elif 'OVERSOLD' in st %} {% set badge_color = 'warning text-dark' %} {% endif %}
         
-        <span class="badge bg-{{ badge_color }} fs-6 ms-1" title="Detected Setup Pattern">
-          ⚡ {{ st | replace('_', ' ') | title }}
-        </span>
-      {% endif %}
-
-      {% if tr.setup_confidence %}
-        <span class="badge bg-light text-dark border fs-6 ms-1" title="Algorithm Confidence (0-100%)">
-          🎯 Conf: {{ tr.setup_confidence }}%
-        </span>
-      {% endif %}
-    </div>
-    
-    <ul class="small mb-0 list-unstyled">
-      <li class="mb-1"><b>Entry Zone:</b> <span class="text-primary fw-bold">{{ "₹" ~ tr.entry if tr.entry else 'N/A' }}</span></li>
-      <li class="mb-1"><b>Stop-Loss:</b> <span class="text-danger fw-bold">{{ "₹" ~ tr.stop_loss if tr.stop_loss else 'N/A' }}</span></li>
-      <li class="mb-1"><b>Target:</b> <span class="text-success fw-bold">{{ "₹" ~ tr.targets.t1 if tr.targets.t1 else 'N/A' }}</span></li>
-      <li><b>R/R Ratio:</b> {{ tr.rr_ratio if tr.rr_ratio else 'N/A' }}</li>
-    </ul>
-    
-    <div class="summary-box summary-compact mt-2">
-      <b>Logic:</b> {{ tr.reason | default('N/A') }}
-    </div>
-  </div>
-</div>
-
-  <!-- Risk & Execution -->
-  <div class="col">
-    <div class="card h-100">
-      <h5 class="section-title">⚙️ Risk & Execution</h5>
-      {% set rr = tr['RR_Ratio'] if tr.get('RR_Ratio') is not none else None %}
-      {% if rr is not none %}
-        {% if rr >= 2 %}
-          {% set rr_class = "green" %}{% set rr_text = "Favorable" %}
-        {% elif rr >= 1 %}
-          {% set rr_class = "orange" %}{% set rr_text = "Moderate" %}
-        {% else %}
-          {% set rr_class = "red" %}{% set rr_text = "Unfavorable" %}
-        {% endif %}
-      {% endif %}
-      <ul class="small mb-0">
-        <li><b>Trailing SL:</b> ₹{{ tr['Trailing_Stop_Loss'] | default('N/A') }}</li>
-        <li><b>R:R:</b>
-          {% if rr is not none %}
-            <span class="badge {{ rr_class }}">{{ rr }} — {{ rr_text }}</span>
-          {% else %}<span class="badge red">N/A</span>{% endif %}
-        </li>
-        <li><b>Advice:</b> {{ tr.get('advice') | default('N/A') }}</li>
-      </ul>
-      <div class="summary-box summary-compact">
-        {{ summaries.risk }}
-      </div>
-    </div>
-  </div>
-
-  <!-- Entry & Stop Metrics -->
-  <!-- <div class="col">
-    <div class="card h-100">
-      <h5 class="section-title">🎯 Entry & Stop Metrics</h5>
-      <ul class="small mb-0">
-        <li><b>Confirm Above:</b> ₹{{ indicators.get('Entry Price (Confirm)', {}).get('value') | default('N/A') }}</li>
-        <li><b>2×ATR SL:</b> ₹{{ indicators.get('Suggested SL (2xATR)', {}).get('value') | default('N/A') }}</li>
-        <li><b>ATR (14):</b> {{ indicators.get('ATR (14)', {}).get('value') | default('N/A') }}</li>
-      </ul>
-      <div class="summary-box summary-compact">
-        {{ summaries.entry_stop }}
-      </div>
-    </div>
-  </div> -->
-<div class="col">
-        <div class="card h-100">
-          <h5 class="section-title">🧭 Multi-Horizon Analysis</h5>
-          
-          <table class="table table-sm small mb-0">
-            <thead>
-              <tr style="background: #f8f9fa;">
-                <th>Profile</th>
-                <th>Category</th>
-                <th>Final Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% set report = full_report %}
-              {% if report and report.profiles %}
-                {% for name, profile in report.profiles.items() %}
-                  
-                  {% if profile.category == "BUY" %}
-                    {% set badge_class = 'green' %}
-                  {% elif profile.category == "HOLD" %}
-                    {% set badge_class = 'orange' %}
-                  {% else %}
-                    {% set badge_class = 'red' %}
-                  {% endif %}
-                  
-                  <tr {% if name == report.best_fit %} style="background: #e9f5ff; font-weight: bold;" {% endif %}>
-                    <td>{{ name | title }}</td>
-                    <td>
-                      <span class="badge {{ badge_class }}">{{ profile.category }}</span>
-                    </td>
-                    <td><b>{{ profile.final_score | round(1) }} / 10</b></td>
-                  </tr>
-                {% endfor %}
-              {% else %}
-                <tr><td colspan="3">Multi-horizon report not available.</td></tr>
-              {% endif %}
-            </tbody>
-          </table>
-          
-          <div class="summary-box summary-compact">
-            <b>Best-Fit Profile:</b> {{ report.best_fit | title | default('N/A') }}
-            <br>
-            This shows the stock's rating across different investing timeframes.
-          </div>
-        </div>
-      </div>
-
-  <!-- Trade Plan -->
-<div class="col">
-        <div class="card h-100">
-          <h5 class="section-title">📌 Trade Plan</h5>
-          {% set tr = trade_recommendation %}
-          
-          {% if tr.signal == "BUY_DIP" %}
-            <span class="badge green fs-6 mb-2">Signal: Buy The Dip</span>
-          {% elif tr.signal == "HOLD" %}
-            <span class="badge orange fs-6 mb-2">Signal: Hold / Wait</span>
-          {% else %}
-            <span class="badge red fs-6 mb-2">Signal: No Trade</span>
-          {% endif %}
-          
-          <ul class="small mb-0">
-            <li><b>Entry:</b> ₹{{ tr.entry | default('N/A') }}</li>
-            <li><b>Stop-Loss:</b> ₹{{ tr.stop_loss | default('N/A') }}</li>
-            <li><b>Target:</b> ₹{{ tr.target | default('N/J') }}</li>
-            <li><b>R/R Ratio:</b> {{ tr.rr_ratio | default('N/A') }}</li>
+        {% if profile_report.applied_penalties %}
+        <div class="mt-2 pt-2 border-top">
+          <small class="text-danger fw-bold">⚠️ Drag Factors:</small>
+          <ul class="mb-0 ps-3 small text-muted">
+            {% for p in profile_report.applied_penalties %}
+              <li>{{ p.metric | replace('_', ' ') }}: -{{ (p.penalty * 10) | round(1) }}</li>
+            {% endfor %}
           </ul>
-          <div class="summary-box summary-compact">
-            <b>Reason:</b> {{ tr.reason | default('N/A') }}
-          </div>
         </div>
-      </div>
-
-
-    <!-- Actionable Risk Metrics -->
-    <div class="col">
-      <div class="card h-100">
-        <h5 class="section-title">⚠️ Actionable Risk</h5>
-        <ul class="small mb-0">
-          <li><b>ATR (14):</b> {{ indicators.get('ATR (14)', {}).get('value') | default('N/A') }}</li>
-          <li><b>2×ATR SL:</b> ₹{{ indicators.get('Suggested SL (2xATR)', {}).get('value') | default('N/A') }}</li>
-        </ul>
-        <div class="summary-box summary-compact">
-          {{ summaries.actionable_risk }}
-        </div>
+        {% endif %}
       </div>
     </div>
 
-    <!-- Reasons & Remarks -->
+    <div class="col-md-3">
+      <div class="card h-100 p-3 text-center d-flex flex-column justify-content-center">
+        <h5 class="text-muted small mb-2">SETUP SIGNAL</h5>
+        {% set tr = trade_recommendation %}
+        <h3 class="fw-bold {{ 'text-success' if 'BUY' in tr.signal else ('text-danger' if 'SHORT' in tr.signal else 'text-muted') }}">
+          {{ tr.signal | replace('_', ' ') }}
+        </h3>
+        
+        {% if tr.setup_type != 'GENERIC' %}
+        <div class="mt-2">
+          <span class="badge bg-light text-dark border">
+             ⚡ {{ tr.setup_type | replace('_', ' ') }}
+          </span>
+        </div>
+        {% endif %}
+        
+        <div class="mt-3 small text-muted">
+          {{ tr.reason | truncate(60) }}
+        </div>
+        
+        <button id="viewFlowchart" class="btn btn-outline-primary btn-sm mt-3 w-100">
+          <i class="bi bi-diagram-2"></i> Logic Flow
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0" style="border-left-width: 5px !important;">
+    <div class="card-body p-0">
+      <div class="row g-0">
+        
+        <div class="col-md-6 p-4 border-end">
+          <h5 class="section-title text-primary"><i class="bi bi-crosshair me-2"></i> Trade Plan</h5>
+          
+          {% set tr = trade_recommendation %}
+          {% set has_trade = "BUY" in tr.signal or "SHORT" in tr.signal %}
+          
+          <div class="row g-3 text-center mt-1">
+            <div class="col-6">
+              <div class="exec-label">Entry Zone</div>
+              <div class="exec-number {{ 'text-primary' if has_trade else 'text-muted opacity-50' }}">
+                {{ "₹" ~ tr.entry if tr.entry else '-' }}
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="exec-label">Stop Loss</div>
+              <div class="exec-number {{ 'text-danger' if has_trade else 'text-muted opacity-50' }}">
+                {{ "₹" ~ tr.stop_loss if tr.stop_loss else '-' }}
+              </div>
+            </div>
+          </div>
+
+          <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
+            
+            <div class="text-center border-end pe-3">
+              <div class="exec-label">Target 1</div>
+              <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t1 if tr.targets.t1 else '-' }}</div>
+            </div>
+
+            <div class="text-center border-end pe-3">
+              <div class="exec-label">Target 2</div>
+              <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t2 if tr.targets.t2 else '-' }}</div>
+            </div>
+            
+            <div class="text-center">
+              <div class="exec-label">Est. Hold</div>
+              <div class="badge bg-light text-secondary border">{{ tr.est_time if tr.est_time else '-' }}</div>
+            </div>
+            <div class="text-center">
+              <div class="exec-label">R:R Ratio</div>
+              <div class="badge bg-light text-dark border">{{ tr.rr_ratio }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-md-6 p-4 bg-light">
+          <h5 class="section-title"><i class="bi bi-clipboard-check me-2"></i> Tactical Execution</h5>
+          
+          {% if has_trade and tr.execution_hints %}
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <div class="d-flex gap-2">
+                  <i class="bi bi-shield-check text-success fs-5"></i>
+                  <div>
+                    <span class="fw-bold small d-block">Stop Loss Strategy</span>
+                    <span class="small text-muted">{{ tr.execution_hints.stop_strategy | default("ATR Based") }}</span>
+                    {% if tr.move_stop_to_breakeven_after_t1 %}
+                      <div class="badge bg-warning text-dark mt-1">Move to BE at T1</div>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+              
+              <div class="col-md-6 mb-3">
+                <div class="d-flex gap-2">
+                  <i class="bi bi-bullseye text-primary fs-5"></i>
+                  <div>
+                    <span class="fw-bold small d-block">Targets</span>
+                    <span class="small text-muted">T1: 1.5R Conservative take profit.</span><br>
+                    <span class="small text-muted">T2: Trend extension / Pivot resistance.</span>
+                  </div>
+                </div>
+              </div>
+
+              {% if "caution" in tr.execution_hints|string|lower %}
+              <div class="col-12 mt-2">
+                <div class="alert alert-warning py-2 mb-0 small">
+                  <i class="bi bi-exclamation-triangle-fill me-2"></i> 
+                  {{ tr.execution_hints.caution_wick or "Volatility Warning: Reduced position size recommended." }}
+                </div>
+              </div>
+              {% endif %}
+            </div>
+
+          {% else %}
+            <div class="d-flex align-items-center justify-content-center h-100 text-muted">
+              <div class="text-center">
+                <i class="bi bi-hourglass fs-3 d-block mb-2"></i>
+                No actionable setup detected.<br>
+                <small>Monitor for price action at {{ tr.entry or "key levels" }}.</small>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0" style="border-left-width: 5px !important;">
+    <div class="card-body p-0">
+      <div class="row g-0">
+        <div class="col-md-12">
+          <div class="card h-100 p-3">
+            <h5 class="section-title">📅 Corporate Actions</h5>
+            
+            <div class="table-responsive" style="max-height: 200px;">
+              <table class="table table-sm table-striped small mb-0">
+                <thead class="table-light" style="position: sticky; top: 0;">
+                  <tr>
+                    <th>Event</th>
+                    <th>Value</th>
+                    <th>Ex-Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="corpBody">
+                  <tr><td colspan="4" class="text-center text-muted">Loading events...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    
     <div class="col-md-6">
-      <div class="card h-100">
-        <h5 class="section-title">🧠 Tactical Hints</h5>
-{% if trade_recommendation.execution_hints %}
-      <div class="mt-3 p-2 bg-light border rounded small">
-        <h6 class="fw-bold text-secondary mb-2" style="font-size: 0.85rem;">
-          ⚡ Execution Strategy
-        </h6>
-        <ul class="mb-0 ps-3 text-muted">
-          {% if trade_recommendation.targets.t1 %}
-          <li class="mb-1">
-            <span class="fw-bold text-dark">Target 1 (₹{{ trade_recommendation.targets.t1 }}):</span> 
-            {{ trade_recommendation.execution_hints.t1_desc }}
-          </li>
-          {% endif %}
-          
-          {% if trade_recommendation.targets.t2 %}
-          <li class="mb-1">
-            <span class="fw-bold text-dark">Target 2 (₹{{ trade_recommendation.targets.t2 }}):</span> 
-            {{ trade_recommendation.execution_hints.t2_desc }}
-          </li>
-          {% endif %}
-          
-          {% if trade_recommendation.move_stop_to_breakeven_after_t1 %}
-          <li class="text-primary fw-bold mt-2">
-            🛡️ Rule: Move Stop-Loss to Breakeven as soon as Target 1 is hit.
-          </li>
-          {% endif %}
-        </ul>
-      </div>
-      
-    {% else %}
-      <div class="mt-3 p-2 bg-light border rounded small text-center text-muted">
-        <i class="bi bi-hourglass-split"></i> 
-        No actionable setup for <b>{{ selected_horizon | replace('_', ' ') | title }}</b>.
-        <br>
-        Current Status: <b>{{ trade_recommendation.signal | replace('_', ' ') }}</b>
-      </div>
-    {% endif %}
-      </div>
-    </div>
-
-  <div class="col-md-6">
-    <div class="card h-100">
-      <h5 class="section-title">📅 Corporate Actions</h5>
-      <div class="summary-box summary-compact">
-        {{ summaries.corporate }}
-      </div>
-      <table id="corpTable" style="width:100%;border-collapse:collapse;margin-top:10px;">
-        <thead>
-          <tr style="background:#f4f4f4;">
-            <th>Type</th>
-            <th>Amount / Ratio</th>
-            <th>Ex-Date</th>
-            <th>Yield (%)</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody id="corpBody"><tr><td colspan="5">Loading...</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-
-</div>
-<!-- =======  End Dashboard Top Row  ======= -->
-
-<!-- =======  Detailed Analytics Grid with Color Badges  ======= -->
-<div class="row row-cols-1 row-cols-md-2 g-3 mt-3">
-
-  <div class="col">
-    <div class="card h-100">
-      <h3 class="section-title">💹 Fundamental Breakdown</h3>
-      <div class="table-responsive">
-        <table class="table table-sm table-hover small mb-0">
-          <thead class="table-light">
-            <tr>
-              <th>Metric</th>
-              <th>Value</th>
-              <th>Score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for k, v in fundamentals.items() %}
-              {% if v is mapping %} 
+      <div class="card h-100 p-3">
+        <h5 class="section-title">Fundamentals</h5>
+        <div style="max-height: 400px; overflow-y: auto;">
+          <table class="table table-custom table-sm mb-0">
+            <tbody>
+            {% for k, v in fundamentals.items() %} {% if v is mapping %} 
                 {% set val = (v.score | default(0)) | int %}
                 
                 {% set is_used = (k in profile_report.metric_details) %}
                 
                 <tr class="{{ 'table-active' if is_used else '' }}">
-                  <td>
+                  <td style="width: 30px; text-align: center;">
                     {% if is_used %}
-                      <span title="Used in {{ selected_horizon }} Score">🎯</span>
+                      <span title="Used in Score" style="color: #2563eb; font-weight: bold;">✔️</span>
                     {% else %}
-                      <span style="opacity:0.3">⚪</span>
+                      <span title="Not Used" style="color: #ccc;">-</span>
                     {% endif %}
-                    
-                    <span class="{{ 'fw-bold' if is_used else 'text-muted' }}">
-                      {{ v.alias if v.alias is defined else (k | replace('_', ' ') | title) }}
+                  </td>
+
+                  <td>
+                    <span class="{{ 'fw-bold text-dark' if is_used else 'text-secondary' }}">
+                      {{ v.alias | default(k | replace('_', ' ') | title) }}
                     </span>
                   </td>
                   
-                  <td class="{{ 'fw-bold' if is_used else '' }}">
+                  <td class="font-monospace {{ 'fw-bold' if is_used else '' }}">
                     {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
                   </td>
                   
                   <td>
-                    {% if val >= 7 %}
+                    {% if val >= 8 %}
                       <span class="badge bg-success">{{ val }}</span>
-                    {% elif val >= 4 %}
-                      <span class="badge bg-warning text-dark">{{ val }}</span>
-                    {% else %}
+                    {% elif val <= 3 %}
                       <span class="badge bg-danger">{{ val }}</span>
+                    {% else %}
+                      <span class="badge bg-warning text-dark">{{ val }}</span>
                     {% endif %}
                   </td>
                 </tr>
               {% endif %} 
             {% endfor %}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="col">
-    <div class="card h-100">
-      <h3 class="section-title">📊 Technical Indicators</h3>
-      <div class="table-responsive">
-        <table class="table table-sm table-hover small mb-0">
-          <thead class="table-light">
-            <tr>
-              <th>Indicator</th>
-              <th>Value</th>
-              <th>Score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for k, v in indicators.items() %}
-              {% if v is mapping %} 
+    <div class="col-md-6">
+      <div class="card h-100 p-3">
+        <h5 class="section-title">Technicals</h5>
+        <div style="max-height: 400px; overflow-y: auto;">
+          <table class="table table-custom table-sm mb-0">
+            <tbody>
+            {% for k, v in indicators.items() %} {% if v is mapping %} 
                 {% set val = (v.score | default(0)) | int %}
                 
                 {% set is_used = (k in profile_report.metric_details) %}
                 
                 <tr class="{{ 'table-active' if is_used else '' }}">
-                  <td>
+                  <td style="width: 30px; text-align: center;">
                     {% if is_used %}
-                      <span title="Used in {{ selected_horizon }} Score">🎯</span>
+                      <span title="Used in Score" style="color: #2563eb; font-weight: bold;">✔️</span>
                     {% else %}
-                      <span style="opacity:0.3">⚪</span>
+                      <span title="Not Used" style="color: #ccc;">-</span>
                     {% endif %}
-                    
-                    <span class="{{ 'fw-bold' if is_used else 'text-muted' }}">
-                      {{ v.alias if v.alias is defined else (k | replace('_', ' ') | title) }}
+                  </td>
+
+                  <td>
+                    <span class="{{ 'fw-bold text-dark' if is_used else 'text-secondary' }}">
+                      {{ v.alias | default(k | replace('_', ' ') | title) }}
                     </span>
                   </td>
                   
-                  <td class="{{ 'fw-bold' if is_used else '' }}">
+                  <td class="font-monospace {{ 'fw-bold' if is_used else '' }}">
                     {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
                   </td>
                   
                   <td>
-                    {% if val >= 7 %}
+                    {% if val >= 8 %}
                       <span class="badge bg-success">{{ val }}</span>
-                    {% elif val >= 4 %}
-                      <span class="badge bg-warning text-dark">{{ val }}</span>
-                    {% else %}
+                    {% elif val <= 3 %}
                       <span class="badge bg-danger">{{ val }}</span>
+                    {% else %}
+                      <span class="badge bg-warning text-dark">{{ val }}</span>
                     {% endif %}
                   </td>
                 </tr>
               {% endif %} 
             {% endfor %}
           </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Compact Indicator Reference -->
-  <div class="col-12">
-    <div class="card" style="background:#f9fafb;box-shadow:none;padding:15px;">
-      <h3 class="section-title" style="border-left-color:#6b7280;">📘 Indicator Reference (Quick Guide)</h3>
-      <div class="row row-cols-1 row-cols-md-2 g-3">
-        <div class="col">
-          <div class="p-2 border rounded bg-white small">
-            <b>RSI (14)</b><br><span class="text-muted">Momentum oscillator. 70 = Overbought, 30 = Oversold</span>
-          </div>
-        </div>
-        <div class="col">
-          <div class="p-2 border rounded bg-white small">
-            <b>MACD</b><br><span class="text-muted">EMA-based momentum crossover. Positive = Bullish</span>
-          </div>
-        </div>
-        <div class="col">
-          <div class="p-2 border rounded bg-white small">
-            <b>Bollinger Bands</b><br><span class="text-muted">Volatility envelopes. Upper = Resistance, Lower = Support</span>
-          </div>
-        </div>
-        <div class="col">
-          <div class="p-2 border rounded bg-white small">
-            <b>ATR (14)</b><br><span class="text-muted">Volatility measure; higher = more risk</span>
-          </div>
-        </div>
-        <div class="col">
-          <div class="p-2 border rounded bg-white small">
-            <b>EMA (50/200)</b><br><span class="text-muted">EMA50 > EMA200 = Bullish trend continuation</span>
-          </div>
-        </div>
-        <div class="col">
-          <div class="p-2 border rounded bg-white small">
-            <b>P/E Ratio</b><br><span class="text-muted">Valuation ratio; lower = undervalued</span>
-          </div>
-        </div>
-        <div class="col">
-          <div class="p-2 border rounded bg-white small">
-            <b>ROE</b><br><span class="text-muted">Profitability; higher = better capital efficiency</span>
-          </div>
+          </table>
         </div>
       </div>
     </div>
+
   </div>
 
-</div>
-<!-- =======  End Detailed Analytics Grid  ======= -->
+  {% endif %} </div>
 
-  {% endif %}
-</div>
-<!-- pjase 3 -->
-<div class="fixed-bottom bg-white border-top shadow-lg p-2" style="z-index: 1050;">
-  <div class="container">
+<div class="fixed-bottom trade-footer shadow-lg p-2">
+  <div class="wrap py-1">
     <div class="row align-items-center">
       
       <div class="col-4 col-md-3">
-        <label class="small text-muted fw-bold mb-0" style="font-size: 0.75rem;">RISK (₹)</label>
+        <label class="small text-muted fw-bold mb-0" style="font-size: 0.7rem;">RISK (₹)</label>
         <div class="input-group input-group-sm">
           <input type="number" id="riskInput" class="form-control fw-bold" value="2000" step="500" oninput="calcSize()">
         </div>
       </div>
 
       <div class="col-4 col-md-3 text-center border-start border-end">
-        <small class="text-muted d-block" style="font-size: 0.7rem;">BUY QTY</small>
+        <small class="text-muted d-block" style="font-size: 0.65rem;">BUY QTY</small>
         <span id="qtyDisplay" class="fw-bold fs-4 text-primary" style="line-height: 1;">0</span>
-        <small class="text-muted d-block" style="font-size: 0.7rem;">SHARES</small>
       </div>
 
       <div class="col-4 col-md-3 text-center">
-        <small class="text-muted d-block" style="font-size: 0.7rem;">CAPITAL REQ.</small>
+        <small class="text-muted d-block" style="font-size: 0.65rem;">REQ. CAPITAL</small>
         <span id="capitalDisplay" class="fw-bold text-dark">₹0</span>
       </div>
 
@@ -672,91 +478,78 @@ while "entry_price_used" answers “At what price will I assume entry once confi
 </div>
 
 <script>
-// --- Phase 3 Logic: Sizing & State ---
-
-// 1. Get Logic Variables safely from Backend
+// --- Logic Variables ---
 const entryPrice = parseFloat("{{ trade_recommendation.entry | default(0) }}");
 const stopLoss = parseFloat("{{ trade_recommendation.stop_loss | default(0) }}");
-
-// 2. Get Current Profile Name (e.g., "Intraday", "short_term")
 const rawHorizon = "{{ selected_horizon }}";
-const horizonLabel = rawHorizon
-
 
 function calcSize() {
   const riskAmt = parseFloat(document.getElementById('riskInput').value) || 0;
   
   if (entryPrice > 0 && stopLoss > 0 && entryPrice !== stopLoss) {
     const riskPerShare = Math.abs(entryPrice - stopLoss);
+    // Simple protection against zero division or tiny stops
+    if(riskPerShare < 0.05) { 
+        document.getElementById('qtyDisplay').innerText = "-";
+        return; 
+    }
+    
     const qty = Math.floor(riskAmt / riskPerShare);
     const capital = Math.round(qty * entryPrice);
 
     document.getElementById('qtyDisplay').innerText = qty;
-    document.getElementById('capitalDisplay').innerText = formatCurrency(capital);
+    document.getElementById('capitalDisplay').innerText = '₹' + capital.toLocaleString('en-IN');
   } else {
     document.getElementById('qtyDisplay').innerText = "-";
     document.getElementById('capitalDisplay').innerText = "-";
   }
 }
-function formatCurrency(num) {
-    return '₹' + num.toLocaleString('en-IN');
-}
 
-// 3. Context-Aware Toggle Logic
 function toggleTradeState(el) {
-  // Key is specific to THIS horizon (e.g., ..._intraday)
-  const key = "trade_active_{{ symbol }}_{{ selected_horizon }}";
+  const key = `trade_active_{{ symbol }}_${rawHorizon}`;
   const label = el.nextElementSibling;
   
   if (el.checked) {
     localStorage.setItem(key, "true");
-    // Dynamic Message: "Intraday Running"
-    label.innerText = `${horizonLabel} Running`; 
+    label.innerText = "Running"; 
     label.classList.add("text-success");
   } else {
     localStorage.removeItem(key);
-    // Dynamic Message: "Mark Intraday"
-    label.innerText = `Mark ${horizonLabel}`;
+    label.innerText = "Mark Active";
     label.classList.remove("text-success");
   }
 }
 
-// 4. Init on Load
 window.addEventListener('DOMContentLoaded', () => {
   calcSize(); 
   
-  const key = "trade_active_{{ symbol }}_{{ selected_horizon }}";
+  const key = `trade_active_{{ symbol }}_${rawHorizon}`;
   const el = document.getElementById('paperTradeCheck');
-  
-  // Set initial label text based on Horizon
-  if (el) {
-      const label = el.nextElementSibling;
-      
-      if(localStorage.getItem(key) === "true") {
-          el.checked = true;
-          label.innerText = `${horizonLabel} Running`;
-          label.classList.add("text-success");
-      } else {
-          label.innerText = `Mark ${horizonLabel}`;
-          label.classList.remove("text-success");
-      }
+  if (el && localStorage.getItem(key) === "true") {
+      el.checked = true;
+      el.nextElementSibling.innerText = "Running";
+      el.nextElementSibling.classList.add("text-success");
   }
 });
-</script>
 
-<script>
-document.addEventListener("DOMContentLoaded", function() {
-  // confidence-fill width already set inline for PDF compatibility.
-  const fill = document.getElementById("confidence-fill");
-  if (fill) {
-    const value = parseFloat("{{ confidence | default(0) }}") || 0;
-    const safeValue = Math.max(0, Math.min(100, value)); // Clamp
-    fill.style.width = safeValue + "%";
+// Flowchart Link
+async function fetchJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return await res.json();
+}
+document.getElementById('viewFlowchart')?.addEventListener('click', async () => {
+  const ticker = "{{ symbol }}";
+  const idx = "{{ current_index }}";
+  try {
+    const payload = await fetchJson(`/flowchart_payload?symbol=${encodeURIComponent(ticker)}&index=${idx}`);
+    sessionStorage.setItem("flowData", JSON.stringify(payload));
+    window.location.href = "/flowchart";
+  } catch (err) {
+    alert("Flowchart load failed: " + err.message);
   }
 });
-</script>
 
-<script>
 async function loadCorporateActions() {
   const ticker = "{{ symbol }}";
   try {
@@ -766,64 +559,38 @@ async function loadCorporateActions() {
     body.innerHTML = "";
 
     if (!data || data.length === 0) {
-      body.innerHTML = `<tr><td colspan="5">No corporate actions found</td></tr>`;
+      body.innerHTML = `<tr><td colspan="4" class="text-center">No recent actions found.</td></tr>`;
       return;
     }
 
     data.forEach(a => {
-      // Use Ex-Date for Upcoming/Past status
+      // Logic to determine upcoming
       const exDate = new Date(a.ex_date);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const upcoming = exDate >= today;
+      const today = new Date(); today.setHours(0,0,0,0);
+      const isUpcoming = exDate >= today;
 
-      let displayAmount = a.amount || '-';
-      if (typeof displayAmount === 'number' && a.type && a.type.toLowerCase().includes('dividend')) {
-          displayAmount = `₹${displayAmount}`;
+      // Formatting
+      let val = a.amount || a.ratio || '-';
+      if (typeof a.amount === 'number' && (a.type||"").toLowerCase().includes('dividend')) {
+          val = `₹${a.amount}`;
       }
 
       const row = `
-        <tr style="background:${upcoming ? '#ecfff3' : '#f9f9f9'}">
+        <tr class="${isUpcoming ? 'table-success fw-bold' : ''}">
           <td>${a.type}</td>
-          <td>${displayAmount}</td>
+          <td>${val}</td>
           <td>${a.ex_date || '-'}</td>
-          <td>${a.yield ? a.yield + '%' : '-'}</td>
-          <td>${upcoming ? 'Upcoming' : 'Past'}</td>
+          <td>${isUpcoming ? '🔔 Upcoming' : 'Past'}</td>
         </tr>`;
       body.insertAdjacentHTML('beforeend', row);
     });
   } catch (err) {
-    console.error("Error loading corporate actions", err);
-    document.getElementById('corpBody').innerHTML =
-      `<tr><td colspan="5">Error fetching corporate actions</td></tr>`;
+    console.error(err);
+    document.getElementById('corpBody').innerHTML = `<tr><td colspan="4" class="text-danger">Failed to load actions.</td></tr>`;
   }
 }
-window.onload = loadCorporateActions;
-</script>
-<script>
-  async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-  return await res.json();
-}
-document.getElementById('viewFlowchart').addEventListener('click', async () => {
-  const ticker = "{{ symbol }}";
-  const macro_index_name = "{{ macro_index_name }}";
-
-  try {
-    const payload = await fetchJson(`/flowchart_payload?symbol=${encodeURIComponent(ticker)}&index=${encodeURIComponent(macro_index_name)}`);
-    // payload now contains flowchart + raw + extended + fundamentals
-    console.log("JSON.stringify(payload)",JSON.stringify(payload))
-    sessionStorage.setItem("flowData", JSON.stringify(payload));
-    window.location.href = "/flowchart";
-  } catch (err) {
-    console.error("flowchart fetch failed", err);
-    alert("Could not fetch flowchart data: " + err.message);
-  }
-
-});
-
-
+// Trigger on load
+window.addEventListener('DOMContentLoaded', loadCorporateActions);
 </script>
 
 </body>

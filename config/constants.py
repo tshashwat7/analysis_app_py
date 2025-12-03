@@ -12,7 +12,7 @@ STOCH_SLOW = {"k_period": 14, "d_period": 3, "smooth": 3}
 STOCH_THRESHOLDS = {"overbought": 80, "oversold": 20}
 
 # config/constants.py
-ENABLE_CACHE = True
+ENABLE_CACHE = False
 ENABLE_CACHE_WARMER = os.getenv("ENABLE_CACHE_WARMER", "false").lower() == "true"
 
 STOCH_THRESHOLDS = {
@@ -22,10 +22,10 @@ STOCH_THRESHOLDS = {
 
 # ATR-based stoploss/target multipliers
 ATR_MULTIPLIERS = {
-    "intraday": {"tp": 1.2, "sl": 0.6},
-    "short_term": {"tp": 2.0, "sl": 1.0},
-    "long_term": {"tp": 3.0, "sl": 1.5},
-    "multibagger": {"tp": 4.0, "sl": 2.0},  # optional
+    "short_term": {"tp": 3.0, "sl": 2.0},   # ← NEW (wider stops!)
+    "long_term": {"tp": 3.5, "sl": 2.0},
+    "multibagger": {"tp": 4.0, "sl": 2.5},
+    "intraday": {"tp": 2.0, "sl": 1.5}
 }
 
 flowchart_mapping = {
@@ -275,7 +275,8 @@ TECHNICAL_METRIC_MAP = {
     # Utility / reporting
     "sl_2x_atr": "Suggested SL (2xATR)",
     "technical_score": "Technical Score",
-    "Horizon": "Horizon"
+    "Horizon": "Horizon",
+    "wick_rejection": "Wick Rejection"
 }
 
 CORE_TECHNICAL_SETUP_METRICS = [
@@ -805,15 +806,15 @@ MOMENTUM_WEIGHTS = {  # 🆕 CORE COMPOSITES (PRIORITY)
 INDEX_TICKERS = {
     # Broad Market Indices (Comprehensive Coverage)
     "nifty50": "^NSEI",  # Nifty 50 Index (Primary Benchmark)
-    "nifty100": "^NIFTY100.NS",  # Top 100 stocks
-    "niftynext50": "^NIFTYNEXT50.NS",  # Top 51-100 stocks
-    "nifty500": "^NIFTY500.NS",  # Top 500 stocks (Wide Coverage)
-    "midcap150": "^NIFTYMCAP150.NS",  # Mid-cap segment
-    "smallcap100": "^NIFTYSCAP100.NS",  # Small-cap segment
-    "smallcap250": "^NIFTYSCAP250.NS",  # Broader small-cap coverage
-    "microcap250": "^NIFTYMICROCAP250.NS",  # Micro-cap segment
+    "nifty100": "^CNX100",  # Top 100 stocks
+    "niftynext50": "^NSMIDCP",  # Top 51-100 stocks
+    "nifty500": "^CRSLDX",  # Top 500 stocks (Wide Coverage)
+    "midcap150": "NIFTYMIDCAP150.NS",  # Mid-cap segment
+    "smallcap100": "^CNXSC",  # Small-cap segment
+    "smallcap250": "NIFTYSMLCAP250.NS",  # Broader small-cap coverage
+    "microcap250": "NIFTY_MICROCAP250.NS",  # Micro-cap segment
     # Sectoral Indices (Industry-specific Insight)
-    "niftybank": "^NSEBANK.NS",  # Banking sector
+    "niftybank": "^NSEBANK",  # Banking sector
     "niftyit": "^CNXIT.NS",  # Information Technology sector
     "niftypharma": "^CNXPHARMA.NS",  # Pharmaceutical sector
     "niftyfmcg": "^CNXFMCG.NS",  # Fast Moving Consumer Goods sector

@@ -124,7 +124,7 @@ def _fetch_equitymaster_data() -> List[Dict[str, Any]]:
                             item["ex_date"] = datetime.strptime(item["ex_date"], "%Y-%m-%d").date()
                         except Exception:
                             pass
-                logger.info("Loaded %d items from equitymaster cache", len(cached))
+                # logger.info("Loaded %d items from equitymaster cache", len(cached))
                 return cached
     except Exception as e:
         logger.warning("Failed to read EM cache: %s", e)

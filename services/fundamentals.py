@@ -1042,6 +1042,8 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
     fundamentals["market_penalty"] = market_penalty
     fundamentals["final_score"] = final_score
     fundamentals["symbol"] = symbol
+    fundamentals["52w_high"] = round(unifier.get(["fiftyTwoWeekHigh"]), 2)
+    fundamentals["52w_low"] = round(unifier.get(["fiftyTwoWeekLow"]),2)
 
     return fundamentals
 
@@ -1057,10 +1059,10 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
         entry = db.query(FundamentalCache).filter(FundamentalCache.symbol == symbol).first()
         if entry:
             age = (datetime.datetime.now() - entry.updated_at).total_seconds()
-            if age < (24 * 3600):
+            # if age < (24 * 3600):
                 # Valid Cache Hit
                 # SQLAlchemy automatically converts the JSON column back to a Dict
-                return entry.data
+                # return entry.data
 
         # 2. FETCH FRESH (If cache missing or stale)
         data = _compute_fundamentals_core(symbol, apply_market_penalty)

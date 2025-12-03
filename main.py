@@ -45,6 +45,7 @@ from services.metrics_ext import compute_extended_metrics_sync
 from services.flowchart_helper import build_flowchart_payload, df_hash
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, SignalCache, init_db
+from services.trategy_analyzer import analyze_strategies
 
 # Environment-configurable parameters (tweak as needed)
 WARMER_BATCH_SIZE = int(os.getenv("WARMER_BATCH_SIZE", "5"))
@@ -283,6 +284,45 @@ CACHE_LOCK = threading.Lock()
 CACHE_TTL = 60 * 60  # 1 hour
 STOCK_TO_INDEX_MAP: Dict[str, str] = {}
 
+def load_or_create_index(index_name: str):
+    json_file = os.path.join(DATA_DIR, f"{index_name}.json")
+    csv_file = os.path.join(DATA_DIR, f"{index_name}.csv")
+
+    # If JSON exists, load it
+    if os.path.exists(json_file):
+        stocks = get_cached_stocks(json_file)
+        if stocks:
+            return stocks
+
+    # If JSON missing but CSV exists → build JSON
+    if os.path.exists(csv_file):
+        logger.info(f"Parsing CSV for index: {index_name}")
+        pairs = parse_index_csv(csv_file)   # -> List[(symbol, name)]
+
+        if pairs:
+            json_data = [{"symbol": s, "name": n} for s, n in pairs]
+            try:
+                with open(json_file, "w", encoding="utf-8") as f:
+                    json.dump(json_data, f, indent=2)
+                logger.info(f"Created {json_file} with {len(pairs)} stocks")
+            except Exception as e:
+                logger.error(f"Failed writing {json_file}: {e}")
+
+            return pairs
+
+    logger.warning(f"No JSON or CSV found for {index_name}")
+    return []
+
+
+
+def load_or_create_global_stocks():
+    """
+    Loads NSEStock.json (global stock universe).
+    If missing/corrupted -> rebuild from NSEStock.csv.
+    """
+    return load_or_create_index("NSEStock")
+
+
 def build_smart_index_map():
     global STOCK_TO_INDEX_MAP
     
@@ -438,7 +478,7 @@ def get_cached_stocks(index_file: str) -> List[Tuple[str, str]]:
     return []
 
 # --- GLOBAL STOCK LIST LOADER ---
-ALL_STOCKS_LIST = get_cached_stocks(os.path.join(DATA_DIR, "NSEStock.json"))
+ALL_STOCKS_LIST = load_or_create_global_stocks()
 if not ALL_STOCKS_LIST:
     ALL_STOCKS_LIST = get_cached_stocks(NSE_STOCKS_FILE)
 ALL_STOCKS_MAP = {s[0]: s[1] for s in ALL_STOCKS_LIST}
@@ -557,6 +597,19 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                 analysis_data["error_details"].append(f"Scoring/Trade Plan Failed: {e}")
                 logger.error(f"[{symbol}] Scoring/Trade Plan failed: {e}")
         
+        # [NEW] Run Strategy Analysis
+        try:
+            base_inds = analysis_data["indicators"]
+            strategy_report = analyze_strategies(
+                base_inds, 
+                analysis_data["fundamentals"], 
+                horizon="short_term"
+            )
+            analysis_data["strategy_report"] = strategy_report
+        except Exception as e:
+            logger.error(f"[{symbol}] Strategy Analyzer Failed: {e}")
+            analysis_data["strategy_report"] = {}
+
         # 6. SAVE TO SQLITE (The Missing Link)
         # We save the result HERE, inside the worker, using the safe Local Session.
         # This ensures the Cache Warmer actually populates the Grid.
@@ -630,6 +683,7 @@ def _save_analysis_to_db(db: Session, symbol: str, data: Dict[str, Any], index_n
         db.rollback()
 
 # --- ENDPOINTS ---
+
 
 @app.post("/quick_scores")
 async def quick_scores(payload: QuickScoresRequest): 
@@ -705,6 +759,10 @@ async def quick_scores(payload: QuickScoresRequest):
             if current_price and sl_val and current_price > 0:
                 dist = abs(current_price - sl_val) / current_price * 100
                 sl_dist_str = f"{dist:.1f}%"
+            
+            strat_summ = analysis_data.get("strategy_report", {}).get("summary", {})
+            best_strat = strat_summ.get("best_strategy", "N/A")
+            all_fits = ", ".join(strat_summ.get("all_fits", []))
             # --- PHASE 1 INJECTION END ---
 
             # 3. Flatten for Grid
@@ -720,6 +778,8 @@ async def quick_scores(payload: QuickScoresRequest):
                 "rr_ratio": rr if rr else 0,
                 "entry_trigger": entry_val if entry_val else 0,
                 "sl_dist": sl_dist_str,
+                "best_strategy": best_strat,
+                "fitting_strategies": all_fits, # Useful for Grid tooltip
                 # ----------------------------
 
                 # Horizon Scores
@@ -743,39 +803,26 @@ async def quick_scores(payload: QuickScoresRequest):
 
 @app.get("/load_index/{index_name}")
 async def load_index(index_name: str):
-    json_file = os.path.join(DATA_DIR, f"{index_name}.json")
-    csv_file = os.path.join(DATA_DIR, f"{index_name}.csv")
+    # First try JSON
+    stocks = load_or_create_index(index_name)
 
-    stocks = get_cached_stocks(json_file)
-    
-    if not stocks:
-        if os.path.exists(csv_file):
-            logger.info(f"JSON missing for {index_name}. Parsing CSV: {csv_file}")
-            pairs = parse_index_csv(csv_file)
-            if pairs:
-                try:
-                    json_data = [{"symbol": s, "name": n} for s, n in pairs]
-                    with open(json_file, "w", encoding="utf-8") as f:
-                        json.dump(json_data, f, indent=2)
-                    stocks = pairs
-                    logger.info(f"Created {json_file} with {len(stocks)} stocks.")
-                except Exception as e:
-                    logger.error(f"Failed to write JSON {json_file}: {e}")
-        else:
-            logger.warning(f"No JSON or CSV found for {index_name}")
-
+    # Fallback mock data for missing index files
     if not stocks and "nifty" in index_name.lower():
-        stocks = [("RELIANCE.NS","RELIANCE"), ("TCS.NS","TCS")]
+        stocks = [
+            ("RELIANCE.NS","Reliance Industries"), 
+            ("TCS.NS","TCS")
+        ]
 
     tickers = [s[0] for s in stocks]
     pairs = {s[0]: s[1] for s in stocks}
 
     return {
-        "index": index_name, 
-        "count": len(stocks), 
+        "index": index_name,
+        "count": len(stocks),
         "tickers": tickers,
         "pairs": pairs
     }
+
 
 @app.get("/analyze", response_class=HTMLResponse)
 async def analyze_common(request: Request, symbol: str, index: str = "nifty50", horizon: str = None):
@@ -845,7 +892,8 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50", 
             "macro_index_name": index.upper(),
             "macro_trend_status": analysis_data.get("macro_trend_status", "N/A"),
             "macro_close": analysis_data.get("macro_close"),
-            "reasons": [trade_plan.get("reason", "")]
+            "reasons": [trade_plan.get("reason", "")],
+            "strategy_report": analysis_data.get("strategy_report", {}),
         }
         return templates.TemplateResponse("result.html", context)
 

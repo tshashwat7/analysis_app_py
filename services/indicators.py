@@ -788,6 +788,43 @@ def compute_reg_slope(df):
         return {"reg_slope": {"value": round(slope, 2), "score": 10 if slope > 2 else 0}}
     return _wrap_calc(_inner, "Reg Slope")
 
+def compute_wick_rejection(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    """
+    Calculates the 'Upper Wick Ratio' to detect Bull Traps.
+    Ratio = Upper Wick / Candle Body.
+    > 2.0 implies the market rejected higher prices (Shooting Star-like).
+    """
+    def _inner():
+        _Validator.require(df, ["Open", "High", "Close", "Low"])
+        
+        open_p = df["Open"].iloc[-1]
+        close_p = df["Close"].iloc[-1]
+        high_p = df["High"].iloc[-1]
+        
+        # Calculate dimensions
+        body_size = abs(close_p - open_p)
+        upper_wick = high_p - max(open_p, close_p)
+        
+        # Avoid division by zero for Dojis (tiny bodies)
+        # If body is tiny, we use a small epsilon or relative to price
+        denominator = max(body_size, close_p * 0.001) 
+        
+        ratio = upper_wick / denominator
+        
+        # Scoring: High Ratio = Bad (0), Low Ratio = Good (10) for breakouts
+        if ratio > 3.0: sig, score = "Severe Rejection", 0
+        elif ratio > 1.5: sig, score = "Weak Close", 4
+        else: sig, score = "Solid Close", 10
+        
+        return {
+            "wick_rejection": {
+                "value": safe_float(round(ratio, 2)), 
+                "score": score, 
+                "desc": f"Wick/Body Ratio: {ratio:.1f} ({sig})"
+            }
+        }
+    return _wrap_calc(_inner, "Wick Rejection")
+
 def compute_cmf(df: pd.DataFrame, length: int = 20):
     def _inner():
         _Validator.require(df, ["High", "Low", "Close", "Volume"])
@@ -858,6 +895,7 @@ INDICATOR_METRIC_MAP = {
     "cmf_signal": {"func": compute_cmf, "horizon": "short_term"},
     "vwap_bias": {"func": compute_vwap, "horizon": "intraday"},
     "bb_percent_b": {"func": compute_bollinger_bands, "horizon": "default"},
+    "wick_rejection": {"func": compute_wick_rejection, "horizon": "default"},
 }
 
 def compute_indicators(
@@ -887,7 +925,7 @@ def compute_indicators(
         "supertrend_signal", "psar_trend", "ttm_squeeze", "bb_width", 
         "bb_percent_b", "vol_spike_ratio", "pivot_point",
         # 🚨 FIX: Explicitly add Short Term Cross back
-        "ma_cross_setup" 
+        "ma_cross_setup" , "wick_rejection"
     }
     raw_metrics.update(ALWAYS_CALC)
     

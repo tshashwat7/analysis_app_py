@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-theme-alpine.css" />
     
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
-
+    <script src="https://cdn.jsdelivr.net/npm/ag-grid-enterprise/dist/ag-grid-enterprise.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background: #f4f7f6; }
         h1 { text-align: center; color: #333; margin-bottom: 20px; }
@@ -40,6 +40,17 @@
         .score-buy { color: #16a34a; font-weight: bold; }
         .score-hold { color: #d97706; font-weight: bold; }
         .score-sell { color: #dc2626; font-weight: bold; }
+
+        /* Strategy Badges */
+        .strat-badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; border: 1px solid rgba(0,0,0,0.1); }
+        .strat-swing { background: #dbeafe; color: #1e40af; }       /* Blue */
+        .strat-day { background: #ffedd5; color: #9a3412; }         /* Orange */
+        .strat-trend { background: #f3e8ff; color: #6b21a8; }       /* Purple */
+        .strat-momentum { background: #fee2e2; color: #991b1b; }    /* Red */
+        .strat-value { background: #dcfce7; color: #166534; }       /* Green */
+        .strat-income { background: #e0f2fe; color: #075985; }      /* Light Blue */
+        .strat-position { background: #fef9c3; color: #854d0e; }    /* Yellow */
+        .strat-none { color: #9ca3af; font-style: italic; }
     </style>
 </head>
 
@@ -91,81 +102,142 @@
         if(el) el.style.width = p + "%"; 
     }
     
-    // --- 2. Column Definitions ---
-const columnDefs = [
-        // 1. Ticker (Pinned Left)
+// --- 2. Column Definitions ---
+    const columnDefs = [
+        // 1. Ticker (Keep Text Filter - too many unique values for checkboxes)
         { 
             field: "symbol", 
             headerName: "Ticker", 
             pinned: 'left', 
-            width: 110,
+            width: 100,
+            filter: 'agTextColumnFilter', // Explicitly text
             cellRenderer: p => `<a href="/analyze?symbol=${p.value}" class="ticker-link" target="_blank">${p.value}</a>` 
         },
-        { field: "name", headerName: "Company Name", width: 160 },
+        
+        // 2. Top Strategy -> PERFECT for Set Filter (Checkboxes)
+        { 
+            field: "best_strategy", 
+            headerName: "Top Strategy", 
+            width: 130,
+            sortable: true,
+            filter: 'agSetColumnFilter', // <--- ENABLE CHECKBOXES
+            filterParams: {
+                buttons: ['reset', 'apply'], // Optional: Add Apply buttons
+                closeOnApply: true
+            },
+            tooltipValueGetter: p => `Fits: ${p.data.fitting_strategies || 'None'}`, 
+            cellRenderer: p => {
+                const s = p.value;
+                if (!s || s === "N/A" || s === "unknown") return '<span class="strat-none">-</span>';
+                
+                let cls = "strat-none";
+                let icon = "";
+                
+                if(s.includes("swing")) { cls = "strat-swing"; icon = "🌊"; }
+                else if(s.includes("day")) { cls = "strat-day"; icon = "⚡"; }
+                else if(s.includes("trend")) { cls = "strat-trend"; icon = "📈"; }
+                else if(s.includes("momentum")) { cls = "strat-momentum"; icon = "🚀"; }
+                else if(s.includes("value")) { cls = "strat-value"; icon = "💰"; }
+                else if(s.includes("income")) { cls = "strat-income"; icon = "💵"; }
+                else if(s.includes("position")) { cls = "strat-position"; icon = "🏛️"; }
 
-        // 2. NEW: Alignment (Confluence) Column
-        // Shows 3 dots for Intra/Short/Long scores. 
-        // Green dot = Score > 7. Grey dot = Score < 7.
+                return `<span class="strat-badge ${cls}">${icon} ${s.replace("_", " ").toUpperCase()}</span>`;
+            }
+        },
+
+        // 3. Align (With Set Filter Logic)
         {
             headerName: "Align",
             width: 90,
+            
+            // 1. Enable Checkbox Filter
+            filter: 'agSetColumnFilter',
+            
+            // 2. Define logic to count green dots for the filter list
+            filterValueGetter: params => {
+                if (!params.data) return "N/A";
+                
+                // Count how many scores are >= 7
+                const i = (params.data.intra_score || 0) >= 7 ? 1 : 0;
+                const s = (params.data.short_score || 0) >= 7 ? 1 : 0;
+                const l = (params.data.long_score || 0)  >= 7 ? 1 : 0;
+                const count = i + s + l;
+                
+                // Return a readable string for the checkbox list
+                if (count === 3) return "3/3 (Full Align)";
+                if (count === 2) return "2/3 (Strong)";
+                if (count === 1) return "1/3 (Weak)";
+                return "0/3 (No Align)";
+            },
+
+            // 3. Filter Params (Optional styling for the list)
+            filterParams: {
+                buttons: ['reset', 'apply'],
+                closeOnApply: true,
+                // Sort the filter list so "3/3" appears at the top
+                comparator: (a, b) => {
+                    const valA = parseInt(a.charAt(0)) || 0;
+                    const valB = parseInt(b.charAt(0)) || 0;
+                    return valB - valA; // Descending order (3 down to 0)
+                }
+            },
+
+            // 4. The Visual Renderer (The Dots) - unchanged
             cellRenderer: params => {
                 if (!params.data) return '';
-                
-                // Logic: Threshold is 7.0 for a "Good" score
                 const i = (params.data.intra_score || 0) >= 7;
                 const s = (params.data.short_score || 0) >= 7;
                 const l = (params.data.long_score || 0)  >= 7;
-                
-                const dot = (active) => `<span style="font-size:16px; margin:0 2px; color:${active ? '#22c55e' : '#e5e7eb'};">●</span>`;
-                
-                // Tooltip shows the exact numbers on hover
+                const dot = (active) => `<span style="font-size:16px; margin:0 1px; color:${active ? '#22c55e' : '#e5e7eb'};">●</span>`;
                 const tip = `Intra: ${params.data.intra_score || '-'} | Short: ${params.data.short_score || '-'} | Long: ${params.data.long_score || '-'}`;
-                
                 return `<div title="${tip}" style="cursor:help; letter-spacing: -2px;">${dot(i)}${dot(s)}${dot(l)}</div>`;
             }
         },
 
-        // 3. Overall Score
+        // 4. Overall Score (Keep Number Filter)
         { 
-            field: "score", headerName: "Score", width: 90, sortable: true, filter: 'agNumberColumnFilter',
+            field: "score", headerName: "Score", width: 80, sortable: true, 
+            filter: 'agNumberColumnFilter', // Slider/Range is better for numbers
             cellClass: p => p.value >= 70 ? 'score-buy' : p.value < 40 ? 'score-sell' : 'score-hold'
         },
 
-        // 4. Recommendation (Buy/Sell/Hold)
+        // 5. Recommendation -> PERFECT for Set Filter
         { 
-            field: "recommendation", headerName: "Rec.", width: 100, sortable: true, filter: true,
+            field: "recommendation", headerName: "Rec.", width: 100, sortable: true, 
+            filter: 'agSetColumnFilter', // <--- CHECKBOXES (Buy, Sell, Hold)
             cellClass: p => p.value === 'BUY' ? 'buy-cell' : p.value === 'SELL' ? 'sell-cell' : 'hold-cell' 
         },
 
-        // 5. NEW: R:R Ratio (Actionable)
+        // 6. Signal -> PERFECT for Set Filter
         { 
-            field: "rr_ratio", headerName: "R:R", width: 80, sortable: true, filter: 'agNumberColumnFilter',
-            cellClass: p => p.value >= 2.0 ? 'buy-cell' : 'hold-cell',
-            valueFormatter: p => p.value ? p.value + "R" : "-"
-        },
-
-        // 6. NEW: Risk % (Distance to Stop Loss)
-        { 
-            field: "sl_dist", headerName: "Risk %", width: 90, 
-            cellStyle: { 'color': '#dc2626', 'font-weight': '500' }
-        },
-
-        // 7. Timing Signal (Styled with Badges)
-        { 
-            field: "bull_signal", headerName: "Signal", width: 150, sortable: true, filter: true,
+            field: "bull_signal", headerName: "Signal", width: 140, sortable: true, 
+            filter: 'agSetColumnFilter', // <--- CHECKBOXES (Squeeze, Trend, etc.)
             cellRenderer: p => {
                 const val = p.value || "";
-                if (val.includes("SQUEEZE")) return `<span style="background:#d1fae5; color:#065f46; padding:2px 6px; border-radius:4px; font-size:12px;">🚀 ${val}</span>`;
-                if (val.includes("TREND")) return `<span style="background:#dbeafe; color:#1e40af; padding:2px 6px; border-radius:4px; font-size:12px;">📈 ${val}</span>`;
-                if (val.includes("DIP")) return `<span style="background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; font-size:12px;">📉 ${val}</span>`;
-                return val;
+                if (val.includes("SQUEEZE")) return `<span style="background:#d1fae5; color:#065f46; padding:2px 6px; border-radius:4px; font-size:11px;">🚀 ${val}</span>`;
+                if (val.includes("TREND")) return `<span style="background:#dbeafe; color:#1e40af; padding:2px 6px; border-radius:4px; font-size:11px;">📈 ${val}</span>`;
+                if (val.includes("DIP") || val.includes("PULLBACK")) return `<span style="background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; font-size:11px;">📉 ${val}</span>`;
+                return `<span style="font-size:11px; color:#666">${val}</span>`;
             }
         },
 
-        // 8. Confidence Bar
+        // 7. R:R (Number Filter)
         { 
-            field: "confidence", headerName: "Conf %", width: 90, sortable: true, filter: 'agNumberColumnFilter',
+            field: "rr_ratio", headerName: "R:R", width: 70, sortable: true, 
+            filter: 'agNumberColumnFilter',
+            cellClass: p => p.value >= 2.0 ? 'buy-cell' : 'hold-cell',
+            valueFormatter: p => p.value ? p.value + "R" : "-"
+        },
+        // 8. Risk (Number Filter)
+        { 
+            field: "sl_dist", headerName: "Risk", width: 70, 
+            cellStyle: { 'color': '#dc2626', 'font-weight': '500', 'font-size': '12px' }
+        },
+
+        // 9. Confidence (Number Filter)
+        { 
+            field: "confidence", headerName: "Conf", width: 80, sortable: true, 
+            filter: 'agNumberColumnFilter',
             cellRenderer: params => {
                 const val = params.value || 0;
                 const color = val > 70 ? '#22c55e' : val > 40 ? '#facc15' : '#ef4444';
@@ -173,17 +245,19 @@ const columnDefs = [
                         <div style="width: ${val}%; background: ${color}; height: 100%; border-radius: 3px;"></div></div>`;
             }
         },
+        
+        // 10. Company Name (Text Filter)
+        { field: "name", headerName: "Company Name", width: 140, filter: 'agTextColumnFilter' },
 
-        // 9. Company Name
-
-        // 10. Horizon Scores (Hidden by default, but available for the 'Align' column logic)
+        // 11. Hidden Fields
         { field: "intra_score", hide: true },
         { field: "short_score", hide: true },
         { field: "long_score", hide: true },
-        { field: "multi_score", hide: true },
+        { field: "multi_score", hide: true },      
+        { field: "fitting_strategies", hide: true }, 
 
-        // 11. Corporate Actions
-        { field: "corp_action", headerName: "Upcoming Event", width: 180, sortable: true, filter: true },
+        // 12. Corp Actions (Text or Set)
+        { field: "corp_action", headerName: "Events", width: 150, sortable: true, filter: 'agTextColumnFilter' },
     ];
 
     // --- 3. Grid Options ---
@@ -195,16 +269,9 @@ const columnDefs = [
         pagination: true,
         paginationPageSize: 50,
         paginationPageSizeSelector: [20, 50, 100, 500],
-        defaultColDef: { resizable: true, sortable: true, filter: true },
+        defaultColDef: { resizable: true, sortable: true, filter: true, flex: 1, minWidth: 80 },
         getRowId: params => params.data.symbol,
-        defaultColDef: { 
-            resizable: true, 
-            sortable: true, 
-            filter: true,
-            flex: 1,        // <--- Makes columns auto-size to fill width
-            minWidth: 80,   // <--- Prevents columns from crushing too small
-        },
-        // --- CRITICAL: Trigger analysis when page changes ---
+        enableBrowserTooltips: true, 
         onPaginationChanged: onPageChange
     };
 
@@ -214,14 +281,11 @@ const columnDefs = [
         gridApi = agGrid.createGrid(gridDiv, gridOptions);
     });
 
-    // --- 5. Pagination Event Handler (FIXED) ---
+    // --- 5. Pagination Event Handler ---
     function onPageChange() {
         if (isAutoAnalysisActive) {
-            // Only trigger if we are NOT already running an analysis
-            // This prevents the "0/40... 0/30" loop
             if (!isPageAnalyzing) {
                 const currentPage = gridApi.paginationGetCurrentPage();
-                // Optional: Only re-analyze if we moved to a NEW page
                 if (currentPage !== lastAnalyzedPage) {
                     analyzeCurrentView();
                 }
@@ -229,176 +293,139 @@ const columnDefs = [
         }
     }
 
-// --- 6. Concurrent Batch Analysis with Auto-Nav ---
+    // --- 6. Concurrent Batch Analysis ---
+    const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Helper: Pause execution
-const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    async function analyzeCurrentView() {
+        if (!gridApi) return;
+        if (isPageAnalyzing) return;
+        isPageAnalyzing = true;
 
-async function analyzeCurrentView() {
-    if (!gridApi) return;
-    
-    // LOCK: Prevent re-entry
-    if (isPageAnalyzing) return;
-    isPageAnalyzing = true;
+        const index_name = document.getElementById("indexSelect").value;
+        const pageSize = gridApi.paginationGetPageSize();
+        const currentPage = gridApi.paginationGetCurrentPage();
+        const totalPages = gridApi.paginationGetTotalPages();
+        const startRow = currentPage * pageSize;
+        const endRow = startRow + pageSize;
 
-    const index_name = document.getElementById("indexSelect").value;
-    
-    // 1. Identify rows
-    const pageSize = gridApi.paginationGetPageSize();
-    const currentPage = gridApi.paginationGetCurrentPage();
-    const totalPages = gridApi.paginationGetTotalPages();
-    const startRow = currentPage * pageSize;
-    const endRow = startRow + pageSize;
-
-    const symbolsToAnalyze = [];
-    
-    gridApi.forEachNodeAfterFilterAndSort((node) => {
-        if (node.rowIndex >= startRow && node.rowIndex < endRow) {
-            // Optimization: Only analyze if score is missing
-            if (node.data.score === null || node.data.score === undefined) {
-                symbolsToAnalyze.push(node.data.symbol);
+        const symbolsToAnalyze = [];
+        gridApi.forEachNodeAfterFilterAndSort((node) => {
+            if (node.rowIndex >= startRow && node.rowIndex < endRow) {
+                if (node.data.score === null || node.data.score === undefined) {
+                    symbolsToAnalyze.push(node.data.symbol);
+                }
             }
+        });
+
+        if (symbolsToAnalyze.length === 0) {
+            setStatus(`Page ${currentPage + 1} is up to date.`);
+            setProgress(100);
+            lastAnalyzedPage = currentPage;
+            handleAutoNavigation(currentPage, totalPages);
+            isPageAnalyzing = false; 
+            return;
         }
-    });
 
-    // 2. Handle Empty Page / Already Analyzed
-    if (symbolsToAnalyze.length === 0) {
-        setStatus(`Page ${currentPage + 1} is up to date.`);
-        setProgress(100);
-        lastAnalyzedPage = currentPage;
-        handleAutoNavigation(currentPage, totalPages); // Move next if Auto-On
-        isPageAnalyzing = false; 
-        return;
-    }
+        const BATCH_SIZE = 5; 
+        const batches = [];
+        for (let i = 0; i < symbolsToAnalyze.length; i += BATCH_SIZE) {
+            batches.push(symbolsToAnalyze.slice(i, i + BATCH_SIZE));
+        }
 
-    // 3. BATCHING LOGIC (Your UX Optimization)
-    const BATCH_SIZE = 5; 
-    const batches = [];
-    for (let i = 0; i < symbolsToAnalyze.length; i += BATCH_SIZE) {
-        batches.push(symbolsToAnalyze.slice(i, i + BATCH_SIZE));
-    }
+        let completedCount = 0;
+        const total = symbolsToAnalyze.length;
+        setStatus(`0/${total} Analyzed on Page ${currentPage + 1}...`);
+        setProgress(5);
 
-    let completedCount = 0;
-    const total = symbolsToAnalyze.length;
-    setStatus(`0/${total} Analyzed on Page ${currentPage + 1}...`);
-    setProgress(5);
-
-    // 4. Process Batches Concurrently
-    // We map each batch to a fetch Promise
-    const tasks = batches.map(async (batch) => {
-        const MAX_RETRIES = 3;
-        
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-            try {
-                const resp = await fetch("/quick_scores", {
-                    method: "POST",
-                    headers: {"Content-Type":"application/json"},
-                    body: JSON.stringify({symbols: batch, index_name: index_name})
-                });
-                
-                if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                
-                const map = await resp.json();
-                
-                // Update Grid INCREMENTALLY
-                const updates = [];
-                for(const s of batch){
-                    if(map[s]){
-                        const node = gridApi.getRowNode(s);
-                        if(node && node.data){
-                            updates.push({ 
-                                ...node.data, 
-                                ...map[s],
-                                name: node.data.name, 
-                                corp_action: node.data.corp_action
-                            }); 
+        const tasks = batches.map(async (batch) => {
+            const MAX_RETRIES = 3;
+            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+                try {
+                    const resp = await fetch("/quick_scores", {
+                        method: "POST",
+                        headers: {"Content-Type":"application/json"},
+                        body: JSON.stringify({symbols: batch, index_name: index_name})
+                    });
+                    
+                    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const map = await resp.json();
+                    
+                    const updates = [];
+                    for(const s of batch){
+                        if(map[s]){
+                            const node = gridApi.getRowNode(s);
+                            if(node && node.data){
+                                updates.push({ 
+                                    ...node.data, 
+                                    ...map[s],
+                                    name: node.data.name, 
+                                    corp_action: node.data.corp_action
+                                }); 
+                            }
                         }
                     }
-                }
-                if (updates.length > 0) {
-                    gridApi.applyTransaction({ update: updates });
-                }
+                    if (updates.length > 0) gridApi.applyTransaction({ update: updates });
 
-                // Update Progress
-                completedCount += batch.length;
-                const percent = Math.floor((completedCount / total) * 100);
-                setStatus(`${completedCount}/${total} Analyzed...`);
-                setProgress(percent);
-                
-                break; // Success! Exit retry loop
-
-            } catch(err) {
-                console.error(`Batch failed (Attempt ${attempt}):`, err);
-                if (attempt < MAX_RETRIES) {
-                    await wait(2000); // Retry delay
+                    completedCount += batch.length;
+                    const percent = Math.floor((completedCount / total) * 100);
+                    setStatus(`${completedCount}/${total} Analyzed...`);
+                    setProgress(percent);
+                    break;
+                } catch(err) {
+                    console.error(`Batch failed (Attempt ${attempt}):`, err);
+                    if (attempt < MAX_RETRIES) await wait(2000);
                 }
             }
-        }
-    });
+        });
 
-    // 5. Wait for ALL batches to finish
-    await Promise.all(tasks);
-
-    setStatus(`Page ${currentPage + 1} Complete.`);
-    setProgress(100);
-    lastAnalyzedPage = currentPage;
-    
-    // 6. Navigation Decision (Auto-Advance)
-    handleAutoNavigation(currentPage, totalPages);
-    isPageAnalyzing = false; // Unlock
-}
-
-// --- AUTO-NAV HELPER (Same as before) ---
-async function handleAutoNavigation(currentPage, totalPages) {
-    if (!isAutoAnalysisActive) return;
-
-    if (currentPage < totalPages - 1) {
-        await wait(1000); 
-        lastAnalyzedPage = currentPage; 
-        gridApi.paginationGoToNextPage(); 
-    } else {
-        setStatus("Analysis Complete: All pages scanned.");
-        stopAutoAnalyze();
-        alert("Full Market Scan Complete! 🚀");
+        await Promise.all(tasks);
+        setStatus(`Page ${currentPage + 1} Complete.`);
+        setProgress(100);
+        lastAnalyzedPage = currentPage;
+        handleAutoNavigation(currentPage, totalPages);
+        isPageAnalyzing = false;
     }
-}
 
-// --- 7. Button Handlers (Updated) ---
+    // --- 7. Auto-Nav & Controls ---
+    async function handleAutoNavigation(currentPage, totalPages) {
+        if (!isAutoAnalysisActive) return;
+        if (currentPage < totalPages - 1) {
+            await wait(1000); 
+            lastAnalyzedPage = currentPage; 
+            gridApi.paginationGoToNextPage(); 
+        } else {
+            setStatus("Analysis Complete: All pages scanned.");
+            stopAutoAnalyze();
+            alert("Full Market Scan Complete! 🚀");
+        }
+    }
 
-function startAutoAnalyze(){
-    if (isAutoAnalysisActive) return; // Prevent double clicks
-    
-    isAutoAnalysisActive = true;
-    document.getElementById("startBtn").disabled = true;
-    document.getElementById("stopBtn").disabled = false;
-    document.getElementById("loadBtn").disabled = true; // Lock load during run
-    document.getElementById("startBtn").innerText = "Running...";
-    document.getElementById("startBtn").style.background = "#e2e8f0";
-    document.getElementById("startBtn").style.color = "#333";
-    
-    // Reset page tracking to force analysis of current view
-    lastAnalyzedPage = -1; 
-    analyzeCurrentView();
-}
+    function startAutoAnalyze(){
+        if (isAutoAnalysisActive) return;
+        isAutoAnalysisActive = true;
+        document.getElementById("startBtn").disabled = true;
+        document.getElementById("stopBtn").disabled = false;
+        document.getElementById("loadBtn").disabled = true;
+        document.getElementById("startBtn").innerText = "Running...";
+        document.getElementById("startBtn").style.background = "#e2e8f0";
+        document.getElementById("startBtn").style.color = "#333";
+        lastAnalyzedPage = -1; 
+        analyzeCurrentView();
+    }
 
-function stopAutoAnalyze(){ 
-    isAutoAnalysisActive = false; 
-    
-    // Reset Buttons
-    const startBtn = document.getElementById("startBtn");
-    startBtn.disabled = false;
-    startBtn.innerText = "Start Auto Analysis";
-    startBtn.style.background = "#007bff"; // Restore blue color
-    startBtn.style.color = "white";
+    function stopAutoAnalyze(){ 
+        isAutoAnalysisActive = false; 
+        const startBtn = document.getElementById("startBtn");
+        startBtn.disabled = false;
+        startBtn.innerText = "Start Auto Analysis";
+        startBtn.style.background = "#007bff"; 
+        startBtn.style.color = "white";
+        document.getElementById("stopBtn").disabled = true;
+        document.getElementById("loadBtn").disabled = false;
+        setStatus("Auto-Analysis Stopped / Finished.");
+        setProgress(0);
+    }
 
-    document.getElementById("stopBtn").disabled = true;
-    document.getElementById("loadBtn").disabled = false; // Re-enable load
-    
-    setStatus("Auto-Analysis Stopped / Finished.");
-    setProgress(0);
-}
-
-    // --- 8. Load Index ---
     async function loadIndex(){
         const idx = document.getElementById("indexSelect").value;
         setStatus(`Loading ${idx.toUpperCase()} tickers...`);
@@ -421,6 +448,7 @@ function stopAutoAnalyze(){
                 symbol: t,
                 name: j.pairs ? j.pairs[t] : t,
                 score: null, 
+                best_strategy: null, // Init strategy field
                 recommendation: "--",
                 bull_signal: "--",
                 corp_action: ""
@@ -428,7 +456,6 @@ function stopAutoAnalyze(){
             
             gridApi.setGridOption('rowData', rowData);
             
-            // Reset state
             lastAnalyzedPage = -1;
             setProgress(100);
             setStatus(`Loaded ${rowData.length} tickers. Ready to analyze.`);
@@ -443,49 +470,35 @@ function stopAutoAnalyze(){
         document.getElementById("loadBtn").disabled = false;
     }
     
-    // --- 9. Corporate Actions (Fixed: Chunks entire list) ---
-async function populateCorporateActions(tickers) {
-    if (!tickers || tickers.length === 0) return;
-    
-    // Process in chunks of 50 to avoid payload limits
-    const CHUNK_SIZE = 50;
-    
-    for (let i = 0; i < tickers.length; i += CHUNK_SIZE) {
-        const chunk = tickers.slice(i, i + CHUNK_SIZE);
-        
-        try {
-            // Run in background (no await) to let UI stay responsive
-            fetch('/corporate_action_summary', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ tickers: chunk })
-            })
-            .then(res => res.json())
-            .then(summary => {
-                if (!summary) return;
-                const rowsToUpdate = [];
-                for (const [sym, info] of Object.entries(summary)) {
-                    if (info && info !== "-") {
-                        const node = gridApi.getRowNode(sym);
-                        if(node && node.data){
-                            rowsToUpdate.push({
-                                ...node.data,
-                                corp_action: info 
-                            });
+    async function populateCorporateActions(tickers) {
+        if (!tickers || tickers.length === 0) return;
+        const CHUNK_SIZE = 50;
+        for (let i = 0; i < tickers.length; i += CHUNK_SIZE) {
+            const chunk = tickers.slice(i, i + CHUNK_SIZE);
+            try {
+                fetch('/corporate_action_summary', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tickers: chunk })
+                })
+                .then(res => res.json())
+                .then(summary => {
+                    if (!summary) return;
+                    const rowsToUpdate = [];
+                    for (const [sym, info] of Object.entries(summary)) {
+                        if (info && info !== "-") {
+                            const node = gridApi.getRowNode(sym);
+                            if(node && node.data){
+                                rowsToUpdate.push({ ...node.data, corp_action: info });
+                            }
                         }
                     }
-                }
-                if(rowsToUpdate.length > 0) {
-                    gridApi.applyTransaction({ update: rowsToUpdate });
-                }
-            });
-            
-            // Small delay between chunks to be nice to the server
-            await new Promise(r => setTimeout(r, 200)); 
-
-        } catch (e) { console.error("Corp Action Error:", e); }
+                    if(rowsToUpdate.length > 0) gridApi.applyTransaction({ update: rowsToUpdate });
+                });
+                await new Promise(r => setTimeout(r, 200)); 
+            } catch (e) { console.error("Corp Action Error:", e); }
+        }
     }
-}
 </script>
 </body>
 </html>
