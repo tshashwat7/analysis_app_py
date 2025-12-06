@@ -12,8 +12,9 @@ from services.patterns.three_line_strike import ThreeLineStrikePattern
 from services.patterns.ichimoku_signals import IchimokuSignals
 from services.patterns.golden_cross import GoldenDeathCross
 from services.patterns.double_top_bottom import DoubleTopBottom
-from services.patterns.head_shoulders import HeadShouldersPattern
-from services.patterns.engulfing import EngulfingPattern
+# from services.patterns.head_shoulders import HeadShouldersPattern ## removed to avoid pattern noise
+# from services.patterns.engulfing import EngulfingPattern
+
 
 # Import Fusion
 from services.fusion.pattern_fusion import merge_pattern_into_indicators
@@ -33,8 +34,6 @@ class PatternAnalyzer:
             IchimokuSignals(),
             GoldenDeathCross(),
             DoubleTopBottom(),
-            HeadShouldersPattern(),
-            EngulfingPattern()
         ]
 
     def analyze(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
@@ -56,7 +55,7 @@ class PatternAnalyzer:
 
         # FUSION: Inject findings directly into indicators
         # This makes the rest of your system (Scoring/UI) see patterns as metrics
-        merge_pattern_into_indicators(indicators, results)
+        merge_pattern_into_indicators(indicators, results, horizon=horizon)
         
         return results
 

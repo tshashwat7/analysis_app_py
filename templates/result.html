@@ -1,84 +1,185 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8"/>
-<title>Result - {{ symbol }}</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<style>
-  body{font-family:'Inter',system-ui,-apple-system,sans-serif; background:#f0f2f5; color:#1f2937; padding-bottom:100px;}
-  .wrap {max-width:1250px; margin:auto; padding: 20px;}
-  
-  /* Cards */
-  .card { border:none; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.1); transition:transform 0.2s; background:#fff; }
-  .card:hover { box-shadow:0 4px 6px rgba(0,0,0,0.1); }
-  .section-title { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; color: #6b7280; margin-bottom: 12px; border-bottom: 2px solid #f3f4f6; padding-bottom: 8px; }
+  <meta charset="utf-8" />
+  <title>Result - {{ symbol }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <style>
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: #f0f2f5;
+      color: #1f2937;
+      padding-bottom: 100px;
+    }
 
-  /* Badges & Colors */
-  .badge-custom { padding:6px 10px; border-radius:6px; font-weight:600; font-size:0.75rem; }
-  .bg-buy { background-color:#dcfce7; color:#166534; }
-  .bg-sell { background-color:#fee2e2; color:#991b1b; }
-  .bg-hold { background-color:#fef3c7; color:#92400e; }
-  
-  /* Strategy DNA Badges */
-  .strat-fit { border-left: 4px solid #22c55e; background: #f0fdf4; padding: 8px; margin-bottom: 6px; border-radius: 4px; }
-  .strat-no-fit { opacity: 0.5; font-size: 0.8rem; }
-  
-  /* Confidence Bar */
-  .confidence-track { width:100%; height:8px; background:#e5e7eb; border-radius:4px; overflow:hidden; }
-  .confidence-fill { height:100%; transition:width 1s; }
+    .wrap {
+      max-width: 1250px;
+      margin: auto;
+      padding: 20px;
+    }
 
-  /* Execution Zone */
-  .exec-number { font-size: 1.4rem; font-weight: 800; letter-spacing: -0.5px; }
-  .exec-label { font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600; }
-  
-  /* Tables */
-  .table-custom th { background: #f9fafb; font-size: 0.75rem; text-transform: uppercase; color: #6b7280; }
-  .table-custom td { font-size: 0.85rem; vertical-align: middle; }
-  
-  /* Sticky Footer */
-  .trade-footer { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-top: 1px solid #e5e7eb; }
-  /* PDF Export Helpers */
-.card {
-    page-break-inside: avoid; /* Try not to split cards across pages */
-}
-tr {
-    page-break-inside: avoid; /* Keep table rows together */
-}
-</style>
+    /* Cards */
+    .card {
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      transition: transform 0.2s;
+      background: #fff;
+    }
+
+    .card:hover {
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .section-title {
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 700;
+      color: #6b7280;
+      margin-bottom: 12px;
+      border-bottom: 2px solid #f3f4f6;
+      padding-bottom: 8px;
+    }
+
+    /* Badges & Colors */
+    .badge-custom {
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.75rem;
+    }
+
+    .bg-buy {
+      background-color: #dcfce7;
+      color: #166534;
+    }
+
+    .bg-sell {
+      background-color: #fee2e2;
+      color: #991b1b;
+    }
+
+    .bg-hold {
+      background-color: #fef3c7;
+      color: #92400e;
+    }
+
+    /* Strategy DNA Badges */
+    .strat-fit {
+      border-left: 4px solid #22c55e;
+      background: #f0fdf4;
+      padding: 8px;
+      margin-bottom: 6px;
+      border-radius: 4px;
+    }
+
+    .strat-no-fit {
+      opacity: 0.5;
+      font-size: 0.8rem;
+    }
+
+    /* Confidence Bar */
+    .confidence-track {
+      width: 100%;
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .confidence-fill {
+      height: 100%;
+      transition: width 1s;
+    }
+
+    /* Execution Zone */
+    .exec-number {
+      font-size: 1.4rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+
+    .exec-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: #6b7280;
+      font-weight: 600;
+    }
+
+    /* Tables */
+    .table-custom th {
+      background: #f9fafb;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: #6b7280;
+    }
+
+    .table-custom td {
+      font-size: 0.85rem;
+      vertical-align: middle;
+    }
+
+    /* Sticky Footer */
+    .trade-footer {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-top: 1px solid #e5e7eb;
+    }
+
+    /* PDF Export Helpers */
+    @media print {
+      body {
+        margin: 0 auto !important;
+      }
+
+      .card {
+        page-break-inside: avoid;
+      }
+
+      tr {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
 </head>
+
 <body>
 
-<div class="wrap">
+  <div class="wrap">
 
-  <div class="card p-4 mb-3">
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
-      
-      <div>
-        <div class="d-flex align-items-baseline gap-2">
-          <h2 class="mb-0 fw-bold">{{ symbol }}</h2>
-          <span class="fs-4 fw-light text-secondary">₹{{ indicators.get('price', {}).get('value') | default('N/A') }}</span>
+    <div class="card p-4 mb-3">
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+
+        <div>
+          <div class="d-flex align-items-baseline gap-2">
+            <h2 class="mb-0 fw-bold">{{ symbol }}</h2>
+            <span class="fs-4 fw-light text-secondary">₹{{ indicators.get('price', {}).get('value') | default('N/A')
+              }}</span>
+          </div>
+          <div class="text-muted small mt-1">
+            Index: <b>{{ current_index | upper }}</b> |
+            52W H/L: {{ fundamentals.get('52w_high') | default('-') }} / {{ fundamentals.get('52w_low') | default('-')
+            }}
+          </div>
         </div>
-        <div class="text-muted small mt-1">
-          Index: <b>{{ current_index | upper }}</b> | 
-          52W H/L: {{ fundamentals.get('52w_high') | default('-') }} / {{ fundamentals.get('52w_low') | default('-') }}
-        </div>
-      </div>
-      <button onclick="exportPDF()" class="btn btn-outline-danger btn-sm shadow-sm">
+        <button onclick="exportPDF()" class="btn btn-outline-danger btn-sm shadow-sm">
           <i class="bi bi-file-earmark-pdf-fill me-1"></i> Export PDF
-      </button>
-      <div class="btn-group shadow-sm" role="group">
-        {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
-        {# Use .get() if available, or check if key exists to avoid attribute errors #}
-        {% if full_report.profiles and pname in full_report.profiles %}
+        </button>
+        <div class="btn-group shadow-sm" role="group">
+          {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
+          {# Use .get() if available, or check if key exists to avoid attribute errors #}
+          {% if full_report.profiles and pname in full_report.profiles %}
           {% set profile_data = full_report.profiles[pname] %}
           {% set p_score = profile_data.final_score | default(0) %}
-          
+
           {% set is_active = (selected_horizon == pname) %}
-          
-          <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ pname }}" 
+
+          <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ pname }}"
             class="btn btn-sm {{ 'btn-primary fw-bold' if is_active else 'btn-light text-secondary border' }}"
             style="min-width: 100px;">
             {{ pname | replace('_', ' ') | title }}
@@ -86,45 +187,48 @@ tr {
               {{ p_score | round(1) }}
             </span>
           </a>
-        {% endif %}
-      {% endfor %}
-      </div>
+          {% endif %}
+          {% endfor %}
+        </div>
 
-      <div class="text-end">
-        {% set fs = profile_report.final_score | default(0) %}
-        {% set cat = profile_report.category | default('HOLD') %}
-        <div class="d-flex flex-column align-items-end">
-          <span class="badge rounded-pill fs-6 px-3 py-2 mb-1 {{ 'bg-buy' if cat=='BUY' else ('bg-sell' if cat=='SELL' else 'bg-hold') }}">
-            {{ cat }} ({{ fs }}/10)
-          </span>
-          <div style="width: 140px;">
-            <div class="d-flex justify-content-between small text-muted mb-1">
-              <span>Conf.</span><span>{{ confidence }}%</span>
-            </div>
-            <div class="confidence-track">
-              <div class="confidence-fill" style="width: {{ confidence }}%; background: {{ '#22c55e' if confidence > 60 else '#ef4444' }};"></div>
+        <div class="text-end">
+          {% set fs = profile_report.final_score | default(0) %}
+          {% set cat = profile_report.category | default('HOLD') %}
+          <div class="d-flex flex-column align-items-end">
+            <span
+              class="badge rounded-pill fs-6 px-3 py-2 mb-1 {{ 'bg-buy' if cat=='BUY' else ('bg-sell' if cat=='SELL' else 'bg-hold') }}">
+              {{ cat }} ({{ fs }}/10)
+            </span>
+            <div style="width: 140px;">
+              <div class="d-flex justify-content-between small text-muted mb-1">
+                <span>Conf.</span><span>{{ confidence }}%</span>
+              </div>
+              <div class="confidence-track">
+                <div class="confidence-fill"
+                  style="width: {{ confidence }}%; background: {{ '#22c55e' if confidence > 60 else '#ef4444' }};">
+                </div>
+              </div>
             </div>
           </div>
         </div>
+
       </div>
-
     </div>
-  </div>
 
-  {% if error %}
+    {% if error %}
     <div class="alert alert-danger">{{ error }}</div>
-  {% else %}
+    {% else %}
 
-  <div class="row g-3 mb-3">
-    
-    <div class="col-md-5">
-      <div class="card h-100 p-3">
-        <h5 class="section-title"><i class="bi bi-diagram-3-fill me-2"></i> Strategy Fit (The "Why")</h5>
-        
-        {% set strat = strategy_report %}
-        {% set summary = strat.summary %}
-        
-        {% if summary and summary.best_strategy %}
+    <div class="row g-3 mb-3">
+
+      <div class="col-md-5">
+        <div class="card h-100 p-3">
+          <h5 class="section-title"><i class="bi bi-diagram-3-fill me-2"></i> Strategy Fit (The "Why")</h5>
+
+          {% set strat = strategy_report %}
+          {% set summary = strat.summary %}
+
+          {% if summary and summary.best_strategy %}
           <div class="mb-3">
             <span class="text-muted small">Top Strategy:</span>
             <span class="fw-bold text-primary">{{ summary.best_strategy | replace('_', ' ') | title }}</span>
@@ -133,173 +237,178 @@ tr {
 
           <div style="max-height: 200px; overflow-y: auto; padding-right: 5px;">
             {% for s_name in ['swing', 'day_trading', 'trend_following', 'momentum', 'value', 'position_trading'] %}
-              {% set s_data = strat[s_name] %}
-              {% if s_data and s_data.fit %}
-                <div class="strat-fit">
-                  <div class="d-flex justify-content-between">
-                    <strong>
-                      {% if 'swing' in s_name %}🌊{% elif 'day' in s_name %}⚡{% elif 'trend' in s_name %}📈{% elif 'momentum' in s_name %}🚀{% elif 'value' in s_name %}💰{% endif %} 
-                      {{ s_name | replace('_', ' ') | title }}
-                    </strong>
-                    <span class="small fw-bold">{{ s_data.score }}</span>
-                  </div>
-                  {% if s_data.reasons %}
-                    <div class="small text-muted mt-1">Make sure: {{ s_data.reasons[0] }}</div>
-                  {% endif %}
-                </div>
-              {% endif %}
-            {% endfor %}
-            
-            {% if not summary.all_fits %}
-              <div class="text-center text-muted small py-4">
-                No specific strategy fits this stock well right now.
+            {% set s_data = strat[s_name] %}
+            {% if s_data and s_data.fit %}
+            <div class="strat-fit">
+              <div class="d-flex justify-content-between">
+                <strong>
+                  {% if 'swing' in s_name %}🌊{% elif 'day' in s_name %}⚡{% elif 'trend' in s_name %}📈{% elif
+                  'momentum' in s_name %}🚀{% elif 'value' in s_name %}💰{% endif %}
+                  {{ s_name | replace('_', ' ') | title }}
+                </strong>
+                <span class="small fw-bold">{{ s_data.score }}</span>
               </div>
+              {% if s_data.reasons %}
+              <div class="small text-muted mt-1">Make sure: {{ s_data.reasons[0] }}</div>
+              {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+
+            {% if not summary.all_fits %}
+            <div class="text-center text-muted small py-4">
+              No specific strategy fits this stock well right now.
+            </div>
             {% endif %}
           </div>
 
-        {% else %}
+          {% else %}
           <div class="text-muted small">Strategy Engine data unavailable.</div>
-        {% endif %}
+          {% endif %}
+        </div>
       </div>
-    </div>
 
-    <div class="col-md-4">
-      <div class="card h-100 p-3">
-        <h5 class="section-title"><i class="bi bi-speedometer2 me-2"></i> {{ selected_horizon | title }} Drivers</h5>
-        <div class="table-responsive">
-          <table class="table table-custom table-hover mb-0">
-            <tbody>
-              {% for key, score in profile_report.metric_details|dictsort(false, 'value')|reverse %}
-                {% if loop.index <= 5 %}
-                <tr>
+      <div class="col-md-4">
+        <div class="card h-100 p-3">
+          <h5 class="section-title"><i class="bi bi-speedometer2 me-2"></i> {{ selected_horizon | title }} Drivers</h5>
+          <div class="table-responsive">
+            <table class="table table-custom table-hover mb-0">
+              <tbody>
+                {% for key, score in profile_report.metric_details|dictsort(false, 'value')|reverse %}
+                {% if loop.index <= 5 %} <tr>
                   <td>{{ key | replace('_', ' ') | title }}</td>
-                  <td class="text-end fw-bold {{ 'text-success' if score >= 7 else ('text-danger' if score <= 3 else 'text-muted') }}">
+                  <td
+                    class="text-end fw-bold {{ 'text-success' if score >= 7 else ('text-danger' if score <= 3 else 'text-muted') }}">
                     {{ score }}
                   </td>
-                </tr>
-                {% endif %}
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-        
-        {% if profile_report.applied_penalties %}
-        <div class="mt-2 pt-2 border-top">
-          <small class="text-danger fw-bold">⚠️ Drag Factors:</small>
-          <ul class="mb-0 ps-3 small text-muted">
-            {% for p in profile_report.applied_penalties %}
+                  </tr>
+                  {% endif %}
+                  {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          {% if profile_report.applied_penalties %}
+          <div class="mt-2 pt-2 border-top">
+            <small class="text-danger fw-bold">⚠️ Drag Factors:</small>
+            <ul class="mb-0 ps-3 small text-muted">
+              {% for p in profile_report.applied_penalties %}
               <li>{{ p.metric | replace('_', ' ') }}: -{{ (p.penalty * 10) | round(1) }}</li>
-            {% endfor %}
-          </ul>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
         </div>
-        {% endif %}
       </div>
-    </div>
 
-    <div class="col-md-3">
-      <div class="card h-100 p-3 text-center d-flex flex-column justify-content-center">
-        <h5 class="text-muted small mb-2">SETUP SIGNAL</h5>
-        {% set tr = trade_recommendation %}
-        <h3 class="fw-bold {{ 'text-success' if 'BUY' in tr.signal else ('text-danger' if 'SHORT' in tr.signal else 'text-muted') }}">
-          {{ tr.signal | replace('_', ' ') }}
-        </h3>
-        
-        {% if tr.setup_type != 'GENERIC' %}
-        <div class="mt-2">
-          <span class="badge bg-light text-dark border">
-             ⚡ {{ tr.setup_type | replace('_', ' ') }}
-          </span>
-        </div>
-        {% endif %}
-        
-        <div class="mt-3 small text-muted">
-          {{ tr.reason | truncate(60) }}
-        </div>
-        
-        <button id="viewFlowchart" class="btn btn-outline-primary btn-sm mt-3 w-100">
-          <i class="bi bi-diagram-2"></i> Logic Flow
-        </button>
-      </div>
-    </div>
-
-  </div>
-
-  <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0" style="border-left-width: 5px !important;">
-    <div class="card-body p-0">
-      <div class="row g-0">
-        
-        <div class="col-md-6 p-4 border-end">
-          <h5 class="section-title text-primary"><i class="bi bi-crosshair me-2"></i> Trade Plan</h5>
-          
+      <div class="col-md-3">
+        <div class="card h-100 p-3 text-center d-flex flex-column justify-content-center">
+          <h5 class="text-muted small mb-2">SETUP SIGNAL</h5>
           {% set tr = trade_recommendation %}
-          {% set has_trade = "BUY" in tr.signal or "SHORT" in tr.signal %}
-          {% if trade_recommendation.entry and trade_recommendation.stop_loss and trade_recommendation.targets.t1 %}
-<div class="my-3 px-2">
-  <div class="position-relative mt-4 mb-2" style="height: 6px; background: #e9ecef; border-radius: 4px;">
-    <div class="position-absolute top-0 start-0 translate-middle" style="left: 0%; top: 50% !important;">
-      <div class="badge bg-danger rounded-pill shadow-sm" style="font-size: 0.6rem;">SL</div>
-    </div>
-    
-    <div class="position-absolute top-0 start-50 translate-middle">
-      <div class="badge bg-primary rounded-pill shadow-sm" style="font-size: 0.6rem;">ENTRY</div>
-    </div>
+          <h3
+            class="fw-bold {{ 'text-success' if 'BUY' in tr.signal else ('text-danger' if 'SHORT' in tr.signal else 'text-muted') }}">
+            {{ tr.signal | replace('_', ' ') }}
+          </h3>
 
-    <div class="position-absolute top-0 end-0 translate-middle">
-      <div class="badge bg-success rounded-pill shadow-sm" style="font-size: 0.6rem;">T1</div>
-    </div>
-    
-    <div class="position-absolute top-0 start-0 h-100 bg-danger opacity-25" style="width: 50%; border-radius: 4px 0 0 4px;"></div>
-    <div class="position-absolute top-0 start-50 h-100 bg-success opacity-25" style="width: 50%; border-radius: 0 4px 4px 0;"></div>
-  </div>
-  <div class="d-flex justify-content-between text-muted" style="font-size: 0.65rem;">
-    <span>{{ trade_recommendation.stop_loss }}</span>
-    <span class="fw-bold text-dark">{{ trade_recommendation.entry }}</span>
-    <span>{{ trade_recommendation.targets.t1 }}</span>
-  </div>
-</div>
-{% endif %}
-          <div class="row g-3 text-center mt-1">
-            <div class="col-6">
-              <div class="exec-label">Entry Zone</div>
-              <div class="exec-number {{ 'text-primary' if has_trade else 'text-muted opacity-50' }}">
-                {{ "₹" ~ tr.entry if tr.entry else '-' }}
-              </div>
-            </div>
-            <div class="col-6">
-              <div class="exec-label">Stop Loss</div>
-              <div class="exec-number {{ 'text-danger' if has_trade else 'text-muted opacity-50' }}">
-                {{ "₹" ~ tr.stop_loss if tr.stop_loss else '-' }}
-              </div>
-            </div>
+          {% if tr.setup_type != 'GENERIC' %}
+          <div class="mt-2">
+            <span class="badge bg-light text-dark border">
+              ⚡ {{ tr.setup_type | replace('_', ' ') }}
+            </span>
+          </div>
+          {% endif %}
+
+          <div class="mt-3 small text-muted">
+            {{ tr.reason | truncate(60) }}
           </div>
 
-          <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
-            
-            <div class="text-center border-end pe-3">
-              <div class="exec-label">Target 1</div>
-              <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t1 if tr.targets.t1 else '-' }}</div>
-            </div>
-
-            <div class="text-center border-end pe-3">
-              <div class="exec-label">Target 2</div>
-              <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t2 if tr.targets.t2 else '-' }}</div>
-            </div>
-            
-            <div class="text-center">
-              <div class="exec-label">Est. Hold</div>
-              <div class="badge bg-light text-secondary border">{{ tr.est_time if tr.est_time else '-' }}</div>
-            </div>
-            <div class="text-center">
-              <div class="exec-label">R:R Ratio</div>
-              <div class="badge bg-light text-dark border">{{ tr.rr_ratio }}</div>
-            </div>
-          </div>
+          <button id="viewFlowchart" class="btn btn-outline-primary btn-sm mt-3 w-100">
+            <i class="bi bi-diagram-2"></i> Logic Flow
+          </button>
         </div>
+      </div>
 
-        <div class="col-md-6 p-4 bg-light">
-          <h5 class="section-title"><i class="bi bi-clipboard-check me-2"></i> Tactical Execution</h5>
-          
-          {% if has_trade and tr.execution_hints %}
+    </div>
+
+    <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0"
+      style="border-left-width: 5px !important;">
+      <div class="card-body p-0">
+        <div class="row g-0">
+
+          <div class="col-md-6 p-4 border-end">
+            <h5 class="section-title text-primary"><i class="bi bi-crosshair me-2"></i> Trade Plan</h5>
+
+            {% set tr = trade_recommendation %}
+            {% set has_trade = "BUY" in tr.signal or "SHORT" in tr.signal %}
+            {% if trade_recommendation.entry and trade_recommendation.stop_loss and trade_recommendation.targets.t1 %}
+            <div class="my-3 px-2">
+              <div class="position-relative mt-4 mb-2" style="height: 6px; background: #e9ecef; border-radius: 4px;">
+                <div class="position-absolute top-0 start-0 translate-middle" style="left: 0%; top: 50% !important;">
+                  <div class="badge bg-danger rounded-pill shadow-sm" style="font-size: 0.6rem;">SL</div>
+                </div>
+
+                <div class="position-absolute top-0 start-50 translate-middle">
+                  <div class="badge bg-primary rounded-pill shadow-sm" style="font-size: 0.6rem;">ENTRY</div>
+                </div>
+
+                <div class="position-absolute top-0 end-0 translate-middle">
+                  <div class="badge bg-success rounded-pill shadow-sm" style="font-size: 0.6rem;">T1</div>
+                </div>
+
+                <div class="position-absolute top-0 start-0 h-100 bg-danger opacity-25"
+                  style="width: 50%; border-radius: 4px 0 0 4px;"></div>
+                <div class="position-absolute top-0 start-50 h-100 bg-success opacity-25"
+                  style="width: 50%; border-radius: 0 4px 4px 0;"></div>
+              </div>
+              <div class="d-flex justify-content-between text-muted" style="font-size: 0.65rem;">
+                <span>{{ trade_recommendation.stop_loss }}</span>
+                <span class="fw-bold text-dark">{{ trade_recommendation.entry }}</span>
+                <span>{{ trade_recommendation.targets.t1 }}</span>
+              </div>
+            </div>
+            {% endif %}
+            <div class="row g-3 text-center mt-1">
+              <div class="col-6">
+                <div class="exec-label">Entry Zone</div>
+                <div class="exec-number {{ 'text-primary' if has_trade else 'text-muted opacity-50' }}">
+                  {{ "₹" ~ tr.entry if tr.entry else '-' }}
+                </div>
+              </div>
+              <div class="col-6">
+                <div class="exec-label">Stop Loss</div>
+                <div class="exec-number {{ 'text-danger' if has_trade else 'text-muted opacity-50' }}">
+                  {{ "₹" ~ tr.stop_loss if tr.stop_loss else '-' }}
+                </div>
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center mt-4 pt-3 border-top">
+
+              <div class="text-center border-end pe-3">
+                <div class="exec-label">Target 1</div>
+                <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t1 if tr.targets.t1 else '-' }}</div>
+              </div>
+
+              <div class="text-center border-end pe-3">
+                <div class="exec-label">Target 2</div>
+                <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t2 if tr.targets.t2 else '-' }}</div>
+              </div>
+
+              <div class="text-center">
+                <div class="exec-label">Est. Hold</div>
+                <div class="badge bg-light text-secondary border">{{ tr.est_time if tr.est_time else '-' }}</div>
+              </div>
+              <div class="text-center">
+                <div class="exec-label">R:R Ratio</div>
+                <div class="badge bg-light text-dark border">{{ tr.rr_ratio }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-md-6 p-4 bg-light">
+            <h5 class="section-title"><i class="bi bi-clipboard-check me-2"></i> Tactical Execution</h5>
+
+            {% if has_trade and tr.execution_hints %}
             <div class="row">
               <div class="col-md-6 mb-3">
                 <div class="d-flex gap-2">
@@ -308,12 +417,12 @@ tr {
                     <span class="fw-bold small d-block">Stop Loss Strategy</span>
                     <span class="small text-muted">{{ tr.execution_hints.stop_strategy | default("ATR Based") }}</span>
                     {% if tr.move_stop_to_breakeven_after_t1 %}
-                      <div class="badge bg-warning text-dark mt-1">Move to BE at T1</div>
+                    <div class="badge bg-warning text-dark mt-1">Move to BE at T1</div>
                     {% endif %}
                   </div>
                 </div>
               </div>
-              
+
               <div class="col-md-6 mb-3">
                 <div class="d-flex gap-2">
                   <i class="bi bi-bullseye text-primary fs-5"></i>
@@ -328,14 +437,14 @@ tr {
               {% if "caution" in tr.execution_hints|string|lower %}
               <div class="col-12 mt-2">
                 <div class="alert alert-warning py-2 mb-0 small">
-                  <i class="bi bi-exclamation-triangle-fill me-2"></i> 
+                  <i class="bi bi-exclamation-triangle-fill me-2"></i>
                   {{ tr.execution_hints.caution_wick or "Volatility Warning: Reduced position size recommended." }}
                 </div>
               </div>
               {% endif %}
             </div>
 
-          {% else %}
+            {% else %}
             <div class="d-flex align-items-center justify-content-center h-100 text-muted">
               <div class="text-center">
                 <i class="bi bi-hourglass fs-3 d-block mb-2"></i>
@@ -343,376 +452,629 @@ tr {
                 <small>Monitor for price action at {{ tr.entry or "key levels" }}.</small>
               </div>
             </div>
-          {% endif %}
+            {% endif %}
+          </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <div class="card mb-3 p-3 mt-3 shadow-sm border-0">
-  <h5 class="section-title text-uppercase text-secondary small fw-bold border-bottom pb-2">
-    <i class="bi bi-radar me-2"></i> Pattern Radar
-  </h5>
-  
-  {% set pattern_keys = [
-      'golden_cross', 'double_top_bottom', 'cup_handle', 
-      'darvas_box', 'flag_pennant', 'minervini_stage2', 
+    <div class="card mb-3 p-3 mt-3 shadow-sm border-0">
+      <h5 class="section-title text-uppercase text-secondary small fw-bold border-bottom pb-2">
+        <i class="bi bi-radar me-2"></i> Pattern Radar
+      </h5>
+
+      {% set pattern_keys = [
+      'golden_cross', 'double_top_bottom', 'cup_handle',
+      'darvas_box', 'flag_pennant', 'minervini_stage2',
       'bollinger_squeeze', 'three_line_strike', 'ichimoku_signals'
-  ] %}
-  
-  {% set ns = namespace(found=false) %}
-  
-  <div class="d-flex flex-column gap-2 mt-2">
-    {% for key in pattern_keys %}
-      {% set pat = indicators.get(key) %}
-      {% if pat and pat.found %}
+      ] %}
+
+      {% set ns = namespace(found=false) %}
+
+      <div class="d-flex flex-column gap-2 mt-2">
+        {% for key in pattern_keys %}
+        {% set pat = indicators.get(key) %}
+        {% if pat and pat.found %}
         {% set ns.found = true %}
         {% set score = pat.score | default(0) | int %}
         {% set is_bull = 'bull' in pat.desc|lower or 'golden' in pat.desc|lower %}
-        
+
         <div class="p-2 rounded bg-light border-start border-4 {{ 'border-success' if is_bull else 'border-danger' }}">
           <div class="d-flex justify-content-between align-items-center mb-1">
             <span class="fw-bold text-dark small">
-              <i class="bi {{ 'bi-graph-up-arrow text-success' if is_bull else 'bi-graph-down-arrow text-danger' }} me-1"></i>
+              <i
+                class="bi {{ 'bi-graph-up-arrow text-success' if is_bull else 'bi-graph-down-arrow text-danger' }} me-1"></i>
               {{ pat.desc | default(key|replace('_',' ')|title) }}
             </span>
             <span class="badge bg-white text-dark border">{{ score }}%</span>
           </div>
-          
+
           {% if pat.meta %}
           <div class="d-flex flex-wrap gap-1 mt-1">
             {% for k, v in pat.meta.items() %}
-              {% if k not in ['signal', 'type'] %}
-              <span class="badge bg-white text-secondary border fw-normal" style="font-size: 0.65rem;">
-                {{ k|replace('_', ' ') }}: <b>{{ v }}</b>
-              </span>
-              {% endif %}
+            {% if k not in ['signal', 'type'] %}
+            <span class="badge bg-white text-secondary border fw-normal" style="font-size: 0.65rem;">
+              {{ k|replace('_', ' ') }}: <b>{{ v }}</b>
+            </span>
+            {% endif %}
             {% endfor %}
           </div>
           {% endif %}
         </div>
-      {% endif %}
-    {% endfor %}
+        {% endif %}
+        {% endfor %}
 
-    {% if not ns.found %}
-      <div class="text-center py-3 text-muted opacity-50">
-        <i class="bi bi-circle fs-4 d-block"></i>
-        <small>No structural patterns active</small>
+        {% if not ns.found %}
+        <div class="text-center py-3 text-muted opacity-50">
+          <i class="bi bi-circle fs-4 d-block"></i>
+          <small>No structural patterns active</small>
+        </div>
+        {% endif %}
       </div>
-    {% endif %}
-  </div>
-</div>
+    </div>
 
-  <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0" style="border-left-width: 5px !important;">
-    <div class="card-body p-0">
-      <div class="row g-0">
-        <div class="col-md-12">
-          <div class="card h-100 p-3">
-            <h5 class="section-title">📅 Corporate Actions</h5>
-            
-            <div class="table-responsive" style="max-height: 200px;">
-              <table class="table table-sm table-striped small mb-0">
-                <thead class="table-light" style="position: sticky; top: 0;">
-                  <tr>
-                    <th>Event</th>
-                    <th>Value</th>
-                    <th>Ex-Date</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody id="corpBody">
-                  <tr><td colspan="4" class="text-center text-muted">Loading events...</td></tr>
-                </tbody>
-              </table>
+    <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0"
+      style="border-left-width: 5px !important;">
+      <div class="card-body p-0">
+        <div class="row g-0">
+          <div class="col-md-12">
+            <div class="card h-100 p-3">
+              <h5 class="section-title">📅 Corporate Actions</h5>
+
+              <div class="table-responsive" style="max-height: 200px;">
+                <table class="table table-sm table-striped small mb-0">
+                  <thead class="table-light" style="position: sticky; top: 0;">
+                    <tr>
+                      <th>Event</th>
+                      <th>Value</th>
+                      <th>Ex-Date</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="corpBody">
+                    <tr>
+                      <td colspan="4" class="text-center text-muted">Loading events...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <div class="row g-3">
-    
-    <div class="col-md-6">
-      <div class="card h-100 p-3">
-        <h5 class="section-title">Fundamentals</h5>
-        <div style="max-height: 900px; overflow-y: auto;">
-          <table class="table table-custom table-sm mb-0">
-            <tbody>
-            {% for k, v in fundamentals.items() %} {% if v is mapping %} 
+    <div class="row g-3">
+
+      <div class="col-md-6">
+        <div class="card h-100 p-3">
+          <h5 class="section-title">Fundamentals</h5>
+          <div style="max-height: 900px; overflow-y: auto;">
+            <table class="table table-custom table-sm mb-0">
+              <tbody>
+                {% for k, v in fundamentals.items() %} {% if v is mapping %}
                 {% set val = (v.score | default(0)) | int %}
-                
+
                 {% set is_used = (k in profile_report.metric_details) %}
-                
+
                 <tr class="{{ 'table-active' if is_used else '' }}">
                   <td style="width: 30px; text-align: center;">
                     {% if is_used %}
-                      <span title="Used in Score" style="color: #2563eb; font-weight: bold;">✔️</span>
+                    <span title="Used in Score" style="color: #2563eb; font-weight: bold;">✔️</span>
                     {% else %}
-                      <span title="Not Used" style="color: #ccc;">-</span>
+                    <span title="Not Used" style="color: #ccc;">-</span>
                     {% endif %}
                   </td>
 
                   <td>
                     <span class="{{ 'fw-bold text-dark' if is_used else 'text-secondary' }}">
                       {{ v.alias | default(k | replace('_', ' ') | title) }}
-                  </span>
-                </td>
-                  
+                    </span>
+                  </td>
+
                   <td class="font-monospace {{ 'fw-bold' if is_used else '' }}">
                     {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
                   </td>
-                  
+
                   <td>
                     {% if val >= 8 %}
-                      <span class="badge bg-success">{{ val }}</span>
-                    {% elif val <= 3 %}
-                      <span class="badge bg-danger">{{ val }}</span>
-                    {% else %}
+                    <span class="badge bg-success">{{ val }}</span>
+                    {% elif val <= 3 %} <span class="badge bg-danger">{{ val }}</span>
+                      {% else %}
                       <span class="badge bg-warning text-dark">{{ val }}</span>
-                    {% endif %}
+                      {% endif %}
                   </td>
-              </tr>
-              {% endif %}
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
+                </tr>
+                {% endif %}
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-    <div class="col-md-6">
-      <div class="card h-100 p-3">
-        <h5 class="section-title">Technicals</h5>
-        <div style="max-height: 900px; overflow-y: auto;">
-          <table class="table table-custom table-sm mb-0">
-            <tbody>
-            {% for k, v in indicators.items() %} {% if v is mapping %} 
+      <div class="col-md-6">
+        <div class="card h-100 p-3">
+          <h5 class="section-title">Technicals</h5>
+          <div style="max-height: 900px; overflow-y: auto;">
+            <table class="table table-custom table-sm mb-0">
+              <tbody>
+                {% for k, v in indicators.items() %} {% if v is mapping %}
                 {% set val = (v.score | default(0)) | int %}
-                
+
                 {% set is_used = (k in profile_report.metric_details) %}
-                
+
                 <tr class="{{ 'table-active' if is_used else '' }}">
                   <td style="width: 30px; text-align: center;">
                     {% if is_used %}
-                      <span title="Used in Score" style="color: #2563eb; font-weight: bold;">✔️</span>
+                    <span title="Used in Score" style="color: #2563eb; font-weight: bold;">✔️</span>
                     {% else %}
-                      <span title="Not Used" style="color: #ccc;">-</span>
+                    <span title="Not Used" style="color: #ccc;">-</span>
                     {% endif %}
                   </td>
 
                   <td>
                     <span class="{{ 'fw-bold text-dark' if is_used else 'text-secondary' }}">
                       {{ v.alias | default(k | replace('_', ' ') | title) }}
-                  </span>
-                </td>
-                  
+                    </span>
+                  </td>
+
                   <td class="font-monospace {{ 'fw-bold' if is_used else '' }}">
                     {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
                   </td>
-                  
+
                   <td>
                     {% if val >= 8 %}
-                      <span class="badge bg-success">{{ val }}</span>
-                    {% elif val <= 3 %}
-                      <span class="badge bg-danger">{{ val }}</span>
-                    {% else %}
+                    <span class="badge bg-success">{{ val }}</span>
+                    {% elif val <= 3 %} <span class="badge bg-danger">{{ val }}</span>
+                      {% else %}
                       <span class="badge bg-warning text-dark">{{ val }}</span>
-                    {% endif %}
+                      {% endif %}
                   </td>
-              </tr>
-              {% endif %}
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-  </div>
-
-  {% endif %} </div>
-
-<div class="fixed-bottom trade-footer shadow-lg p-2">
-  <div class="wrap py-1">
-    <div class="row align-items-center">
-      
-      <div class="col-4 col-md-3">
-        <label class="small text-muted fw-bold mb-0" style="font-size: 0.7rem;">RISK (₹)</label>
-        <div class="input-group input-group-sm">
-          <input type="number" id="riskInput" class="form-control fw-bold" value="2000" step="500" oninput="calcSize()">
-        </div>
-      </div>
-
-      <div class="col-4 col-md-3 text-center border-start border-end">
-        <small class="text-muted d-block" style="font-size: 0.65rem;">BUY QTY</small>
-        <span id="qtyDisplay" class="fw-bold fs-4 text-primary" style="line-height: 1;">0</span>
-      </div>
-
-      <div class="col-4 col-md-3 text-center">
-        <small class="text-muted d-block" style="font-size: 0.65rem;">REQ. CAPITAL</small>
-        <span id="capitalDisplay" class="fw-bold text-dark">₹0</span>
-      </div>
-
-      <div class="col-md-3 d-none d-md-block text-end">
-        <div class="form-check form-switch d-inline-block text-start bg-light rounded ps-5 pe-2 py-1 border">
-          <input class="form-check-input" type="checkbox" id="paperTradeCheck" onchange="toggleTradeState(this)" style="cursor: pointer;">
-          <label class="form-check-label small fw-bold" for="paperTradeCheck" style="cursor: pointer;">Mark Active</label>
+                </tr>
+                {% endif %}
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
     </div>
+
+    {% endif %}
   </div>
-</div>
 
-<script>
-// --- Logic Variables ---
-const entryPrice = parseFloat("{{ trade_recommendation.entry | default(0) }}");
-const stopLoss = parseFloat("{{ trade_recommendation.stop_loss | default(0) }}");
-const rawHorizon = "{{ selected_horizon }}";
+  <div class="fixed-bottom trade-footer shadow-lg p-2">
+    <div class="wrap py-1">
+      <div class="row align-items-center">
 
-function calcSize() {
-  const riskAmt = parseFloat(document.getElementById('riskInput').value) || 0;
-  
-  if (entryPrice > 0 && stopLoss > 0 && entryPrice !== stopLoss) {
-    const riskPerShare = Math.abs(entryPrice - stopLoss);
-    // Simple protection against zero division or tiny stops
-    if(riskPerShare < 0.05) { 
+        <div class="col-4 col-md-3">
+          <label class="small text-muted fw-bold mb-0" style="font-size: 0.7rem;">RISK (₹)</label>
+          <div class="input-group input-group-sm">
+            <input type="number" id="riskInput" class="form-control fw-bold" value="2000" step="500"
+              oninput="calcSize()">
+          </div>
+        </div>
+
+        <div class="col-4 col-md-3 text-center border-start border-end">
+          <small class="text-muted d-block" style="font-size: 0.65rem;">BUY QTY</small>
+          <span id="qtyDisplay" class="fw-bold fs-4 text-primary" style="line-height: 1;">0</span>
+        </div>
+
+        <div class="col-4 col-md-3 text-center">
+          <small class="text-muted d-block" style="font-size: 0.65rem;">REQ. CAPITAL</small>
+          <span id="capitalDisplay" class="fw-bold text-dark">₹0</span>
+        </div>
+
+        <div class="col-md-3 d-none d-md-block text-end">
+          <div class="form-check form-switch d-inline-block text-start bg-light rounded ps-5 pe-2 py-1 border">
+            <input class="form-check-input" type="checkbox" id="paperTradeCheck" onchange="toggleTradeState(this)"
+              style="cursor: pointer;">
+            <label class="form-check-label small fw-bold" for="paperTradeCheck" style="cursor: pointer;">Mark
+              Active</label>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Logic Variables ---
+    const entryPrice = parseFloat("{{ trade_recommendation.entry | default(0) }}");
+    const stopLoss = parseFloat("{{ trade_recommendation.stop_loss | default(0) }}");
+    const rawHorizon = "{{ selected_horizon }}";
+
+    function calcSize() {
+      const riskAmt = parseFloat(document.getElementById('riskInput').value) || 0;
+
+      if (entryPrice > 0 && stopLoss > 0 && entryPrice !== stopLoss) {
+        const riskPerShare = Math.abs(entryPrice - stopLoss);
+        // Simple protection against zero division or tiny stops
+        if (riskPerShare < 0.05) {
+          document.getElementById('qtyDisplay').innerText = "-";
+          return;
+        }
+
+        const qty = Math.floor(riskAmt / riskPerShare);
+        const capital = Math.round(qty * entryPrice);
+
+        document.getElementById('qtyDisplay').innerText = qty;
+        document.getElementById('capitalDisplay').innerText = '₹' + capital.toLocaleString('en-IN');
+      } else {
         document.getElementById('qtyDisplay').innerText = "-";
-        return; 
-    }
-    
-    const qty = Math.floor(riskAmt / riskPerShare);
-    const capital = Math.round(qty * entryPrice);
-
-    document.getElementById('qtyDisplay').innerText = qty;
-    document.getElementById('capitalDisplay').innerText = '₹' + capital.toLocaleString('en-IN');
-  } else {
-    document.getElementById('qtyDisplay').innerText = "-";
-    document.getElementById('capitalDisplay').innerText = "-";
-  }
-}
-
-function toggleTradeState(el) {
-  const key = `trade_active_{{ symbol }}_${rawHorizon}`;
-  const label = el.nextElementSibling;
-  
-  if (el.checked) {
-    localStorage.setItem(key, "true");
-    label.innerText = "Running"; 
-    label.classList.add("text-success");
-  } else {
-    localStorage.removeItem(key);
-    label.innerText = "Mark Active";
-    label.classList.remove("text-success");
-  }
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  calcSize(); 
-  
-  const key = `trade_active_{{ symbol }}_${rawHorizon}`;
-  const el = document.getElementById('paperTradeCheck');
-  if (el && localStorage.getItem(key) === "true") {
-      el.checked = true;
-      el.nextElementSibling.innerText = "Running";
-      el.nextElementSibling.classList.add("text-success");
-  }
-});
-
-// Flowchart Link
-async function fetchJson(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-  return await res.json();
-}
-document.getElementById('viewFlowchart')?.addEventListener('click', async () => {
-  const ticker = "{{ symbol }}";
-  const idx = "{{ current_index }}";
-  try {
-    const payload = await fetchJson(`/flowchart_payload?symbol=${encodeURIComponent(ticker)}&index=${idx}`);
-    sessionStorage.setItem("flowData", JSON.stringify(payload));
-    window.location.href = "/flowchart";
-  } catch (err) {
-    alert("Flowchart load failed: " + err.message);
-  }
-});
-
-async function loadCorporateActions() {
-  const ticker = "{{ symbol }}";
-  try {
-    const res = await fetch(`/corporate_actions?ticker=${encodeURIComponent(ticker)}`);
-    const data = await res.json();
-    const body = document.getElementById('corpBody');
-    body.innerHTML = "";
-
-    if (!data || data.length === 0) {
-      body.innerHTML = `<tr><td colspan="4" class="text-center">No recent actions found.</td></tr>`;
-      return;
-    }
-
-    data.forEach(a => {
-      // Logic to determine upcoming
-      const exDate = new Date(a.ex_date);
-      const today = new Date(); today.setHours(0,0,0,0);
-      const isUpcoming = exDate >= today;
-
-      // Formatting
-      let val = a.amount || a.ratio || '-';
-      if (typeof a.amount === 'number' && (a.type||"").toLowerCase().includes('dividend')) {
-          val = `₹${a.amount}`;
+        document.getElementById('capitalDisplay').innerText = "-";
       }
+    }
 
-      const row = `
+    function toggleTradeState(el) {
+      const key = `trade_active_{{ symbol }}_${rawHorizon}`;
+      const label = el.nextElementSibling;
+
+      if (el.checked) {
+        localStorage.setItem(key, "true");
+        label.innerText = "Running";
+        label.classList.add("text-success");
+      } else {
+        localStorage.removeItem(key);
+        label.innerText = "Mark Active";
+        label.classList.remove("text-success");
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      calcSize();
+
+      const key = `trade_active_{{ symbol }}_${rawHorizon}`;
+      const el = document.getElementById('paperTradeCheck');
+      if (el && localStorage.getItem(key) === "true") {
+        el.checked = true;
+        el.nextElementSibling.innerText = "Running";
+        el.nextElementSibling.classList.add("text-success");
+      }
+    });
+
+    // Flowchart Link
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      return await res.json();
+    }
+    document.getElementById('viewFlowchart')?.addEventListener('click', async () => {
+      const ticker = "{{ symbol }}";
+      const idx = "{{ current_index }}";
+      try {
+        const payload = await fetchJson(`/flowchart_payload?symbol=${encodeURIComponent(ticker)}&index=${idx}`);
+        sessionStorage.setItem("flowData", JSON.stringify(payload));
+        window.location.href = "/flowchart";
+      } catch (err) {
+        alert("Flowchart load failed: " + err.message);
+      }
+    });
+
+    async function loadCorporateActions() {
+      const ticker = "{{ symbol }}";
+      try {
+        const res = await fetch(`/corporate_actions?ticker=${encodeURIComponent(ticker)}`);
+        const data = await res.json();
+        const body = document.getElementById('corpBody');
+        body.innerHTML = "";
+
+        if (!data || data.length === 0) {
+          body.innerHTML = `<tr><td colspan="4" class="text-center">No recent actions found.</td></tr>`;
+          return;
+        }
+
+        data.forEach(a => {
+          // Logic to determine upcoming
+          const exDate = new Date(a.ex_date);
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const isUpcoming = exDate >= today;
+
+          // Formatting
+          let val = a.amount || a.ratio || '-';
+          if (typeof a.amount === 'number' && (a.type || "").toLowerCase().includes('dividend')) {
+            val = `₹${a.amount}`;
+          }
+
+          const row = `
         <tr class="${isUpcoming ? 'table-success fw-bold' : ''}">
           <td>${a.type}</td>
           <td>${val}</td>
           <td>${a.ex_date || '-'}</td>
           <td>${isUpcoming ? '🔔 Upcoming' : 'Past'}</td>
         </tr>`;
-      body.insertAdjacentHTML('beforeend', row);
-    });
-  } catch (err) {
-    console.error(err);
-    document.getElementById('corpBody').innerHTML = `<tr><td colspan="4" class="text-danger">Failed to load actions.</td></tr>`;
-  }
-}
-// Trigger on load
-window.addEventListener('DOMContentLoaded', loadCorporateActions);
-</script>
-<script>
-async function exportPDF() {
-    const element = document.body; // Capture full page
-    const btn = event.currentTarget;
-    btn.innerText = "Generating...";
-    
-    // 1. EXPAND: Remove scrollbars from tables so full list shows
-    const tables = document.querySelectorAll('.table-responsive');
-    tables.forEach(t => t.style.maxHeight = 'none');
+          body.insertAdjacentHTML('beforeend', row);
+        });
+      } catch (err) {
+        console.error(err);
+        document.getElementById('corpBody').innerHTML = `<tr><td colspan="4" class="text-danger">Failed to load actions.</td></tr>`;
+      }
+    }
+    // Trigger on load
+    window.addEventListener('DOMContentLoaded', loadCorporateActions);
+  </script>
 
-    // 2. REVEAL: Show BOTH tabs (Technicals & Fundamentals) stacked
-    const tabs = document.querySelectorAll('.tab-pane');
-    tabs.forEach(t => {
-        t.classList.add('show', 'active'); 
-        t.style.display = 'block';
-        t.style.marginBottom = '20px';
-    });
+  <script>
+    async function exportPDF() {
+      const btn = event.currentTarget;
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Processing...';
+      btn.disabled = true;
 
-    // 3. GENERATE
-    const opt = {
-        margin: [0.2, 0.2],
-        filename: `Analysis_{{symbol}}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
-        jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' },
-        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
-    };
-    
-    await html2pdf().set(opt).from(element).save();
+      const element = document.querySelector('.wrap');
 
-    // 4. RESET: Reload page to restore UI state
-    location.reload(); 
-}
-</script>
+      // Store original states
+      const originalStyles = {
+        wrap: element.style.cssText,
+        body: document.body.style.cssText
+      };
+
+      // Find and store all scrollable elements
+      const scrollables = element.querySelectorAll('[style*="max-height"], [style*="overflow"]');
+      const scrollStates = [];
+      scrollables.forEach(el => {
+        scrollStates.push({
+          el: el,
+          style: el.style.cssText
+        });
+      });
+
+      // Hide footer
+      const footer = document.querySelector('.trade-footer');
+      const footerDisplay = footer ? footer.style.display : null;
+      if (footer) footer.style.display = 'none';
+
+      // Apply PDF-ready styles to body and wrap
+      document.body.style.cssText = `
+        margin: 0 !important;
+        padding: 0 !important;
+        background: white !important;
+    `;
+
+      element.style.cssText = `
+        max-width: 750px !important;
+        width: 750px !important;
+        margin: 0 auto !important;
+        padding: 15px !important;
+        background: white !important;
+    `;
+
+      // Remove scroll restrictions
+      scrollables.forEach(el => {
+        el.style.maxHeight = 'none';
+        el.style.overflow = 'visible';
+        el.style.height = 'auto';
+      });
+
+      // Inject comprehensive PDF styles
+      const style = document.createElement('style');
+      style.id = 'pdf-temp-style';
+      style.textContent = `
+        body {
+            background: white !important;
+        }
+        
+        .wrap {
+            max-width: 750px !important;
+            width: 750px !important;
+            margin: 0 auto !important;
+            padding: 15px !important;
+        }
+        
+        /* CRITICAL: Force grid to display flex */
+        .row {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            margin-left: -4px !important;
+            margin-right: -4px !important;
+        }
+        
+        /* Force column widths */
+        .col-md-3 {
+            flex: 0 0 25% !important;
+            max-width: 25% !important;
+            width: 25% !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            display: block !important;
+        }
+        
+        .col-md-4 {
+            flex: 0 0 33.333% !important;
+            max-width: 33.333% !important;
+            width: 33.333% !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            display: block !important;
+        }
+        
+        .col-md-5 {
+            flex: 0 0 41.666% !important;
+            max-width: 41.666% !important;
+            width: 41.666% !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            display: block !important;
+        }
+        
+        .col-md-6 {
+            flex: 0 0 50% !important;
+            max-width: 50% !important;
+            width: 50% !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            display: block !important;
+        }
+        
+        .col-md-12 {
+            flex: 0 0 100% !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+        }
+        
+        /* Remove height constraints */
+        .h-100 {
+            height: auto !important;
+            min-height: 0 !important;
+        }
+        
+        .card {
+            page-break-inside: avoid;
+            margin-bottom: 6px !important;
+            padding: 6px !important;
+        }
+        
+        .table-custom th {
+            font-size: 6px !important;
+            padding: 1px 2px !important;
+            line-height: 1.2 !important;
+        }
+        
+        .table-custom td {
+            font-size: 6px !important;
+            padding: 1px 2px !important;
+            line-height: 1.2 !important;
+        }
+        
+        .section-title {
+            font-size: 8px !important;
+            margin-bottom: 4px !important;
+            padding-bottom: 2px !important;
+        }
+        
+        h2 { font-size: 14px !important; }
+        h3 { font-size: 11px !important; }
+        h5 { font-size: 8px !important; }
+        
+        .small, small {
+            font-size: 6px !important;
+        }
+        
+        .badge {
+            font-size: 5px !important;
+            padding: 1px 2px !important;
+        }
+        
+        .strat-fit {
+            padding: 3px !important;
+            margin-bottom: 2px !important;
+            font-size: 6px !important;
+        }
+        
+        .exec-number {
+            font-size: 11px !important;
+        }
+        
+        .exec-label {
+            font-size: 5px !important;
+        }
+        
+        .bi {
+            font-size: 6px !important;
+        }
+        
+        [style*="max-height"], [style*="overflow"] {
+            max-height: none !important;
+            overflow: visible !important;
+            height: auto !important;
+        }
+        
+        .table-responsive {
+            overflow: visible !important;
+            max-height: none !important;
+        }
+        
+        tr {
+            page-break-inside: avoid;
+        }
+        
+        * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
+        
+        /* Fix trade plan row */
+        .row.g-0 {
+            display: flex !important;
+        }
+        
+        .row.g-0 .col-md-6 {
+            flex: 0 0 50% !important;
+            max-width: 50% !important;
+        }
+        
+        /* Ensure last row with tables stays side by side */
+        .row.g-3:last-child {
+            display: flex !important;
+        }
+    `;
+      document.head.appendChild(style);
+
+      // Scroll to top
+      window.scrollTo(0, 0);
+
+      // Wait for layout to settle
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const opt = {
+        margin: [8, 8, 8, 8],
+        filename: 'Analysis_{{ symbol }}.pdf',
+        image: {
+          type: 'jpeg',
+          quality: 0.96
+        },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          width: 750,
+          windowWidth: 750,
+          x: 0,
+          y: 0,
+          scrollX: 0,
+          scrollY: 0
+        },
+        jsPDF: {
+          unit: 'mm',
+          format: 'a4',
+          orientation: 'portrait'
+        },
+        pagebreak: {
+          mode: 'avoid-all',
+          avoid: ['tr', '.card', '.row']
+        }
+      };
+
+      try {
+        await html2pdf().set(opt).from(element).save();
+      } catch (err) {
+        console.error("PDF Error:", err);
+        alert("PDF generation failed: " + err.message);
+      } finally {
+        // Restore everything
+        style.remove();
+
+        element.style.cssText = originalStyles.wrap;
+        document.body.style.cssText = originalStyles.body;
+
+        scrollStates.forEach(item => {
+          item.el.style.cssText = item.style;
+        });
+
+        if (footer) {
+          footer.style.display = footerDisplay || '';
+        }
+
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+      }
+    }
+
+  </script>
 </body>
+
 </html>

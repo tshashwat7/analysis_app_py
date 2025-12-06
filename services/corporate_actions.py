@@ -321,7 +321,16 @@ def get_single_stock_history_yf(ticker: str, lookback_days: int = 365, force_ref
 
             # Sort by date descending
             events = sorted(events, key=lambda x: x.get("ex_date", ""), reverse=True)
-
+            # --- Apply Lookback Filter ---
+            if lookback_days > 0:
+                # Calculate cutoff string "YYYY-MM-DD"
+                cutoff_dt = datetime.now().date() - timedelta(days=lookback_days)
+                cutoff_str = _fmt_date(cutoff_dt)
+                
+                # Filter events newer than cutoff
+                # String comparison works for ISO dates: "2025-01-01" > "2024-01-01"
+                events = [e for e in events if e.get("ex_date", "") >= cutoff_str]
+            # ----------------------------------
             return {
                 "ticker": ticker,
                 "actions": events,  

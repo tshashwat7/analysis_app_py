@@ -35,7 +35,9 @@ def enhance_plan_with_patterns(
         "flag_pennant", 
         "minervini_stage2", 
         "three_line_strike",
-        "ichimoku_signals"
+        "ichimoku_signals",
+        "golden_cross",
+        "double_top_bottom"
     )
 
     def _log(msg: str):
@@ -165,46 +167,35 @@ def enhance_plan_with_patterns(
                 out["targets"]["t1"] = round(entry * 0.97, 2)
                 out["targets"]["t2"] = round(entry * 0.94, 2)
             out["execution_hints"]["pattern_note"] = f"3-Line Strike ({ptype})"
-    
-    # --- G. HEAD & SHOULDERS / DOUBLE TOP ---
-    elif best_name in ("head_shoulders", "double_top_bottom"):
+            
+    # --- G. DOUBLE TOP / BOTTOM ---
+    elif best_name == "double_top_bottom":
         target = meta_num("target")
         neckline = meta_num("neckline")
-        ptype = str(meta.get("type"))
+        ptype = str(meta.get("type", "")).lower()
         
         if target and neckline:
             out["targets"]["t1"] = round(target, 2)
-            # T2 could be 1.5x measured move
-            dist = abs(neckline - target)
+            # T2 is usually 1.5x the height
+            height = abs(neckline - target)
             if "bear" in ptype:
-                out["targets"]["t2"] = round(target - (dist * 0.5), 2)
+                out["targets"]["t2"] = round(target - (height * 0.5), 2)
             else:
-                out["targets"]["t2"] = round(target + (dist * 0.5), 2)
-                
-            out["execution_hints"]["pattern_note"] = f"{best_name.replace('_', ' ').title()}: Measured Move"
+                out["targets"]["t2"] = round(target + (height * 0.5), 2)
+            
+            out["execution_hints"]["pattern_note"] = "Double Top/Bottom: Measured Move Target"
 
-    # --- I. ENGULFING PATTERN ---
-    elif best_name == "engulfing_pattern":
-        # Strategy:
-        # Stop Loss: Just below the low of the engulfing candle
-        # Target: 1:1 and 1:2 risk/reward ratios (Scalping/Swing style)
-        
-        # We need candle low/high. The pattern doesn't export them in meta by default.
-        # However, we can infer risk from ATR or current price vs SL if we assume standard behavior.
-        # BETTER: Let's assume the user trades the candle.
-        
-        # Since we don't have exact OHLC in meta, we rely on Entry.
-        # We assume the Engulfing Candle is the "Trigger".
-        # Boost confidence for quick reversal.
-        out["setup_confidence"] = min(100, int(out.get("setup_confidence", 0) + 10))
-        
+    # --- H. GOLDEN CROSS ---
+    elif best_name == "golden_cross":
+        conf = _safe_float(out.get("setup_confidence")) or 0
         ptype = str(meta.get("type", "")).lower()
-        if "bullish" in ptype:
-            out["execution_hints"]["entry_mode"] = "Immediate (Engulfing Candle)"
-            out["execution_hints"]["pattern_note"] = "Bullish Engulfing: Place SL below candle Low"
-        elif "bearish" in ptype:
-            out["execution_hints"]["entry_mode"] = "Immediate Short"
-            out["execution_hints"]["pattern_note"] = "Bearish Engulfing: Place SL above candle High"
+        
+        if "bull" in ptype:
+            out["setup_confidence"] = min(100, int(conf + 20))
+            out["execution_hints"]["pattern_note"] = "Golden Cross: Major Trend Confirmation"
+        else:
+            out["setup_confidence"] = min(100, int(conf + 20))
+            out["execution_hints"]["pattern_note"] = "Death Cross: Major Downtrend Confirmation"
 
     # 5. Final Safety Guard
     # Ensure the new pattern-based Stop Loss is on the correct side of Entry

@@ -12,7 +12,7 @@ STOCH_SLOW = {"k_period": 14, "d_period": 3, "smooth": 3}
 STOCH_THRESHOLDS = {"overbought": 80, "oversold": 20}
 
 # config/constants.py
-ENABLE_CACHE = False
+ENABLE_CACHE = True
 ENABLE_CACHE_WARMER = os.getenv("ENABLE_CACHE_WARMER", "false").lower() == "true"
 
 STOCH_THRESHOLDS = {

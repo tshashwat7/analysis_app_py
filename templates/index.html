@@ -113,7 +113,32 @@
             filter: 'agTextColumnFilter', // Explicitly text
             cellRenderer: p => `<a href="/analyze?symbol=${p.value}" class="ticker-link" target="_blank">${p.value}</a>` 
         },
-        
+        { 
+            field: "top_pattern", 
+            headerName: "Pattern", 
+            width: 120,
+            filter: 'agSetColumnFilter', // Checkbox filtering!
+            cellRenderer: p => {
+                if (!p.value) return '<span style="color:#ccc">-</span>';
+                
+                // Color coding based on pattern type
+                let color = "gray"; 
+                let bg = "#f3f4f6";
+                const v = p.value.toLowerCase();
+                
+                if (v.includes("gold") || v.includes("cup") || v.includes("vcp")) {
+                    color = "#166534"; bg = "#dcfce7"; // Green
+                } else if (v.includes("death") || v.includes("top")) {
+                    color = "#991b1b"; bg = "#fee2e2"; // Red
+                } else if (v.includes("squeeze")) {
+                    color = "#854d0e"; bg = "#fef9c3"; // Yellow
+                } else {
+                    color = "#1e40af"; bg = "#dbeafe"; // Blue
+                }
+                
+                return `<span style="background:${bg}; color:${color}; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; border:1px solid rgba(0,0,0,0.05)">${p.value}</span>`;
+            }
+        },
         // 2. Top Strategy -> PERFECT for Set Filter (Checkboxes)
         { 
             field: "best_strategy", 
