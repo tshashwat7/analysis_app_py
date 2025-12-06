@@ -94,76 +94,67 @@ def _build_result(name, score, reasons, details):
 # -------------------------
 
 def check_swing_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Swing: Bollinger Band Mean Reversion + RSI + Volume + Wick Rejection"""
     reasons, score = [], 0.0
-    
-    # Fetch Data
     price = safe_get_numeric(indicators, "price")
     bb_low = safe_get_numeric(indicators, "bb_low")
-    bb_high = safe_get_numeric(indicators, "bb_high")
     rsi = safe_get_numeric(indicators, "rsi", default=50)
-    rvol = safe_get_numeric(indicators, "rvol", default=1.0)
-    # [NEW] Wick Rejection (Lower is better for Bullish breakouts, but High is bad for Longs)
-    wick_ratio = safe_get_numeric(indicators, "wick_rejection", default=0.0) 
     
-    # 1. Band Proximity (Reversion)
+    # --- PATTERN MUSCLE ---
+    # 1. Double Bottom (Strong Reversal)
+    db_score = safe_get_numeric(indicators, "double_top_bottom", 0)
+    # Check if it's actually bullish (Double Bottom) not Bearish (Double Top)
+    db_meta = _get_val(indicators, "double_top_bottom") # Need to check meta['type']
+    is_double_bottom = False
+    if isinstance(indicators.get("double_top_bottom"), dict):
+        is_double_bottom = indicators["double_top_bottom"].get("meta", {}).get("type") == "bullish"
+
+    # 2. Engulfing (Candlestick Reversal)
+    engulf_score = safe_get_numeric(indicators, "engulfing_pattern", 0)
+    is_bull_engulf = False
+    if isinstance(indicators.get("engulfing_pattern"), dict):
+        is_bull_engulf = indicators["engulfing_pattern"].get("meta", {}).get("type") == "bullish"
+
+    # --- SCORING ---
+    # 1. Band Proximity
     if bb_low > 0 and price <= bb_low * 1.02:
-        score += 35; reasons.append("Price near lower BB (Buy Zone)")
-    elif bb_high > 0 and price >= bb_high * 0.98:
-        score += 20; reasons.append("Price near upper BB (Sell Zone)")
+        score += 35; reasons.append("Price near Buy Zone (BB Low)")
+    
+    # 2. RSI Dip
+    if rsi <= 45: 
+        score += 25; reasons.append("RSI Oversold/Dip")
+    
+    # 3. Pattern Confirmation (The "Trigger")
+    if db_score > 0 and is_double_bottom:
+        score += 40; reasons.append("Double Bottom Reversal Pattern")
+    elif engulf_score > 0 and is_bull_engulf:
+        score += 25; reasons.append("Bullish Engulfing Candle")
         
-    # 2. RSI Regime (30-50 for dips)
-    if rsi <= 45: score += 25; reasons.append("RSI suppressed (Setup for bounce)")
-    elif 45 < rsi < 60: score += 10; reasons.append("RSI Neutral")
-    else: score -= 5; reasons.append("RSI High (Momentum, not Swing)")
-        
-    # 3. Volume & Squeeze
-    if rvol > 1.2: score += 10; reasons.append("Elevated Volume")
-    if _is_squeeze_on(indicators): score += 20; reasons.append("Volatility Squeeze Active")
-
-    # 4. [NEW] Wick Rejection Logic
-    # If we are looking to buy (price low), a high UPPER wick is bad (selling pressure).
-    # Wick Ratio > 2.0 = "Shooting Star" shape (Bad for long)
-    if wick_ratio > 2.0:
-        score -= 15; reasons.append(f"High Rejection Wick ({wick_ratio:.1f}x) - Risk")
-    elif wick_ratio < 0.5:
-        score += 5; reasons.append("Strong Close (Low Wick)")
-
-    details = {"price": price, "bb_low": bb_low, "rsi": rsi, "wick": wick_ratio}
-    return _build_result("swing", score, reasons, details)
-
+    # 4. Squeeze
+    if _is_squeeze_on(indicators): score += 10
+    
+    return _build_result("swing", score, reasons, {"rsi": rsi, "double_bottom": is_double_bottom})
 
 def check_day_trading_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Day Trading: Volatility (ATR/Beta), Liquidity (RVOL), VWAP"""
     reasons, score = [], 0.0
-    
     rvol = safe_get_numeric(indicators, "rvol", 1.0)
-    vwap = safe_get_numeric(indicators, "vwap")
-    price = safe_get_numeric(indicators, "price")
     atr_pct = safe_get_numeric(indicators, "atr_pct")
-    beta = safe_get_numeric(fundamentals, "beta", 1.0)
-    gap = safe_get_numeric(indicators, "gap_percent", 0.0)
     
-    # 1. Volatility
-    if beta > 1.2: score += 10; reasons.append(f"High Beta {beta:.2f}")
-    if abs(gap) > 1.0: score += 15; reasons.append(f"Gap Play ({gap:.1f}%)")
+    # Patterns
+    strike_score = safe_get_numeric(indicators, "three_line_strike", 0)
+    engulf_score = safe_get_numeric(indicators, "engulfing_pattern", 0)
     
-    if atr_pct > 2.0: score += 15; reasons.append("High Intraday Range (ATR%)")
-    elif atr_pct < 0.8: score -= 20; reasons.append("Stock too dead (Low ATR)")
+    # 1. Volatility & Liquidity
+    if rvol > 1.5: score += 25
+    if atr_pct > 1.5: score += 15
+    
+    # 2. Patterns (Triggers)
+    if strike_score > 0: 
+        score += 30; reasons.append("3-Line Strike Reversal")
+    
+    if engulf_score > 0:
+        score += 20; reasons.append("Engulfing Candle Trigger")
         
-    # 2. Liquidity (Critical)
-    if rvol > 2.0: score += 30; reasons.append("Explosive Relative Volume (>2x)")
-    elif rvol > 1.2: score += 15
-    else: score -= 10
-        
-    # 3. Trend Alignment
-    if vwap > 0:
-        if price > vwap: score += 20; reasons.append("Above VWAP (Intraday Bull)")
-        elif price < vwap: score += 5; reasons.append("Below VWAP (Intraday Bear)")
-        
-    details = {"rvol": rvol, "atr_pct": atr_pct, "beta": beta, "gap": gap}
-    return _build_result("day_trading", score, reasons, details)
-
+    return _build_result("day_trading", score, reasons, {})
 
 def check_trend_following_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = None, horizon: str = "short_term") -> Dict[str, Any]:
     """Trend: MA Alignment, ADX, Ichimoku, DMI"""

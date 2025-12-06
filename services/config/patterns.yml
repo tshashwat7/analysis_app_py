@@ -1,0 +1,14 @@
+darvas_box:
+  score_weight: 1.5
+  breakout_confirm: 0.02 # 2% above box
+  box_duration: 20
+
+cup_handle:
+  score_weight: 2.0
+  min_depth: 0.10
+  max_depth: 0.35
+  
+bollinger_squeeze:
+  score_weight: 1.2
+  length: 20
+  std_dev: 2.0

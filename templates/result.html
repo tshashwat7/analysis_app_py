@@ -5,7 +5,8 @@
 <title>Result - {{ symbol }}</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <style>
   body{font-family:'Inter',system-ui,-apple-system,sans-serif; background:#f0f2f5; color:#1f2937; padding-bottom:100px;}
   .wrap {max-width:1250px; margin:auto; padding: 20px;}
@@ -39,6 +40,13 @@
   
   /* Sticky Footer */
   .trade-footer { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-top: 1px solid #e5e7eb; }
+  /* PDF Export Helpers */
+.card {
+    page-break-inside: avoid; /* Try not to split cards across pages */
+}
+tr {
+    page-break-inside: avoid; /* Keep table rows together */
+}
 </style>
 </head>
 <body>
@@ -58,7 +66,9 @@
           52W H/L: {{ fundamentals.get('52w_high') | default('-') }} / {{ fundamentals.get('52w_low') | default('-') }}
         </div>
       </div>
-
+      <button onclick="exportPDF()" class="btn btn-outline-danger btn-sm shadow-sm">
+          <i class="bi bi-file-earmark-pdf-fill me-1"></i> Export PDF
+      </button>
       <div class="btn-group shadow-sm" role="group">
         {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
         {# Use .get() if available, or check if key exists to avoid attribute errors #}
@@ -223,7 +233,31 @@
           
           {% set tr = trade_recommendation %}
           {% set has_trade = "BUY" in tr.signal or "SHORT" in tr.signal %}
-          
+          {% if trade_recommendation.entry and trade_recommendation.stop_loss and trade_recommendation.targets.t1 %}
+<div class="my-3 px-2">
+  <div class="position-relative mt-4 mb-2" style="height: 6px; background: #e9ecef; border-radius: 4px;">
+    <div class="position-absolute top-0 start-0 translate-middle" style="left: 0%; top: 50% !important;">
+      <div class="badge bg-danger rounded-pill shadow-sm" style="font-size: 0.6rem;">SL</div>
+    </div>
+    
+    <div class="position-absolute top-0 start-50 translate-middle">
+      <div class="badge bg-primary rounded-pill shadow-sm" style="font-size: 0.6rem;">ENTRY</div>
+    </div>
+
+    <div class="position-absolute top-0 end-0 translate-middle">
+      <div class="badge bg-success rounded-pill shadow-sm" style="font-size: 0.6rem;">T1</div>
+    </div>
+    
+    <div class="position-absolute top-0 start-0 h-100 bg-danger opacity-25" style="width: 50%; border-radius: 4px 0 0 4px;"></div>
+    <div class="position-absolute top-0 start-50 h-100 bg-success opacity-25" style="width: 50%; border-radius: 0 4px 4px 0;"></div>
+  </div>
+  <div class="d-flex justify-content-between text-muted" style="font-size: 0.65rem;">
+    <span>{{ trade_recommendation.stop_loss }}</span>
+    <span class="fw-bold text-dark">{{ trade_recommendation.entry }}</span>
+    <span>{{ trade_recommendation.targets.t1 }}</span>
+  </div>
+</div>
+{% endif %}
           <div class="row g-3 text-center mt-1">
             <div class="col-6">
               <div class="exec-label">Entry Zone</div>
@@ -314,7 +348,61 @@
       </div>
     </div>
   </div>
+
+  <div class="card mb-3 p-3 mt-3 shadow-sm border-0">
+  <h5 class="section-title text-uppercase text-secondary small fw-bold border-bottom pb-2">
+    <i class="bi bi-radar me-2"></i> Pattern Radar
+  </h5>
   
+  {% set pattern_keys = [
+      'golden_cross', 'double_top_bottom', 'cup_handle', 
+      'darvas_box', 'flag_pennant', 'minervini_stage2', 
+      'bollinger_squeeze', 'three_line_strike', 'ichimoku_signals'
+  ] %}
+  
+  {% set ns = namespace(found=false) %}
+  
+  <div class="d-flex flex-column gap-2 mt-2">
+    {% for key in pattern_keys %}
+      {% set pat = indicators.get(key) %}
+      {% if pat and pat.found %}
+        {% set ns.found = true %}
+        {% set score = pat.score | default(0) | int %}
+        {% set is_bull = 'bull' in pat.desc|lower or 'golden' in pat.desc|lower %}
+        
+        <div class="p-2 rounded bg-light border-start border-4 {{ 'border-success' if is_bull else 'border-danger' }}">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="fw-bold text-dark small">
+              <i class="bi {{ 'bi-graph-up-arrow text-success' if is_bull else 'bi-graph-down-arrow text-danger' }} me-1"></i>
+              {{ pat.desc | default(key|replace('_',' ')|title) }}
+            </span>
+            <span class="badge bg-white text-dark border">{{ score }}%</span>
+          </div>
+          
+          {% if pat.meta %}
+          <div class="d-flex flex-wrap gap-1 mt-1">
+            {% for k, v in pat.meta.items() %}
+              {% if k not in ['signal', 'type'] %}
+              <span class="badge bg-white text-secondary border fw-normal" style="font-size: 0.65rem;">
+                {{ k|replace('_', ' ') }}: <b>{{ v }}</b>
+              </span>
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    {% if not ns.found %}
+      <div class="text-center py-3 text-muted opacity-50">
+        <i class="bi bi-circle fs-4 d-block"></i>
+        <small>No structural patterns active</small>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
   <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0" style="border-left-width: 5px !important;">
     <div class="card-body p-0">
       <div class="row g-0">
@@ -348,7 +436,7 @@
     <div class="col-md-6">
       <div class="card h-100 p-3">
         <h5 class="section-title">Fundamentals</h5>
-        <div style="max-height: 400px; overflow-y: auto;">
+        <div style="max-height: 900px; overflow-y: auto;">
           <table class="table table-custom table-sm mb-0">
             <tbody>
             {% for k, v in fundamentals.items() %} {% if v is mapping %} 
@@ -368,8 +456,8 @@
                   <td>
                     <span class="{{ 'fw-bold text-dark' if is_used else 'text-secondary' }}">
                       {{ v.alias | default(k | replace('_', ' ') | title) }}
-                    </span>
-                  </td>
+                  </span>
+                </td>
                   
                   <td class="font-monospace {{ 'fw-bold' if is_used else '' }}">
                     {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
@@ -384,19 +472,19 @@
                       <span class="badge bg-warning text-dark">{{ val }}</span>
                     {% endif %}
                   </td>
-                </tr>
-              {% endif %} 
-            {% endfor %}
-          </tbody>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
           </table>
         </div>
+        </div>
       </div>
-    </div>
 
     <div class="col-md-6">
       <div class="card h-100 p-3">
         <h5 class="section-title">Technicals</h5>
-        <div style="max-height: 400px; overflow-y: auto;">
+        <div style="max-height: 900px; overflow-y: auto;">
           <table class="table table-custom table-sm mb-0">
             <tbody>
             {% for k, v in indicators.items() %} {% if v is mapping %} 
@@ -416,8 +504,8 @@
                   <td>
                     <span class="{{ 'fw-bold text-dark' if is_used else 'text-secondary' }}">
                       {{ v.alias | default(k | replace('_', ' ') | title) }}
-                    </span>
-                  </td>
+                  </span>
+                </td>
                   
                   <td class="font-monospace {{ 'fw-bold' if is_used else '' }}">
                     {{ (v.value if v.value is defined else v['value']) | default('N/A') }}
@@ -432,10 +520,10 @@
                       <span class="badge bg-warning text-dark">{{ val }}</span>
                     {% endif %}
                   </td>
-                </tr>
-              {% endif %} 
-            {% endfor %}
-          </tbody>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
           </table>
         </div>
       </div>
@@ -592,6 +680,39 @@ async function loadCorporateActions() {
 // Trigger on load
 window.addEventListener('DOMContentLoaded', loadCorporateActions);
 </script>
+<script>
+async function exportPDF() {
+    const element = document.body; // Capture full page
+    const btn = event.currentTarget;
+    btn.innerText = "Generating...";
+    
+    // 1. EXPAND: Remove scrollbars from tables so full list shows
+    const tables = document.querySelectorAll('.table-responsive');
+    tables.forEach(t => t.style.maxHeight = 'none');
 
+    // 2. REVEAL: Show BOTH tabs (Technicals & Fundamentals) stacked
+    const tabs = document.querySelectorAll('.tab-pane');
+    tabs.forEach(t => {
+        t.classList.add('show', 'active'); 
+        t.style.display = 'block';
+        t.style.marginBottom = '20px';
+    });
+
+    // 3. GENERATE
+    const opt = {
+        margin: [0.2, 0.2],
+        filename: `Analysis_{{symbol}}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+    };
+    
+    await html2pdf().set(opt).from(element).save();
+
+    // 4. RESET: Reload page to restore UI state
+    location.reload(); 
+}
+</script>
 </body>
 </html>

@@ -32,6 +32,7 @@ from services.data_fetch import (
     get_history_for_horizon,
     _safe_get_raw_float
 )
+from services.analyzers.pattern_analyzer import run_pattern_analysis
 
 PYTHON_LOOKBACK_MAP = {
     "intraday": 500,    
@@ -710,27 +711,56 @@ def compute_keltner_squeeze(df: pd.DataFrame, bb_len=20, kc_len=20) -> Dict[str,
 def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
         _Validator.require(df, ["High", "Low", "Close"], min_rows=60)
-        ichi = ta.ichimoku(df["High"], df["Low"], df["Close"])[0]
-        cols = {c: c for c in ichi.columns}
-        def _get(k): return _Validator.extract_last(ichi[next(c for c in cols if k in c)])
+        # pandas-ta returns a tuple: (df_lines, df_span)
+        # We generally access [0] for the lines
+        ichi_result = ta.ichimoku(df["High"], df["Low"], df["Close"])
         
-        tk, kj = _get("TS"), _get("KS")
-        sa, sb = _get("SA"), _get("SB")
+        if ichi_result is None: raise ValueError("Ichimoku calc failed")
+        ichi = ichi_result[0]
+        
+        # Dynamic column finding (pandas-ta column names change with params)
+        cols = {c: c for c in ichi.columns}
+        def _get(k): 
+            col_name = next((c for c in cols if k in c), None)
+            return _Validator.extract_last(ichi[col_name]) if col_name else None
+        
+        tk = _get("TS") # Tenkan-sen (Conversion)
+        kj = _get("KS") # Kijun-sen (Base)
+        sa = _get("SA") # Span A
+        sb = _get("SB") # Span B
+        
         px = _Validator.extract_last(df["Close"])
         
-        bull = (px > max(sa, sb)) and (tk > kj)
-        bear = (px < min(sa, sb)) and (tk < kj)
+        if tk is None or kj is None or sa is None or sb is None: return {}
+
+        # Signal Logic
+        bull_tk = tk > kj
+        above_cloud = px > max(sa, sb)
+        below_cloud = px < min(sa, sb)
+        inside_cloud = not above_cloud and not below_cloud
         
-        if bull: sig, score = "Strong Bullish", 10
-        elif bear: sig, score = "Strong Bearish", 0
-        elif px > max(sa, sb): sig, score = "Mild Bullish", 7
-        elif px < min(sa, sb): sig, score = "Mild Bearish", 3
-        else: sig, score = "Neutral", 5
+        sig = "Neutral"
+        score = 5
+        
+        if above_cloud and bull_tk: 
+            sig, score = "Strong Bullish", 10
+        elif below_cloud and not bull_tk: 
+            sig, score = "Strong Bearish", 0
+        elif above_cloud: 
+            sig, score = "Mild Bullish", 8
+        elif bull_tk and inside_cloud: 
+            sig, score = "Neutral Bullish", 6
+        elif not bull_tk and inside_cloud: 
+            sig, score = "Neutral Bearish", 4
+        elif below_cloud: 
+            sig, score = "Mild Bearish", 3
         
         return {
-            "ichi_cloud": {"value": sig, "score": score},
+            "ichi_cloud": {"value": sig, "score": score, "desc": f"Cloud: {sig}"},
             "ichi_span_a": {"value": round(sa, 2), "score": 0},
-            "ichi_span_b": {"value": round(sb, 2), "score": 0}
+            "ichi_span_b": {"value": round(sb, 2), "score": 0},
+            "ichi_tenkan": {"value": round(tk, 2), "score": 0, "desc": "Conversion Line"},
+            "ichi_kijun":  {"value": round(kj, 2), "score": 0, "desc": "Base Line"},
         }
     return _wrap_calc(_inner, "Ichimoku")
 
@@ -1005,7 +1035,7 @@ def compute_indicators(
         "supertrend_signal", "psar_trend", "ttm_squeeze", "bb_width", 
         "bb_percent_b", "vol_spike_ratio", "pivot_point",
         # 🚨 FIX: Explicitly add Short Term Cross back
-        "ma_cross_setup" , "wick_rejection", "atr_dynamic", "sl_atr_dynamic"
+        "ma_cross_setup" , "wick_rejection", "atr_dynamic", "sl_atr_dynamic","ichi_cloud"
     }
     raw_metrics.update(ALWAYS_CALC)
     
@@ -1086,11 +1116,28 @@ def compute_indicators(
             if res:
                 indicators.update(res)
                 done_flags.add(metric)
-                
+
         except Exception as e:
             logger.debug(f"[{symbol}] Metric {metric} failed: {e}")
 
     try:
+        # =========================================================
+        # NEW: PATTERN INJECTION
+        # =========================================================
+        # We use the DF specific to the requested horizon
+        # If horizon is "intraday", we use the Intraday DF.
+        df_for_patterns = dfs_cache.get(horizon)
+        
+        if df_for_patterns is not None and not df_for_patterns.empty:
+            try:
+                # 1. Detect Patterns
+                # This function internally calls 'detect' on all patterns 
+                # AND calls 'merge_pattern_into_indicators' to update the dict.
+                indicators.update(run_pattern_analysis(df_for_patterns, indicators, horizon=horizon))                
+            except Exception as e:
+                logger.error(f"[{symbol}] Pattern detection failed for {horizon}: {e}")
+
+        # =========================================================
         indicators["technical_score"] = {"value": compute_technical_score(indicators), "score": 0}
         indicators["Horizon"] = {"value": horizon, "score": 0}
     except: pass
