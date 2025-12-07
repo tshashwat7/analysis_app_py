@@ -1,140 +1,88 @@
-# services/tradeplan/time_estimator.py
-
 import math
-import logging
 from typing import Dict, Any, Optional
 
-logger = logging.getLogger(__name__)
-
-# Default zig-zag efficiency factor (Price doesn't move in a straight line)
-ZZ_FACTOR = 4.0
-
-# 1. Pattern Speed Factors
-PATTERN_SPEED_MULTIPLIERS = {
-    "three_line_strike": 2.5,   # Very fast mean reversion
-    "minervini_stage2":  1.8,   # Explosive breakout
-    "bollinger_squeeze": 1.5,   # Volatility expansion
-    "flag_pennant":      1.4,   # Trend continuation
-    "darvas_box":        1.3,   # Trend continuation
-    "cup_handle":        1.2,   # Measured move (medium speed)
-    "ichimoku_signals":  1.1,   # Trend confirmation
-    "double_top_bottom": 0.9,   # Structure building takes time
-    "golden_cross":      0.8,   # Major regime change (Long hold)
-    "default":           1.0
-}
-
-def _choose_pattern_boost(patterns: Dict[str, Any]) -> float:
-    """Pick highest-relevance multiplier based on found patterns."""
-    if not patterns: return 1.0
-    best_mult = 1.0
-    for name, p in patterns.items():
-        try:
-            if not p.get("found"): continue
-            score = float(p.get("score", 0))
-            if score > 50:
-                base = PATTERN_SPEED_MULTIPLIERS.get(name, 1.0)
-                quality_boost = 1.1 if score > 80 else 1.0
-                best_mult = max(best_mult, base * quality_boost)
-        except Exception: continue
-    return best_mult
-
-def _extract_slope_factor(indicators: Dict[str, Any]) -> float:
-    """Steeper trend = Faster target hit."""
-    if not indicators: return 1.0
+# --- Local Helpers to prevent Import Errors ---
+def _ensure_numeric(x, default=0.0):
     try:
-        slope_data = (
-            indicators.get("ema_20_slope") or indicators.get("wma_20_slope") or 
-            indicators.get("wma_50_slope") or indicators.get("mma_20_slope") or 
-            indicators.get("mma_12_slope") or indicators.get("ema_slope")
-        )
-        if slope_data is None: return 1.0
-        
-        slope_val = float(slope_data.get("value") or slope_data.get("raw") or 0) if isinstance(slope_data, dict) else float(slope_data)
-        return 1.0 + min(max(abs(slope_val), 0.0), 10.0) / 10.0
-    except Exception: return 1.0
+        if x is None: return float(default)
+        if isinstance(x, (int, float)): return float(x)
+        if isinstance(x, dict): return float(x.get("value") or x.get("raw") or default)
+        return float(default)
+    except: return float(default)
 
-def _extract_strategy_factor(strategies: Dict[str, Any]) -> float:
-    """Adjusts time based on Strategy Personality."""
-    if not strategies: return 1.0
-    best = strategies.get("best_strategy") or strategies.get("best")
-    if isinstance(best, list) and best: best = best[0]
-    if not best: return 1.0
+def _get_val_local(data, key, default=None):
+    if not data or key not in data: return default
+    return data[key]
+
+# --- MAIN DUAL ESTIMATOR ---
+def estimate_hold_time_dual(
+    entry: float,
+    t1: float,
+    t2: float,
+    atr: float,
+    horizon: str,
+    indicators: Dict,
+    strategy_summary: Dict = None,
+    multiplier: float = 1.0
+) -> Dict[str, str]:
+    """
+    Estimates distinct hold times for T1 (Conservation) and T2 (Extension).
+    """
+    if not entry or entry <= 0:
+        return {"t1_estimate": "-", "t2_estimate": "-", "note": "Invalid Entry"}
+
+    # 1. Calculate Distances
+    t1_dist = abs(t1 - entry)
+    t2_dist = abs(t2 - entry)
     
-    label = str(best).lower()
-    if "day_trading" in label: return 2.0
-    if "minervini" in label: return 1.5
-    if "canslim" in label: return 1.4
-    if any(x in label for x in ["momentum", "trend"]): return 1.2
-    if "swing" in label: return 1.1
-    if any(x in label for x in ["value", "position"]): return 0.8
-    if "income" in label: return 0.6
-    return 1.0
+    # 2. Get Velocity Metrics
+    atr_val = _ensure_numeric(atr)
+    if atr_val <= 0: return {"t1_estimate": "-", "t2_estimate": "-", "note": "Invalid ATR"}
+    
+    # Trend Speed Adjustment (The "Physics")
+    trend_strength = _ensure_numeric(_get_val_local(indicators, "trend_strength"), 5.0)
+    adx = _ensure_numeric(_get_val_local(indicators, "adx"), 20.0)
+    
+    # Base Velocity (ATR per bar)
+    # If trend is strong (>7), price moves 1.2x ATR per bar
+    # If trend is weak (<3), price moves 0.6x ATR per bar
+    velocity_factor = 0.8  # Base friction
+    if trend_strength >= 7.0: velocity_factor = 1.2
+    elif trend_strength >= 5.0: velocity_factor = 1.0
+    elif trend_strength <= 3.0: velocity_factor = 0.6
+    
+    # Apply Strategy Multiplier (e.g. Momentum = Fast, Value = Slow)
+    final_velocity = atr_val * velocity_factor * (1.0 / multiplier) # Lower multiplier = Faster
 
-def estimate_hold_time(
-    price_val: float,
-    t1: Optional[float],
-    t2: Optional[float],
-    atr_val: Any, 
-    horizon: str = "short_term",
-    indicators: Dict[str, Any] = None,
-    strategies: Dict[str, Any] = None,
-    patterns: Dict[str, Any] = None
-) -> str:
-    """
-    Calculates estimated hold time string (e.g. "~3 Weeks")
-    """
-    try:
-        if not price_val or price_val <= 0: return "-"
-        
-        # Handle Polymorphic ATR
-        final_atr = 0.0
-        if isinstance(atr_val, dict): final_atr = float(atr_val.get("value") or 0)
-        elif isinstance(atr_val, (int, float)): final_atr = float(atr_val)
-        if final_atr <= 0: return "-"
+    # 3. Calculate Bars
+    t1_bars = t1_dist / max(final_velocity, 0.01)
+    t2_bars = t2_dist / max(final_velocity, 0.01)
 
-        # Targets
-        targets = [t for t in (t1, t2) if t and t > 0]
-        if not targets: return "-"
-        avg_target = sum(targets) / len(targets)
-        distance = abs(avg_target - price_val)
-        if distance <= 0: return "Now"
+    # 4. Confidence Logic
+    t1_conf = "High" if trend_strength > 6 else "Medium"
+    t2_conf = "Medium" if (trend_strength > 6 and adx > 25) else "Low"
 
-        # Calculation
-        base_bars = (distance / final_atr) * ZZ_FACTOR
-        
-        strat_speed = _extract_strategy_factor(strategies or {})
-        slope_speed = _extract_slope_factor(indicators or {})
-        pat_speed   = _choose_pattern_boost(patterns or {})
-        
-        total_speed = min(strat_speed * slope_speed * pat_speed, 4.0)
-        effective_bars = max(1.0, base_bars / total_speed)
+    # 5. Formatter
+    def fmt_bars(bars, hz):
+        if hz == "intraday":
+            mins = bars * 15 # Assuming 15m candles
+            if mins < 60: return f"~{int(mins)}m"
+            return f"~{round(mins/60, 1)}h"
+        elif hz == "short_term":
+            days = math.ceil(bars)
+            if days <= 1: return "1-2 Days"
+            if days < 5: return f"~{int(days)} Days"
+            return f"~{math.ceil(days/5)} Weeks"
+        else: # Long term
+            weeks = math.ceil(bars / 5)
+            if weeks < 4: return f"~{weeks} Wks"
+            return f"~{round(weeks/4, 1)} Mths"
 
-        # Output Formatting
-        if horizon == "intraday":
-            minutes = effective_bars * 15.0
-            if minutes < 60: return f"~{int(minutes)} Mins"
-            if minutes < 375: return f"~{round(minutes/60, 1)} Hours"
-            return f"~{math.ceil(minutes / 375.0)} Days"
-
-        if horizon == "short_term":
-            days = math.ceil(effective_bars)
-            if days < 7: return f"~{days} Days"
-            return f"~{math.ceil(days/5.0)} Weeks"
-
-        if horizon == "long_term":
-            weeks = math.ceil(effective_bars)
-            if weeks < 4: return f"~{weeks} Weeks"
-            months = math.ceil(weeks / 4.0)
-            if months < 12: return f"~{months} Months"
-            return f"~{round(months/12.0, 1)} Years"
-
-        if horizon == "multibagger":
-            months = math.ceil(effective_bars)
-            if months < 12: return f"~{months} Months"
-            return f"~{round(months/12.0, 1)} Years"
-
-        return f"~{int(effective_bars)} Bars"
-
-    except Exception as e:
-        logger.warning(f"Time Est Error: {e}")
-        return "-"
+    return {
+        "t1_estimate": fmt_bars(t1_bars, horizon),
+        "t2_estimate": fmt_bars(t2_bars, horizon),
+        "t1_bars": round(t1_bars, 1),
+        "t2_bars": round(t2_bars, 1),
+        "confidence": {"t1": t1_conf, "t2": t2_conf},
+        "velocity_note": f"Vel: {velocity_factor}x ATR"
+    }

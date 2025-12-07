@@ -357,28 +357,44 @@ def calc_roe(t, unifier: DataUnifier = None):
 
 # --- NEW: ROE HISTORY CALCULATOR FOR STABILITY ---
 @_wrap_calc("roe_history")
-def calc_roe_history(unifier: DataUnifier) -> List[float]:
+def calc_roe_history(unifier: DataUnifier) -> Dict[str, Any]:
     """Calculate ROE for available years to feed Signal Engine stability checks."""
     try:
         fin, bs = unifier.financials, unifier.balance_sheet
-        if fin.empty or bs.empty: return []
+        if fin.empty or bs.empty: 
+            return {"raw": [], "value": [], "score": None, "desc": "No ROE data"}
         
         roe_list = []
+        roe_by_year = {}  # NEW: Dictionary format for fallback
+        
         # Iterate over columns (Years)
-        # Note: Financials cols are usually Timestamps.
         valid_cols = [c for c in fin.columns if c in bs.columns]
         
         for col in valid_cols:
             ni = pick_value_by_key(fin, FIELD.get("net_income", []), col)
             eq = pick_value_by_key(bs, FIELD.get("total_equity", []), col)
+            
             if ni and eq and eq > 0:
-                roe_list.append((ni / eq) * 100.0)
+                roe_val = (ni / eq) * 100.0
+                roe_list.append(roe_val)
                 
-        # Return sorted by time? No, statistics.pstdev doesn't care about order.
-        return {"raw": roe_list, "value": roe_list, "score": None, "desc": "ROE for available years"}
+                # NEW: Store in dict format with year label
+                try:
+                    year_label = str(col.year) if hasattr(col, 'year') else str(col)
+                    roe_by_year[year_label] = roe_val
+                except:
+                    roe_by_year[f"year_{len(roe_by_year)}"] = roe_val
+        
+        return {
+            "raw": roe_list,           # List format for signal_engine
+            "value": roe_list,         # Same
+            "roe_5y": roe_by_year,     # NEW: Dict fallback
+            "score": None,
+            "desc": f"ROE for {len(roe_list)} years"
+        }
     
-    except Exception:
-        return []
+    except Exception as e:
+        return {"raw": [], "value": [], "score": None, "desc": f"ROE calc error: {e}"}
 
 @_wrap_calc("roce")
 def calc_roce(t, unifier: DataUnifier = None):
@@ -995,11 +1011,14 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
     fundamentals["eps_growth_3y"] = fundamentals.get("profit_growth_3y")
     
     # --- ADD MISSING DATA FOR SIGNAL ENGINE ---
-    fundamentals["roe_history"] = calc_roe_history(unifier)
+    roe_history_data = calc_roe_history(unifier)
+    fundamentals["roe_history"] = roe_history_data.get("raw", [])  # List for primary
+    fundamentals["roe_5y"] = roe_history_data.get("roe_5y", {})    # Dict for fallback
     fundamentals["sector"] = unifier.get_raw("sector")
     fundamentals["industry"] = unifier.get_raw("industry")
     fundamentals["website"] = unifier.get_raw("website")
     fundamentals["current_price"] = unifier.get(["currentPrice", "regularMarketPrice"])
+    fundamentals["name"] = unifier.get_raw("shortName")
 
     total_w = 0.0; weighted_sum = 0.0; used_weights = {}
     for k, w in FUNDAMENTAL_WEIGHTS.items():

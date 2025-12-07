@@ -15,6 +15,189 @@ def _safe_float(x) -> Optional[float]:
     except Exception:
         return None
 
+# ============================================================
+# Validate Pattern Entry
+# ============================================================
+
+def validate_pattern_entry(indicators: Dict[str, Any], setup_type: str, logger=None) -> Dict[str, Any]:
+    """
+    Checks if pattern-specific entry conditions are met.
+    
+    Returns: {
+        "confirmed": bool,
+        "wait_for": Optional[str],
+        "confidence_adjustment": int
+    }
+    """
+    def _log(msg: str):
+        if logger:
+            try: logger.debug(msg)
+            except: pass
+    
+    result = {"confirmed": True, "wait_for": None, "confidence_adjustment": 0}
+    
+    # Cup & Handle: Needs volume confirmation at rim breach
+    cup = indicators.get("cup_handle", {})
+    if cup.get("found") and "CUP" in setup_type.upper():
+        meta = cup.get("meta", {})
+        rim = _safe_float(meta.get("rim_level"))
+        price = _safe_float(indicators.get("price", {}).get("value"))
+        rvol = _safe_float(indicators.get("rvol", {}).get("value")) or 1.0
+        
+        if rim and price:
+            # Check #1: Price must be above rim
+            if price < rim * 0.99:
+                result["confirmed"] = False
+                result["wait_for"] = f"Wait for price to close above rim ({rim:.2f})"
+                _log(f"Cup pattern: Price {price:.2f} below rim {rim:.2f}")
+                return result
+            
+            # Check #2: Volume must confirm breakout
+            if rvol < 1.2:
+                result["confirmed"] = False
+                result["wait_for"] = f"Wait for volume confirmation (RVOL > 1.2, current: {rvol:.2f})"
+                _log(f"Cup pattern: Insufficient volume {rvol:.2f}")
+                return result
+            
+            # Bonus: Strong volume gives confidence boost
+            if rvol > 2.0:
+                result["confidence_adjustment"] = +10
+    
+    # Darvas Box: Needs consolidation confirmation
+    darvas = indicators.get("darvas_box", {})
+    if darvas.get("found") and "DARVAS" in setup_type.upper():
+        meta = darvas.get("meta", {})
+        box_high = _safe_float(meta.get("box_high"))
+        price = _safe_float(indicators.get("price", {}).get("value"))
+        
+        if box_high and price:
+            # Check: Must be cleanly above box
+            if price < box_high * 1.01:
+                result["confirmed"] = False
+                result["wait_for"] = f"Wait for clean breakout above box high ({box_high:.2f})"
+                return result
+    
+    # Bollinger Squeeze: Needs directional confirmation
+    squeeze = indicators.get("bollinger_squeeze", {})
+    if squeeze.get("found") and "SQUEEZE" in setup_type.upper():
+        # Check: Need confirming indicators (RSI, MACD)
+        rsi = _safe_float(indicators.get("rsi", {}).get("value"))
+        macd_hist = _safe_float(indicators.get("macd_histogram", {}).get("value"))
+        
+        if rsi and macd_hist is not None:
+            if rsi < 50 and macd_hist < 0:
+                result["confirmed"] = False
+                result["wait_for"] = "Wait for bullish confirmation (RSI > 50 or MACD > 0)"
+                return result
+    
+    # Minervini VCP: Needs final contraction
+    vcp = indicators.get("minervini_stage2", {})
+    if vcp.get("found") and "VCP" in setup_type.upper():
+        meta = vcp.get("meta", {})
+        contraction_pct = _safe_float(meta.get("contraction_pct"))
+        
+        if contraction_pct and contraction_pct > 1.5:
+            result["wait_for"] = f"VCP not tight enough (contraction: {contraction_pct:.1f}%, need < 1.5%)"
+            result["confidence_adjustment"] = -5  # Slightly reduce confidence but don't block
+    
+    return result
+
+def check_pattern_invalidation(indicators: Dict[str, Any], position_type: str = "LONG") -> Dict[str, Any]:
+    """
+    Monitors active patterns for failure/invalidation.
+    If a pattern breaks down, immediate exit is required.
+    
+    Args:
+        indicators: Current market data
+        position_type: "LONG" or "SHORT"
+    
+    Returns: {
+        "invalidated": bool,
+        "reason": Optional[str],
+        "action": Optional[str]  # "EXIT_IMMEDIATELY" or "EXIT_ON_CLOSE"
+    }
+    """
+    result = {"invalidated": False, "reason": None, "action": None}
+    
+    if position_type not in ["LONG", "SHORT"]:
+        return result
+    
+    price = _safe_float(indicators.get("price", {}).get("value"))
+    if not price:
+        return result
+    
+    # Darvas Box Invalidation (LONG)
+    if position_type == "LONG":
+        darvas = indicators.get("darvas_box", {})
+        if darvas.get("found"):
+            meta = darvas.get("meta", {})
+            box_low = _safe_float(meta.get("box_low"))
+            
+            if box_low and price < box_low:
+                result["invalidated"] = True
+                result["reason"] = f"Darvas box breakdown: Price {price:.2f} < Box Low {box_low:.2f}"
+                result["action"] = "EXIT_IMMEDIATELY"
+                return result
+    
+    # Cup & Handle Invalidation (LONG)
+    if position_type == "LONG":
+        cup = indicators.get("cup_handle", {})
+        if cup.get("found"):
+            meta = cup.get("meta", {})
+            handle_low = _safe_float(meta.get("handle_low"))
+            
+            if handle_low and price < handle_low * 0.95:
+                result["invalidated"] = True
+                result["reason"] = f"Cup pattern failure: Price {price:.2f} broke handle support {handle_low:.2f}"
+                result["action"] = "EXIT_ON_CLOSE"
+                return result
+    
+    # VCP/Stage 2 Invalidation (LONG)
+    if position_type == "LONG":
+        vcp = indicators.get("minervini_stage2", {})
+        if vcp.get("found"):
+            meta = vcp.get("meta", {})
+            pivot = _safe_float(meta.get("pivot_point"))
+            
+            if pivot and price < pivot * 0.92:  # 8% below pivot = failure
+                result["invalidated"] = True
+                result["reason"] = f"VCP failure: Price {price:.2f} > 8% below pivot {pivot:.2f}"
+                result["action"] = "EXIT_ON_CLOSE"
+                return result
+    
+    # Flag/Pennant Invalidation (LONG)
+    if position_type == "LONG":
+        flag = indicators.get("flag_pennant", {})
+        if flag.get("found"):
+            meta = flag.get("meta", {})
+            flag_low = _safe_float(meta.get("flag_low"))
+            
+            if flag_low and price < flag_low:
+                result["invalidated"] = True
+                result["reason"] = f"Flag pattern failure: Price {price:.2f} broke flag support {flag_low:.2f}"
+                result["action"] = "EXIT_IMMEDIATELY"
+                return result
+    
+    # Golden Cross Invalidation (LONG)
+    if position_type == "LONG":
+        golden = indicators.get("golden_cross", {})
+        if golden.get("found"):
+            meta = golden.get("meta", {})
+            cross_type = str(meta.get("type", "")).lower()
+            
+            # If it was bullish but now showing bearish signals
+            if "bull" in cross_type:
+                ema_50 = _safe_float(indicators.get("ema_50", {}).get("value"))
+                ema_200 = _safe_float(indicators.get("ema_200", {}).get("value"))
+                
+                if ema_50 and ema_200 and ema_50 < ema_200:
+                    result["invalidated"] = True
+                    result["reason"] = "Golden Cross invalidated: 50 EMA crossed back below 200 EMA"
+                    result["action"] = "EXIT_ON_CLOSE"
+                    return result
+    
+    return result
+
 def enhance_plan_with_patterns(
     plan: Dict[str, Any],
     indicators: Dict[str, Any],
@@ -96,6 +279,23 @@ def enhance_plan_with_patterns(
     valid_patterns.sort(key=lambda x: _safe_float(x[1].get("score")) or 0.0, reverse=True)
     best_name, best_pat = valid_patterns[0]
     meta = best_pat.get("meta", {}) or {}
+
+    # Validate pattern entry conditions
+    setup_type = out.get("setup_type", "")
+    entry_validation = validate_pattern_entry(indicators, setup_type, logger)
+    
+    if not entry_validation["confirmed"]:
+        out["signal"] = "WAIT_PATTERN_ENTRY"
+        out["reason"] = entry_validation["wait_for"]
+        out["execution_hints"]["pattern_entry_wait"] = {
+            "reason": entry_validation["wait_for"],
+            "pattern": best_name
+        }
+        return out
+    if entry_validation["confidence_adjustment"] != 0:
+        current_conf = out.get("setup_confidence", 50)
+        out["setup_confidence"] = min(100, max(0, current_conf + entry_validation["confidence_adjustment"]))
+
     if not isinstance(meta, dict):
         _log(f"pattern {best_name} has non-dict meta: {type(meta)}; coercing to empty dict")
         meta = {}
@@ -151,7 +351,6 @@ def enhance_plan_with_patterns(
 
     # --- E. BOLLINGER SQUEEZE ---
     elif best_name == "bollinger_squeeze":
-        # Boost confidence
         conf = _safe_float(out.get("setup_confidence")) or 0
         out["setup_confidence"] = min(100, int(conf + 10))
         out["execution_hints"]["pattern_note"] = "Volatility Squeeze: Expect expansion"
@@ -217,5 +416,13 @@ def enhance_plan_with_patterns(
     # 6. Analytics Tagging
     out["analytics"]["pattern_driver"] = best_name
     out["analytics"]["pattern_score"] = _safe_float(best_pat.get("score"))
-
+    # Monitor for pattern invalidation (risk management)
+    position_type = "LONG" if out.get("signal", "").startswith("BUY") else "SHORT" if out.get("signal", "").startswith("SHORT") else None
+    
+    if position_type:
+        invalidation = check_pattern_invalidation(indicators, position_type)
+        if invalidation["invalidated"]:
+            out["execution_hints"]["pattern_invalidation"] = invalidation
+            # Note: We don't override the signal here as this is for monitoring existing positions
+            # The UI/execution layer should check this field
     return out
