@@ -1035,7 +1035,7 @@ def compute_indicators(
         "supertrend_signal", "psar_trend", "ttm_squeeze", "bb_width", 
         "bb_percent_b", "vol_spike_ratio", "pivot_point",
         # 🚨 FIX: Explicitly add Short Term Cross back
-        "ma_cross_setup" , "wick_rejection", "atr_dynamic", "sl_atr_dynamic","ichi_cloud"
+        "ma_cross_setup" , "wick_rejection", "atr_dynamic", "sl_atr_dynamic","ichi_cloud","true_range","hv_10"
     }
     raw_metrics.update(ALWAYS_CALC)
     
@@ -1073,9 +1073,18 @@ def compute_indicators(
     
     if horizon in dfs_cache:
         try:
-            price = float(dfs_cache[horizon]["Close"].iloc[-1])
-            indicators["price"] = {"value": round(price, 2), "score": 0, "alias": "Price", "desc": "Current"}
-        except: pass
+            series = dfs_cache[horizon]["Close"]
+            
+            # 1. Current Price
+            if len(series) > 0:
+                price = float(series.iloc[-1])
+                indicators["price"] = {"value": round(price, 2), "score": 0, "alias": "Price", "desc": "Current"}
+
+            if len(series) > 1:
+                prev = float(series.iloc[-2])
+                indicators["prev_close"] = {"value": round(prev, 2), "score": 0, "alias": "Prev Close", "desc": "Previous Close"}
+        except Exception as e:
+            pass
 
     # Execution flags to prevent duplicates
     done_flags = set()

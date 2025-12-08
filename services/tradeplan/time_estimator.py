@@ -14,6 +14,12 @@ def _get_val_local(data, key, default=None):
     if not data or key not in data: return default
     return data[key]
 
+def _extract_score(x):
+    """Safely extract numeric value from indicator dict or float."""
+    if isinstance(x, dict):
+        return x.get("value") or x.get("score") or x.get("raw") or 5.0
+    return float(x) if x is not None else 5.0
+
 # --- MAIN DUAL ESTIMATOR ---
 def estimate_hold_time_dual(
     entry: float,
@@ -40,7 +46,8 @@ def estimate_hold_time_dual(
     if atr_val <= 0: return {"t1_estimate": "-", "t2_estimate": "-", "note": "Invalid ATR"}
     
     # Trend Speed Adjustment (The "Physics")
-    trend_strength = _ensure_numeric(_get_val_local(indicators, "trend_strength"), 5.0)
+    ts_raw = _get_val_local(indicators, "trend_strength")
+    trend_strength = _extract_score(ts_raw)
     adx = _ensure_numeric(_get_val_local(indicators, "adx"), 20.0)
     
     # Base Velocity (ATR per bar)

@@ -155,6 +155,8 @@ TECHNICAL_WEIGHTS = {
 TECHNICAL_METRIC_MAP = {
     # Price / meta
     "price": "Current Price",
+    "prev_close": "Previous Close",
+
     # Trend / Moving averages “DMA” should be considered Daily Moving Average (SMA),But your dynamic logic never generates dma_XX anymore we're using:EMA for daily (intraday/short_term) WMA-label for weekly (long_term) MMA-label for monthly (multibagger)
     "dma_20": "20 DMA",
     "dma_50": "50 DMA",
@@ -197,6 +199,9 @@ TECHNICAL_METRIC_MAP = {
     "ema_50_slope": "50 EMA Slope",
     "wma_50_slope": "50 WMA Slope",
     "mma_12_slope": "12-Month MA Slope",
+    "ma_cross_setup": "MA Crossover Setup",
+    "ma_trend_setup": "MA Trend Setup",
+
     # Momentum
     "rsi": "RSI",
     "rsi_slope": "RSI Slope",
@@ -283,7 +288,27 @@ TECHNICAL_METRIC_MAP = {
     "sl_2x_atr": "Suggested SL (2xATR)",
     "technical_score": "Technical Score",
     "Horizon": "Horizon",
-    "wick_rejection": "Wick Rejection"
+    "wick_rejection": "Wick Rejection",
+    "atr_dynamic": "Dynamic ATR",
+    "sl_atr_dynamic": "Stop Loss (Dynamic ATR)",
+    "risk_per_share_pct": "Risk Per Share (%)",
+    "atr_sma_ratio": "ATR/SMA Ratio",
+
+    #pattern Key
+    "darvas_box": "Darvas Box Pattern",
+    "cup_handle": "Cup & Handle Pattern",
+    "flag_pennant": "Flag/Pennant Pattern",
+    "bollinger_squeeze": "Bollinger Squeeze",
+    "golden_cross": "Golden/Death Cross",
+    "double_top_bottom": "Double Top/Bottom",
+    "three_line_strike": "Three-Line Strike",
+    "minervini_stage2": "Minervini VCP / Stage 2",
+    "ichimoku_signals": "Ichimoku Signals",
+
+
+
+
+
 }
 
 CORE_TECHNICAL_SETUP_METRICS = [
@@ -389,7 +414,10 @@ FUNDAMENTAL_ALIAS_MAP = {
     # reporting/meta
     "base_score": "Base Fundamental Score",
     "final_score": "Final Fundamental Score",
-    "_meta": "Meta"
+    "_meta": "Meta",
+    "52w_high": "52 week high",
+    "52w_low": "52 week low",
+
 }
 FUNDAMENTAL_FIELD_CANDIDATES = {
     # Income Statement
@@ -856,8 +884,20 @@ VOL_BANDS = {
 
 # 3. Momentum Slopes Thresholds
 RSI_SLOPE_THRESH = {
-    "acceleration_floor": 0.05,  # Slope > 0.05 (bullish acceleration)
-    "deceleration_ceiling": -0.05,  # Slope < -0.05 (bearish deceleration)
+    # Default fallback
+    "default": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
+    
+    # Intraday: Requires sharper moves to filter noise
+    "intraday": {"acceleration_floor": 0.10, "deceleration_ceiling": -0.10},
+    
+    # Short Term: Standard Swing
+    "short_term": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
+    
+    # Long Term: Slower moves are significant
+    "long_term": {"acceleration_floor": 0.03, "deceleration_ceiling": -0.03},
+    
+    # Multibagger: Monthly charts move very slowly
+    "multibagger": {"acceleration_floor": 0.02, "deceleration_ceiling": -0.02},
 }
 
 MACD_MOMENTUM_THRESH = {

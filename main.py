@@ -639,7 +639,11 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                 hybrids = enrich_hybrid_metrics(
                     analysis_data["fundamentals"], analysis_data["indicators"]
                 )
-                analysis_data["fundamentals"].update(hybrids)
+                if hybrids:
+                    analysis_data["fundamentals"].update(hybrids)
+                else:
+                    logger.warning(f"[{symbol}] All hybrid metrics failed - fundamentals incomplete")
+                    analysis_data["error_details"].append("Hybrid metrics: All 7 calculations failed")
             except Exception as e:
                 analysis_data["error_details"].append(
                     f"Hybrid Metric Calculation Failed: {e}"
