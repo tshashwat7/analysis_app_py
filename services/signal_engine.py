@@ -65,7 +65,7 @@ UI Compatibility: Full ✅
 
 from typing import Dict, Any, Optional, Tuple, List
 import math, statistics, operator, logging
-from datetime import datetime
+import datetime
 from services.data_fetch import _safe_float
 
 from config.constants import (
@@ -105,22 +105,28 @@ MA_KEYS_BY_HORIZON = {
     "long_term": {"fast": "wma_10", "mid": "wma_40", "slow": "wma_50"},
     "multibagger": {"fast": "mma_6", "mid": "mma_12", "slow": "mma_12"}
 }
-
+HORIZON_T2_CAPS = {
+    "intraday": 0.04,     # Max 4% expansion
+    "short_term": 0.10,   # Max 10% expansion
+    "long_term": 0.20,    # Max 20% expansion
+    "multibagger": 1.00   # Uncapped (100%)
+}
 # HELPERS
 def ensure_numeric(x, default=0.0):
     try:
         if x is None: return float(default)
         if isinstance(x, (int, float)): return float(x)
+        if isinstance(x, str):
+            clean = x.replace("%", "").replace(",", "").strip()
+            return float(clean) if clean else float(default)
         if isinstance(x, dict):
             # Try in order, but accept 0 as valid
-            for key in ["value", "raw", "score"]:
+            for key in ["raw", "value", "score"]:
                 val = x.get(key)
                 if val is not None:  # 0 is valid!
                     return float(val)
             return float(default)
-        if isinstance(x, str):
-            clean = x.replace("%", "").replace(",", "").strip()
-            return float(clean) if clean else float(default)
+        
         return float(default)
     except Exception as e:
         logger.warning(f"ensure_numeric conversion failed for input '{x}': {e}", exc_info=True)
@@ -855,7 +861,10 @@ def generate_trailing_hints(plan: Dict, indicators: Dict) -> Dict:
 def calculate_dynamic_confidence_floor(adx, di_plus, di_minus, setup_type, horizon="short_term"):
     BASE_FLOORS = {"MOMENTUM_BREAKOUT": 55, "TREND_PULLBACK": 53, "QUALITY_ACCUMULATION": 45,
                    "VOLATILITY_SQUEEZE": 50, "TREND_FOLLOWING": 50}
-    base_floor = BASE_FLOORS.get(setup_type, 55)
+    # NEW: Discount for Intraday
+    horizon_discount = 10 if horizon == "intraday" else 0
+    
+    base_floor = BASE_FLOORS.get(setup_type, 55) - horizon_discount
     adx = ensure_numeric(adx, 20.0)
     adx_normalized = max(0, min(1, (adx - 10) / 30))
     adjustment = adx_normalized * 12
@@ -916,8 +925,15 @@ def check_entry_permission(setup_type, setup_conf, indicators, horizon="short_te
             discounted -= 10  # Total -25 discount for strong trends
             
         # Trend Strength Gate (Except for Deep Pullbacks which are inherently weak)
-        if "DEEP" not in setup_type and ts_val < 5.0: 
-            return (False, [f"Trend {ts_val:.1f} < 5.0"])
+        # Horizon-aware trend gate (APPLY THE DEFINED VARIABLE!)
+        required_trend = {
+            "intraday": 2.0,      # Catch emerging trends early
+            "short_term": 3.5,    # Some confirmation needed
+            "long_term": 5.0,     # Proven trend required
+            "multibagger": 6.0    # Very strict on mega-trends
+        }.get(horizon, 5.0)
+        if "DEEP" not in setup_type and ts_val < required_trend:  # ✅ USE required_trend, not hardcoded 5.0
+            return (False, [f"Trend {ts_val:.1f} < {required_trend} ({horizon})"])
             
         if setup_conf >= discounted:
             return True, reasons
@@ -937,7 +953,9 @@ def check_entry_permission(setup_type, setup_conf, indicators, horizon="short_te
         else:
             reasons.append(f"Value/Reversal conf {setup_conf}% < {floor}%")
             return False, reasons
-
+    # [FIX] Add this new handler for NEUTRAL
+    elif setup_type == "NEUTRAL":
+        return False, ["Market is in Neutral state (Consolidation). Wait for clear trend or breakout."]
     # Fallback
     return (False, [f"Unknown setup: {setup_type}"])
 
@@ -1225,40 +1243,284 @@ def compute_all_profiles(ticker: str, fundamentals: Dict, indicators: Dict, prof
             "missing_count": {k: len(v) for k, v in missing_map.items()},
             "missing_unique": sorted({v for arr in missing_map.values() for v in arr}) if missing_map else []}
 
-# TRADE PLAN GENERATOR (v11.2 COMPLETE WITH ALL FEATURES)
+# 
+# ============================================================================
+# TRADE PLAN GENERATOR DEBUG INSTRUMENTATION (Add to signal_engine.py)
+# ============================================================================
+
+import os
+DEBUG_SIGNAL_GENERATION = os.getenv("DEBUG_SIGNAL_GENERATION", "true").lower() == "true"
+
+def log_signal_decision(symbol, indicators, setup_type, setup_conf, 
+                        dyn_floor, can_enter, can_trade_vol, vol_reason, 
+                        category, blocked_by_list):
+    """
+    Comprehensive logging for every signal decision.
+    Returns a debug dict that gets attached to the plan.
+    """
+    if not DEBUG_SIGNAL_GENERATION:
+        return {}
+    
+    debug_info = {
+        "symbol": symbol,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "setup": {
+            "type": setup_type,
+            "confidence": setup_conf,
+            "confidence_floor": dyn_floor,
+            "passed_entry_check": can_enter,
+            "passed_volatility_check": can_trade_vol
+        },
+        "blocking_checks": blocked_by_list,
+        "category": category,
+        "indicators_snapshot": {
+            "price": _get_val(indicators, "price"),
+            "atr_pct": _get_val(indicators, "atr_pct"),
+            "volatility_quality": _get_val(indicators, "volatility_quality"),
+            "adx": _get_val(indicators, "adx"),
+            "trend_strength": _get_val(indicators, "trend_strength"),
+            "rsi": _get_val(indicators, "rsi"),
+            "volume_rvol": _get_val(indicators, "rvol"),
+            "bb_position": _get_val(indicators, "bb_position"),
+            "supertrend_signal": _get_str(indicators, "supertrend_signal")
+        }
+    }
+    
+    logger.info(f"[SIGNAL_DEBUG] {symbol}: {setup_type} (Conf {setup_conf}% vs Floor {dyn_floor}%) → {blocked_by_list or 'APPROVED'}")
+    
+    return debug_info
+
+def _calculate_execution_levels(setup_type: str, category: str, price_val: float, stop_loss: Optional[float], atr_val: float, horizon: str, indicators: Dict, fundamentals: Dict,trade_valid: bool,div_info: Dict,adx: float) -> Dict[str, Any]:
+    """
+    Helper to isolate Target and Stop Loss math with STRICT INSTITUTIONAL GATING.
+    """
+    # Fix #7: Do not run execution logic for invalid trades
+    if not trade_valid:
+        return {
+            "stop_loss": None, "targets": {"t1": None, "t2": None}, 
+            "signal_hint": "HOLD", "execution_hints": {"note": "Trade invalid, execution logic skipped"}
+        }
+
+    result = {
+        "stop_loss": stop_loss,
+        "targets": {"t1": None, "t2": None},
+        "signal_hint": "NA_CALC",
+        "execution_hints": {}
+    }
+
+    atr_cfg = ATR_MULTIPLIERS.get(horizon, {"sl": 2.0, "tp": 3.0})
+    
+    # 1. Determine SL Multipliers based on Volatility
+    vol_qual = ensure_numeric(_get_val(indicators, "volatility_quality"), 5.0)
+    sl_mult = 1.5 if vol_qual >= 8.0 else 3.0 if vol_qual <= 4.0 else float(atr_cfg.get("sl", 2.0))
+    
+    # Fix #6: Divergence-Risk Adjustment
+    if (category == "BUY" and div_info.get('divergence_type') == 'bearish') or \
+       (category == "SELL" and div_info.get('divergence_type') == 'bullish'):
+        sl_mult *= 0.8
+        result["execution_hints"]["risk_note"] = "SL tightened due to opposing divergence"
+
+    # Fix #4: Trend Invalidation via ADX
+    if "TREND" in setup_type and adx < 18:
+        result["signal_hint"] = "WAIT_WEAK_TREND"
+        result["execution_hints"]["note"] = f"Trend setup rejected: ADX {adx:.1f} < 18"
+        return result
+
+    # 2. Spread Adjustment
+    mcap = ensure_numeric(fundamentals.get("market_cap", 0) if fundamentals else 0)
+    spread_pad = price_val * calculate_spread_adjustment(price_val, mcap)
+    
+    rr_mults = get_rr_regime_multipliers(adx)
+    st_val = _get_val(indicators, "supertrend_value")
+    st_sig = _get_str(indicators, "supertrend_signal")
+    
+    # Fix #1: Minimum SL Distance (Prevention of Zero Risk)
+    min_sl_dist = atr_val * 0.5
+
+    # --- LOGIC BRANCHES ---
+    
+    # A. ACCUMULATION
+    if setup_type == "QUALITY_ACCUMULATION":
+        bb_low = ensure_numeric(_get_val(indicators, "bb_low"))
+        bb_mid = ensure_numeric(_get_val(indicators, "bb_mid"))
+        bb_high = ensure_numeric(_get_val(indicators, "bb_high"))
+        
+        if bb_low and bb_mid:
+            sl_raw = bb_low - spread_pad
+            if abs(price_val - sl_raw) < min_sl_dist:
+                sl_raw = price_val - min_sl_dist
+                
+            result["stop_loss"] = round(sl_raw, 2)
+            result["targets"] = {"t1": round(bb_mid, 2), "t2": round(bb_high, 2)}
+            result["signal_hint"] = "BUY_ACCUMULATE"
+            result["execution_hints"]["strategy"] = "Range Accumulation"
+
+    # B. BUY / LONG
+    elif category == "BUY" or (trade_valid and ("BREAKOUT" in setup_type or "TREND" in setup_type or "PULLBACK" in setup_type)):
+        
+        # Guard: Supertrend Direction
+        if "bear" in st_sig and "BREAKOUT" not in setup_type:
+             result["signal_hint"] = "WAIT_SUPERTREND_RESISTANCE"
+             return result
+
+        # Fix #5 + Minor Issue #1: Breakout Structure Validation (with Tolerance)
+        if "BREAKOUT" in setup_type:
+            res_level = _get_val(indicators, "resistance_1") or _get_val(indicators, "bb_high")
+            # Must be 0.1% ABOVE resistance to confirm
+            if res_level and price_val < res_level * 1.001: 
+                result["signal_hint"] = "WAIT_BREAKOUT_CONFIRMATION"
+                result["execution_hints"]["note"] = f"Price {price_val} < Structure {res_level} + 0.1%"
+                return result
+
+        # Calculate SL
+        sl_raw = price_val - (atr_val * sl_mult) - spread_pad
+        
+        # Improvement A: Supertrend Clamp (Smart Max)
+        # Only use ST if it is below price AND provides enough breathing room (min_sl_dist)
+        if st_val and st_val < price_val:
+            # We take the higher of the two (tighter stop), BUT...
+            # if ST is too close (st_val > price - min_dist), we must cap it at (price - min_dist)
+            max_allowed_st = price_val - min_sl_dist
+            effective_st = min(st_val, max_allowed_st)
+            sl_raw = max(sl_raw, effective_st)
+        
+        # Final Min Dist Safety Net
+        if (price_val - sl_raw) < min_sl_dist:
+            sl_raw = price_val - min_sl_dist
+        
+        result["stop_loss"] = round(sl_raw, 2)
+        
+        t1, t2, t_meta = calculate_smart_targets_with_resistance(
+            price_val, result["stop_loss"], indicators, fundamentals, horizon, rr_mults
+        )
+        
+        # Fix #2: Resistance Proximity Rejection
+        if t1 < price_val * 1.005:
+             result["signal_hint"] = "WAIT_NEAR_RESISTANCE"
+             result["execution_hints"]["note"] = f"Resistance too close: T1 {t1} vs Price {price_val}"
+             return result
+
+        # Fix #3: T2 Horizon Caps
+        max_t2 = price_val * (1 + HORIZON_T2_CAPS.get(horizon, 0.20))
+        t2 = min(t2, max_t2)
+
+        result["targets"] = {"t1": t1, "t2": t2}
+        result["execution_hints"]["target_logic"] = t_meta
+        result["signal_hint"] = "BUY_TREND" if "TREND" in setup_type else "BUY_BREAKOUT"
+
+    # C. SELL / SHORT
+    elif category == "SELL" or (trade_valid and ("BREAKDOWN" in setup_type or "BEAR" in setup_type)):
+        
+        if "bull" in st_sig and "BREAKDOWN" not in setup_type:
+             result["signal_hint"] = "WAIT_SUPERTREND_SUPPORT"
+             return result
+
+        # Fix #5 + Minor Issue #1: Breakdown Structure Validation (with Tolerance)
+        if "BREAKDOWN" in setup_type:
+            sup_level = _get_val(indicators, "support_1") or _get_val(indicators, "bb_low")
+            # Must be 0.1% BELOW support to confirm
+            if sup_level and price_val > sup_level * 0.999:
+                result["signal_hint"] = "WAIT_BREAKDOWN_CONFIRMATION"
+                result["execution_hints"]["note"] = f"Price {price_val} > Structure {sup_level} - 0.1%"
+                return result
+
+        # Calculate SL
+        sl_raw = price_val + (atr_val * sl_mult) + spread_pad
+        
+        # Supertrend Clamp (Downward)
+        if st_val and st_val > price_val:
+            min_allowed_st = price_val + min_sl_dist
+            effective_st = max(st_val, min_allowed_st)
+            sl_raw = min(sl_raw, effective_st)
+
+        if (sl_raw - price_val) < min_sl_dist:
+            sl_raw = price_val + min_sl_dist
+
+        result["stop_loss"] = round(sl_raw, 2)
+        
+        t1, t2, t_meta = calculate_smart_targets_with_support(
+            price_val, result["stop_loss"], indicators, fundamentals, horizon, rr_mults
+        )
+
+        # Fix #2: Support Proximity Rejection
+        if t1 > price_val * 0.995:
+             result["signal_hint"] = "WAIT_NEAR_SUPPORT"
+             result["execution_hints"]["note"] = f"Support too close: T1 {t1} vs Price {price_val}"
+             return result
+
+        # Fix #3: T2 Horizon Caps
+        min_t2 = price_val * (1 - HORIZON_T2_CAPS.get(horizon, 0.20))
+        t2 = max(t2, min_t2)
+
+        result["targets"] = {"t1": t1, "t2": t2}
+        result["execution_hints"]["target_logic"] = t_meta
+        result["signal_hint"] = "SHORT_TREND"
+
+    # D. FALLBACK
+    else:
+        result["signal_hint"] = "HOLD"
+        result["execution_hints"]["note"] = "No directional bias established"
+
+    # --------------------------------------------------------
+    # FINAL GEOMETRY SANITY CHECK (Minor Issue #2)
+    # --------------------------------------------------------
+    # Check if geometry exists
+    if result["targets"]["t1"] and result["targets"]["t2"] and result["stop_loss"]:
+        t1, t2, sl = result["targets"]["t1"], result["targets"]["t2"], result["stop_loss"]
+        
+        # 1. Invalid Geometry (T2 inside T1)
+        # For Long: T2 must be > T1. For Short: T2 must be < T1.
+        if (category == "BUY" and t2 <= t1) or (category == "SELL" and t2 >= t1):
+            result["signal_hint"] = "WAIT_INVALID_GEOMETRY"
+            result["execution_hints"]["note"] = f"Geometry error: T2({t2}) vs T1({t1})"
+            return result
+            
+        # 2. SL too far (Risk Management Cap)
+        # If SL is > 5 ATRs away, something is wrong with calculation or volatility is absurd
+        if abs(price_val - sl) > (atr_val * 5):
+            result["signal_hint"] = "WAIT_SL_TOO_FAR"
+            result["execution_hints"]["note"] = f"SL distance {abs(price_val - sl):.2f} > 5xATR"
+            return result
+
+    return result
 
 def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A", 
                         horizon="short_term", strategy_report=None, fundamentals=None):
-    final_score = profile_report.get("final_score", 0)
-    category = profile_report.get("category", "HOLD")
+    
+    # ... [Initialization Section stays same] ...
+    symbol = indicators.get("symbol", "").get("value", None)
     price_val = ensure_numeric(_get_val(indicators, "price"))
     atr_val = ensure_numeric(_get_val(indicators, "atr_dynamic"))
+    adx = ensure_numeric(_get_val(indicators, "adx"))  # Extract ADX early
     
+    dyn_floor = 0 
+    
+    plan = {
+        "signal": "NA_CALC",
+        "reason": "Initializing...",
+        "setup_type": "GENERIC",
+        "setup_confidence": 0,
+        "entry": price_val,
+        "stop_loss": None,
+        "targets": {"t1": None, "t2": None},
+        "rr_ratio": 0,
+        "position_size": 0,
+        "execution_hints": {},
+        "debug": {},
+        "analytics": {"skipped_low_rr": False}
+    }
+
     if price_val <= 0 or atr_val <= 0:
-        return {"signal": "WAIT", "reason": "Invalid price/ATR", "setup_type": "INVALID", "setup_confidence": 0,
-                "entry": price_val, "stop_loss": None, "targets": {"t1": None, "t2": None}, "rr_ratio": 0, "execution_hints": {}}
-    
-    # 1. Classification & Confidence
+        plan["signal"] = "NA_INVALID_INPUTS"
+        plan["reason"] = f"Invalid data: Price={price_val}, ATR={atr_val}"
+        return plan 
+
+    # --- CLASSIFICATION ---
     setup_type = classify_setup(indicators, horizon)
     ts_val = ensure_numeric(_get_val(indicators, "trend_strength"))
     setup_conf = calculate_setup_confidence(indicators, ts_val, macro_trend_status, setup_type, horizon)
-
-    # 2. Volatility Regime Check
-    can_trade_vol, vol_reason = should_trade_current_volatility(indicators, setup_type)
-    plan = {"signal": "WAIT", "setup_type": setup_type, "setup_confidence": setup_conf, "entry": price_val,
-            "stop_loss": None, "targets": {"t1": None, "t2": None}, "rr_ratio": 0, "execution_hints": {}}
-
-    if not can_trade_vol:
-        plan["signal"] = "WAIT_VOLATILITY"
-        plan["reason"] = vol_reason
-        plan["execution_hints"]["volatility_gate"] = {
-            "blocked": True,
-            "reason": vol_reason,
-            "retry_when": "Wait for volatility to stabilize or ATR% to drop"
-        }
-        return plan
     
-    # 3. Fundamental Override
+    # Fundamental Override
     if setup_type in ["NEUTRAL", "TREND_PULLBACK", "TREND_FOLLOWING"] and fundamentals:
          pe = ensure_numeric(_get_val(fundamentals, "pe_ratio"))
          roe = ensure_numeric(_get_val(fundamentals, "roe"))
@@ -1266,174 +1528,148 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
              bb_low = ensure_numeric(_get_val(indicators, "bb_low"))
              if bb_low > 0 and price_val < bb_low * 1.15:
                  setup_type = "QUALITY_ACCUMULATION"
-                 plan["setup_type"] = "QUALITY_ACCUMULATION"
-                 plan["reason"] = "Fundamental Override: Value Accumulation"
                  setup_conf = max(setup_conf, 60)
-                 plan["setup_confidence"] = setup_conf
 
-    # 4. Entry Gates
-    can_enter, reasons = check_entry_permission(setup_type, setup_conf, indicators, horizon)
-    
-    # 5. Dynamic Floor
-    adx = ensure_numeric(_get_val(indicators, "adx"))
-    di_p = ensure_numeric(_get_val(indicators, "di_plus"))
-    di_m = ensure_numeric(_get_val(indicators, "di_minus"))
-    dyn_floor = calculate_dynamic_confidence_floor(adx, di_p, di_m, setup_type, horizon)
-    
-    if not can_enter or setup_conf < dyn_floor:
-        plan["reason"] = f"Conf {setup_conf}% < Floor {dyn_floor}%"
-        if reasons: plan["execution_hints"]["rejection_reasons"] = reasons
-        return plan
-    
-    # 6. Divergence Check
-    div_info = detect_divergence_via_slopes(indicators, horizon)
-    if div_info['divergence_type'] != 'none':
-        setup_conf = int(setup_conf * div_info['confidence_factor'])
-        plan["execution_hints"]["divergence"] = div_info
-        
-        # Tag the reason if this specific factor killed the trade
-        if setup_conf < dyn_floor:
-            plan["reason"] = f"Divergence ({div_info['divergence_type']}) reduced conf to {setup_conf}%"
-    
-    # 7. Volume Check
-    vol_sig = detect_volume_signature(indicators)
-    if vol_sig['adjustment'] != 0:
-        setup_conf = int(setup_conf + vol_sig['adjustment'])
-        plan["execution_hints"]["volume"] = vol_sig
-
-        # Tag the reason if this specific factor killed the trade
-        if setup_conf < dyn_floor:
-            plan["reason"] = f"Volume ({vol_sig['type']}) reduced conf to {setup_conf}%"
-
-    # FINAL SAFETY GATE (The Cumulative Check)
-    if setup_conf < dyn_floor:
-        # If no specific reason was set above, use a generic one
-        if "Conf" not in plan.get("reason", "") and "reduced" not in plan.get("reason", ""):
-             plan["reason"] = f"Final Conf {setup_conf}% < Floor {dyn_floor}%"
-        return plan
-    
+    plan["setup_type"] = setup_type
     plan["setup_confidence"] = setup_conf
-    
-    # 8. Trade Details Calculation
-    atr_cfg = ATR_MULTIPLIERS.get(horizon, {"sl": 2.0, "tp": 3.0})
-    base_sl = float(atr_cfg.get("sl", 2.0))
-    base_tp = float(atr_cfg.get("tp", 3.0))
-    
-    vol_qual = ensure_numeric(_get_val(indicators, "volatility_quality"), 5.0)
-    
-    if vol_qual >= 8.0:   sl_mult, tp_mult = 1.5, 2.5
-    elif vol_qual <= 4.0: sl_mult, tp_mult = 3.0, 5.0
-    else:                 sl_mult, tp_mult = base_sl, base_tp
 
-    mcap = ensure_numeric(fundamentals.get("market_cap", 0) if fundamentals else 0)
-    spread_pad = price_val * calculate_spread_adjustment(price_val, mcap)
-    rr_mults = get_rr_regime_multipliers(adx)
+    # --- GATING WATERFALL ---
+    trade_valid = True
+    blocked_by = []
     
-    # ==============================================================================
-    # TARGET STRATEGY SELECTION
-    # ==============================================================================
+    # A. Volatility Gate
+    can_trade_vol, vol_reason = should_trade_current_volatility(indicators, setup_type)
+    if not can_trade_vol:
+        trade_valid = False
+        plan["signal"] = "NA_VOLATILITY_BLOCKED"
+        plan["reason"] = vol_reason
+        blocked_by.append("volatility")
 
-    # BRANCH A: ACCUMULATION (Use Bollinger Geometry)
-    if setup_type == "QUALITY_ACCUMULATION":
-        bb_low = ensure_numeric(_get_val(indicators, "bb_low"))
-        bb_mid = ensure_numeric(_get_val(indicators, "bb_mid"))
-        bb_high = ensure_numeric(_get_val(indicators, "bb_high"))
+    # B. Entry Permission
+    if trade_valid:
+        can_enter, entry_reasons = check_entry_permission(setup_type, setup_conf, indicators, horizon)
+        if not can_enter:
+            trade_valid = False
+            plan["signal"] = "NA_ENTRY_PERMISSION_FAILED"
+            plan["reason"] = str(entry_reasons)
+            blocked_by.append("entry_permission")
+
+    # C. Dynamic Confidence Floor
+    if trade_valid:
+        di_p = ensure_numeric(_get_val(indicators, "di_plus"))
+        di_m = ensure_numeric(_get_val(indicators, "di_minus"))
+        dyn_floor = calculate_dynamic_confidence_floor(adx, di_p, di_m, setup_type, horizon)
         
-        if not (bb_low and bb_mid and bb_high):
-            plan["reason"] = "Accumulation: insufficient BB data"
-            return plan
-        
-        sl_final = clamp_sl_distance(bb_low - spread_pad, price_val, price_val)
-        risk = abs(price_val - sl_final)
-        
-        plan.update({
-            "signal": "BUY_ACCUMULATE", 
-            "stop_loss": round(sl_final, 2),
-            "targets": {"t1": round(bb_mid, 2), "t2": round(bb_high, 2)},
-            "rr_ratio": round(risk / abs(price_val - sl_final), 2) if risk > 0 else 0,
-            "execution_hints": {"strategy": "Range Accumulation", "chunks": 3,
-                                         "bb_levels": {"high": round(bb_high, 2), "mid": round(bb_mid, 2), "low": round(bb_low, 2)}, "note": "Targets based on Mean Reversion (BB)"}
-        })
-        plan = generate_trailing_hints(plan, indicators)
+        if setup_conf < dyn_floor:
+            trade_valid = False
+            plan["signal"] = "NA_LOW_CONFIDENCE"
+            plan["reason"] = f"Confidence {setup_conf}% < Floor {dyn_floor}%"
+            blocked_by.append("confidence_floor")
+
+    # D. Divergence Check (Required for Execution Logic now)
+    div_info = {'divergence_type': 'none'} # Default
+    if trade_valid:
+        div_info = detect_divergence_via_slopes(indicators, horizon)
+        if div_info['divergence_type'] != 'none':
+            setup_conf = int(setup_conf * div_info['confidence_factor'])
+            plan["setup_confidence"] = setup_conf
+            plan["execution_hints"]["divergence"] = div_info
+            
+            if setup_conf < dyn_floor:
+                trade_valid = False
+                plan["signal"] = "NA_DIVERGENCE_DETECTED"
+                plan["reason"] = "Divergence dropped confidence below floor"
+                blocked_by.append("divergence")
+
+    # E. Volume Check
+    if trade_valid:
+        vol_sig = detect_volume_signature(indicators)
+        if vol_sig['adjustment'] != 0:
+            setup_conf = int(setup_conf + vol_sig['adjustment'])
+            plan["setup_confidence"] = setup_conf
+            
+            if setup_conf < dyn_floor:
+                trade_valid = False
+                plan["signal"] = "NA_POOR_VOLUME"
+                plan["reason"] = vol_sig['warning']
+                blocked_by.append("volume")
+
+    # --- 5. EXECUTION CALCULATION (Updated) ---
+    category = profile_report.get("category", "HOLD")
     
-    # BRANCH B: STANDARD BUYS (Use Smart Resistance Logic)
-    elif category == "BUY" or (can_enter and "DOWN" not in setup_type):
-        sl_raw = price_val - (atr_val * sl_mult) - spread_pad
-        sl_raw = clamp_sl_distance(sl_raw, price_val, price_val)
-        st_val = _get_val(indicators, "supertrend_value")
-        if st_val and st_val < price_val: sl_raw = max(sl_raw, st_val)
-        
-        plan["stop_loss"] = round(sl_raw, 2)
-        
-        # SMART TARGETS (LONG)
-        t1_final, t2_final, t_meta = calculate_smart_targets_with_resistance(
-            entry=price_val, stop_loss=plan["stop_loss"], 
-            indicators=indicators,fundamentals=fundamentals, horizon=horizon, rr_mults=rr_mults
-        )
-        plan["targets"]["t1"] = t1_final
-        plan["targets"]["t2"] = t2_final
-        plan["execution_hints"]["target_logic"] = t_meta
-        
-        plan["signal"] = "BUY_TREND" if "TREND" in setup_type else "BUY_BREAKOUT"
-        plan = generate_trailing_hints(plan, indicators)
+    exec_data = _calculate_execution_levels(
+        setup_type, category, price_val, plan["stop_loss"], 
+        atr_val, horizon, indicators, fundamentals, trade_valid,
+        div_info, adx  # <-- Passing new requirements
+    )
     
-    # BRANCH C: STANDARD SHORTS (Use Smart Support Logic)
-    elif category == "SELL" or "BREAKDOWN" in setup_type or "BEAR" in setup_type:
-        sl_raw = price_val + (atr_val * sl_mult) + spread_pad
-        sl_raw = clamp_sl_distance(sl_raw, price_val, price_val)
-        plan["stop_loss"] = round(sl_raw, 2)
-        
-        # SMART TARGETS (SHORT) - New Integration
-        t1_final, t2_final, t_meta = calculate_smart_targets_with_support(
-            entry=price_val, stop_loss=plan["stop_loss"], 
-            indicators=indicators,fundamentals=fundamentals, horizon=horizon, rr_mults=rr_mults
-        )
-        plan["targets"]["t1"] = t1_final
-        plan["targets"]["t2"] = t2_final
-        plan["execution_hints"]["target_logic"] = t_meta
-        
-        plan["signal"] = "SHORT_TREND"
+    plan.update({
+        "stop_loss": exec_data["stop_loss"],
+        "targets": exec_data["targets"]
+    })
     
-    # 9. Pattern Enhancement
+    if exec_data.get("execution_hints"):
+        plan["execution_hints"].update(exec_data["execution_hints"])
+
+    # Update Signal ONLY if valid
+    if trade_valid:
+        plan["signal"] = exec_data["signal_hint"]
+        # If signal turned out to be WAIT_XXX from execution logic, invalidate trade
+        if "WAIT" in plan["signal"]:
+            trade_valid = False
+            plan["reason"] = exec_data["execution_hints"].get("note", "Execution constraints not met")
+            blocked_by.append("execution_constraints")
+    
+    if trade_valid and plan["signal"] == "NA_CALC":
+        plan["signal"] = "HOLD"
+        plan["reason"] = "Valid setup but no directional bias"
+
+    # --- 6. FINAL GATES ---
     try: plan = enhance_plan_with_patterns(plan, indicators)
-    except Exception as e:
-            logger.debug(f"enhance_plan_with_patterns failed {e}") 
-            pass
-    
-    # 10. R:R Gate
-    entry, sl, t1 = plan["entry"], plan["stop_loss"], plan["targets"]["t1"]
-    if sl and t1 and entry and sl != entry:
-        risk = abs(entry - sl)
-        reward = abs(t1 - entry)
-        rr = round(reward / risk, 2) if risk > 0 else 0
-        plan["rr_ratio"] = rr
-        
-        if rr < MIN_RR_RATIO and "ACCUMULATE" not in plan["signal"]:
-            plan["signal"], plan["reason"] = "WAIT_LOW_RR", f"Poor R:R: {rr}:1 < {MIN_RR_RATIO}:1"
-            return plan
-    
-    # 11. Dual Time Estimate (Universal)
+    except Exception: pass
+
+    # R:R Check
+    if trade_valid and plan["stop_loss"] and plan["targets"]["t1"]:
+        entry = plan["entry"]
+        sl = plan["stop_loss"]
+        t1 = plan["targets"]["t1"]
+        if entry != sl:
+            risk = abs(entry - sl)
+            reward = abs(t1 - entry)
+            rr = round(reward / risk, 2) if risk > 0 else 0
+            plan["rr_ratio"] = rr
+            
+            dynamic_min_rr = 1.1 if horizon == "intraday" else 1.3 if horizon == "short_term" else 1.5
+            if rr < dynamic_min_rr and "ACCUMULATE" not in plan["signal"]:
+                plan["signal"] = "WAIT_LOW_RR"
+                plan["reason"] = f"Poor R:R: {rr}:1 < {dynamic_min_rr}:1"
+                plan["analytics"]["skipped_low_rr"] = True
+                blocked_by.append("low_rr")
+
+    # --- 7. EXTRAS ---
     try:
         topstrat = (strategy_report or {}).get('summary', {}).get('best_strategy', 'unknown').lower()
         strat_mult = STRATEGY_TIME_MULTIPLIERS.get(topstrat, 1.0) 
         strat_summ = (strategy_report or {}).get("summary", {})
 
-        from services.tradeplan.time_estimator import estimate_hold_time_dual
-        
         dual_est = estimate_hold_time_dual(
             entry=price_val, t1=plan["targets"]["t1"], t2=plan["targets"]["t2"],
             atr=atr_val, horizon=horizon, indicators=indicators,
             multiplier=strat_mult, strategy_summary=strat_summ
         )
-        
         plan["est_time"] = dual_est
         plan["est_time_str"] = f"T1: {dual_est['t1_estimate']} | T2: {dual_est['t2_estimate']}"
     except Exception as e:
-        logger.error(f"Time Est Failed: {e}")
-        plan["est_time"] = {"t1_estimate": "N/A", "t2_estimate": "N/A", "confidence": {"t1": "Low", "t2": "Low"}}
-        plan["est_time_str"] = "N/A"
-    
+        logger.debug(f"block 7 generate trade plan failed {e}")
+        pass 
+
     plan["position_size"] = calculate_position_size(indicators, setup_conf, setup_type, horizon)
+    
+    plan["debug"] = log_signal_decision(
+        symbol, indicators, setup_type, setup_conf, 
+        dyn_floor, True, True, plan["reason"], category, blocked_by
+    )
+
     return plan
 
 # ============================================================

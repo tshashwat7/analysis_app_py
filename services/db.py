@@ -12,6 +12,7 @@ DB_DIR = "data"
 os.makedirs(DB_DIR, exist_ok=True)
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_DIR}/trade.db"
 
+# Single, robust engine definition
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
     connect_args={
@@ -27,6 +28,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
@@ -38,7 +40,6 @@ def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor.close()
 
 # 2. Define Tables
-
 class StockMeta(Base):
     __tablename__ = "stock_meta"
     symbol = Column(String, primary_key=True, index=True)
@@ -61,7 +62,7 @@ class SignalCache(Base):
     stop_loss = Column(Float, nullable=True)
     horizon_scores = Column(JSON)
     
-    # ✅ MODERN: Timezone-aware UTC timestamp
+    # Timezone-aware UTC timestamp
     updated_at = Column(
         DateTime, 
         server_default=text("CURRENT_TIMESTAMP"),
@@ -85,8 +86,6 @@ class FundamentalCache(Base):
     __tablename__ = "fundamental_cache"
     symbol = Column(String, primary_key=True, index=True)
     data = Column(JSON) 
-    
-    # ✅ MODERN: Timezone-aware UTC timestamp
     updated_at = Column(
         DateTime, 
         server_default=text("CURRENT_TIMESTAMP"),
@@ -96,13 +95,8 @@ class FundamentalCache(Base):
     
 # 3. Create Tables
 def init_db():
+    # [FIX] Use Base.metadata directly. No invalid import.
     Base.metadata.create_all(bind=engine)
-    with engine.connect() as conn:
-        result = conn.execute(text("PRAGMA journal_mode;")).fetchone()
-        if result and result[0] == "wal":
-            print("✅ Database initialized with WAL mode enabled")
-        else:
-            print("⚠️  Warning: WAL mode not enabled")
 
 # 4. Helper to get DB session
 def get_db():

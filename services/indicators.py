@@ -1074,7 +1074,7 @@ def compute_indicators(
     if horizon in dfs_cache:
         try:
             series = dfs_cache[horizon]["Close"]
-            
+            indicators["symbol"] = {"value": symbol, "score":0, "alias":"Ticker", "desc": "Stock symbol"}
             # 1. Current Price
             if len(series) > 0:
                 price = float(series.iloc[-1])

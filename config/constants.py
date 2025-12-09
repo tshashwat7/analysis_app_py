@@ -14,7 +14,7 @@ STOCH_THRESHOLDS = {"overbought": 80, "oversold": 20}
 # config/constants.py
 ENABLE_CACHE = False
 ENABLE_CACHE_WARMER = os.getenv("ENABLE_CACHE_WARMER", "false").lower() == "true"
-
+ENABLE_JSON_ENRICHMENT = os.getenv("ENABLE_JSON_ENRICHMENT", "true").lower() == "true"
 STOCH_THRESHOLDS = {
     "overbought": 80,
     "oversold": 20,
