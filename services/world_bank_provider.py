@@ -9,7 +9,6 @@ from world_bank_data import get_series
 from .data_fetch import safe_float
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 # macOS / Linux
 FINNHUB_API_KEY="d43kft1r01qvk0jcbd00d43kft1r01qvk0jcbd0g"

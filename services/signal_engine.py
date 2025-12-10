@@ -74,6 +74,7 @@ from config.constants import (
     RSI_SLOPE_THRESH, TREND_THRESH, VOL_BANDS, ATR_MULTIPLIERS,
 )
 
+from services.strategy_analyzer import _get_ma_keys
 from services.tradeplan.time_estimator import estimate_hold_time_dual
 from services.tradeplan.trade_enhancer import enhance_plan_with_patterns
 
@@ -405,17 +406,11 @@ def calculate_smart_targets_with_support(
     
     return round(t1_final, 2), round(t2_final, 2), metadata
 
-def _get_ma_keys(horizon: str) -> Dict[str, str]:
-    return MA_KEYS_BY_HORIZON.get(horizon, MA_KEYS_BY_HORIZON["short_term"])
-
 def _get_val(data: Dict[str, Any], key: str, default: Any = None, missing_log: set = None):
     if not data: return default
     if key not in data:
         if missing_log is None:
             MISSING_KEYS.add(key)
-        # Only log if NOT a common missing key
-        if key not in ['prev_macd_histogram', 'prev_close', 'wick_rejection']:
-            logger.debug(f"Missing key: '{key}'")
         return default
     entry = data[key]
     if isinstance(entry, (int, float)): return float(entry)
@@ -505,56 +500,65 @@ def _get_slow_ma(indicators: Dict[str, Any], horizon: str) -> Optional[float]:
 def _is_squeeze_on(indicators: Dict[str, Any]) -> bool:
     val = _get_str(indicators, "ttm_squeeze")
     return any(x in val for x in ("on", "sqz", "squeeze_on", "active"))
-def _get_dynamic_slope(indicators: Dict[str, Any], horizon: str) -> Optional[float]:
-    """Helper: Tries horizon-specific slope first, then generic fallbacks."""
-    pref_key = {
+
+def _get_dynamic_slope(indicators: Dict[str, Any], horizon: str = None) -> Optional[float]:
+    """
+    Prefers standardized keys (ma_fast_slope), falls back to legacy.
+    """
+    # Try the new standard key first (Horizon Agnostic)
+    val = _get_val(indicators, "ma_fast_slope")
+    if val is not None: return val
+    
+    # Fallback to legacy lookups (if indicators.py hasn't updated yet)
+    legacy_map = {
         "intraday": "ema_20_slope", "short_term": "ema_20_slope", 
         "long_term": "wma_50_slope", "multibagger": "dma_200_slope"
-    }.get(horizon)
-    val = _get_val(indicators, pref_key) if pref_key else None
-    if val is not None: return val
-    # Fallback list
-    for k in ["ema_slope", "ema_20_slope", "wma_50_slope", "dma_200_slope"]:
-        v = _get_val(indicators, k)
-        if v is not None: return v
-    return None
+    }
+    key = legacy_map.get(horizon, "ema_20_slope")
+    return _get_val(indicators, key)
+
 # COMPOSITES (CORRECT DICT RETURNS)
+
 def compute_trend_strength(indicators: Dict[str, Any], horizon: str = "short_term") -> Dict[str, Any]:
     try:
+        # 1. Fetch Inputs
         adx = _get_val(indicators, "adx")
-        # Use dynamic slope helper
-        ema_slope = _get_dynamic_slope(indicators, horizon) 
+        ema_slope = _get_dynamic_slope(indicators, horizon)
         di_plus = _get_val(indicators, "di_plus")
         di_minus = _get_val(indicators, "di_minus")
         supertrend = _get_str(indicators, "supertrend_signal")
         
+        # 2. Score Components
         adx_score = (10.0 if adx >= 25 else 8.0 if adx >= 20 else 4.0 if adx >= 15 else 2.0) if adx else 0
         
-        # Handle "Rising" string descriptions from v10.6
+        # ✅ Use normalized thresholds (20° = strong, 5° = moderate)
         ema_score = 0
         if ema_slope is not None:
-            if isinstance(ema_slope, str) and "rising" in ema_slope.lower():
-                ema_score = 10.0
-            else:
-                s = abs(float(ema_slope))
-                ema_score = (10.0 if s >= 2.0 else 8.0 if s >= 1.0 else 4.0)
+            s = abs(float(ema_slope))
+            ema_score = (10.0 if s >= 20.0 else 7.0 if s >= 5.0 else 2.0)
         
         di_score = (10.0 if (di_plus - di_minus) >= 15 else 7.0 if (di_plus - di_minus) >= 10 else 5.0) if di_plus and di_minus else 0
         st_score = 10.0 if "bull" in supertrend else 0.0
         
-        raw = (adx_score * 0.4) + (ema_score * 0.3) + (di_score * 0.2) + (st_score * 0.1)
+        # 3. ✅ ADAPTIVE WEIGHTING
+        has_st = supertrend and supertrend not in ["", "n/a", "none"]
+        
+        if has_st:
+            # Standard Short-Term weights (Supertrend available)
+            raw = (adx_score * 0.4) + (ema_score * 0.3) + (di_score * 0.2) + (st_score * 0.1)
+        else:
+            # Adaptive Weights (Redistribute ST's 10% to ADX/Slope)
+            # ADX: 0.45, Slope: 0.35, DI: 0.20
+            raw = (adx_score * 0.45) + (ema_score * 0.35) + (di_score * 0.20)
+            
         score = max(0.0, min(10.0, round(raw, 2)))
         
-        return {"raw": raw, "value": score, "score": int(round(score)), 
-                "desc": f"Trend Strength (ADX {adx:.1f})" if adx else "Trend Strength",
-                "alias": "Trend Strength", "source": "composite"}
-    except KeyError as e:
-        logger.error(f"Trend strength MISSING KEY: {e}, indicators: {list(indicators.keys())}")
-        return {"raw": None, "value": None, "score": 0, "error": f"Missing key: {e}"}
+        return {"raw": raw, "value": score, "score": int(round(score)), "desc": f"Trend Strength ({'w/ST' if has_st else 'Adaptive'})","alias": "Trend Strength", "source": "composite"}
     except Exception as e:
-        logger.error(f"Trend strength CALCULATION FAILED: {e}, indicators: {indicators}")
-        return {"raw": None, "value": None, "score": 0, "error": f"Exception:{e}"}
-    
+        logger.error(f"Trend strength failed: {e}")
+        return {"raw": 0, "value": 0, "score": 0, "desc": "error", "alias": "Trend Strength", "source": "composite"}
+
+      
 def compute_momentum_strength(indicators: Dict[str, Any]) -> Dict[str, Any]:
     try:
         rsi = _get_val(indicators, "rsi")
@@ -603,7 +607,7 @@ def compute_roe_stability(fundamentals: Dict[str, Any]) -> Dict[str, Any]:
         logger.debug(f"compute_roe_stability failed {e}")
         return {"raw": None, "value": None, "score": None, "desc": "err", "alias": "ROE Stability", "source": "composite"}
 
-# REPLACE compute_volatility_quality with the Full Version
+
 def compute_volatility_quality(indicators: Dict[str, Any]) -> Dict[str, Any]:
     try:
         atr_pct = _get_val(indicators, "atr_pct")
@@ -611,9 +615,9 @@ def compute_volatility_quality(indicators: Dict[str, Any]) -> Dict[str, Any]:
         true_range = _get_val(indicators, "true_range")
         hv10 = _get_val(indicators, "hv_10")
         hv20 = _get_val(indicators, "hv_20")
-        atr_sma_ratio = _get_val(indicators, "atr_sma_ratio") # If available
+        atr_sma_ratio = _get_val(indicators, "atr_sma_ratio")
 
-        # Scoring Logic (Restored from v10.6)
+        # Component Scoring
         atr_score = (10.0 if atr_pct <= 1.5 else 8.0 if atr_pct <= 3.0 else 6.0 if atr_pct <= 5.0 else 2.0) if atr_pct else 0
         bbw_score = (10.0 if bb_width <= 0.01 else 8.0 if bb_width <= 0.02 else 6.0 if bb_width <= 0.04 else 2.0) if bb_width else 0
         
@@ -626,74 +630,96 @@ def compute_volatility_quality(indicators: Dict[str, Any]) -> Dict[str, Any]:
         if hv10 and hv20:
             hv_score = 10.0 if (hv10 < hv20 and hv20 < 25) else 6.0
         
-        raw = (atr_score * 0.3) + (bbw_score * 0.3) + (tr_score * 0.2) + (hv_score * 0.2)
+        # ✅ NEW: Score the ATR/SMA Ratio
+        # Ratio < 0.02 (2%) = very stable. > 0.04 (4%) = volatile.
+        ratio_score = 0
+        if atr_sma_ratio:
+            ratio_score = 10.0 if atr_sma_ratio < 0.02 else 7.0 if atr_sma_ratio < 0.035 else 3.0
+
+        # ✅ UPDATE WEIGHTS: Include ATR/SMA Ratio (15% impact)
+        raw = (atr_score * 0.25) + (bbw_score * 0.25) + (tr_score * 0.20) + (hv_score * 0.15) + (ratio_score * 0.15)
         score = max(0.0, min(10.0, round(raw, 2)))
         
-        return {"raw": raw, "value": score, "score": int(round(score)),
-                "desc": f"VolQuality {score:.1f}", "alias": "Volatility Quality", "source": "composite"}
+        return {"raw": raw, "value": score, "score": int(round(score)),"desc": f"VolQuality {score:.1f}", "alias": "Volatility Quality", "source": "composite"}
     except Exception as e:
-        logger.debug(f" compute_volatility_quality failed {e}")
-        return {"raw": None, "value": None, "score": None, "desc": "err", "alias": "volatility quality", "source": "composite"}
-
+        logger.debug(f"compute_volatility_quality failed: {e}")
+        return {"raw": 0, "value": 0, "score": 0, "desc": "error", "alias": "Volatility Quality", "source": "composite"}
 # HYBRID METRICS (7 METRICS - COMPLETE)
-def enrich_hybrid_metrics(fundamentals: dict, indicators: dict) -> dict:
-    hybrids = {}
+def enrich_hybrid_metrics_multi_horizon(fundamentals: dict, indicators_by_horizon: dict) -> Tuple[dict, dict]:
+    """
+    HORIZON-AWARE Enrichment:
+    1. Calculates Composites (Trend, Momentum, Volatility) for EACH horizon.
+    2. Calculates Hybrids (ROE/Vol, etc.).
+    3. Updates dictionaries IN-PLACE.
+    """
+    # Pick "short_term" as baseline for fundamental hybrids
+    baseline_horizon = "short_term"
+    baseline_indicators = indicators_by_horizon.get(baseline_horizon, {})
+    
+    # --- FUNDAMENTAL HYBRIDS (Same as your current code) ---
+    fund_hybrids = {}
     roe = _get_val(fundamentals, "roe")
-    atr_pct = _get_val(indicators, "atr_pct")
-    price = _get_val(indicators, "price")
+    pe = _get_val(fundamentals, "pe_ratio")
+    eps_growth = _get_val(fundamentals, "eps_growth_5y")
+    fcf_yield = _get_val(fundamentals, "fcf_yield")
+    atr_pct = _get_val(baseline_indicators, "atr_pct")
+    price = _get_val(baseline_indicators, "price")
     
     # 1. Volatility-Adjusted ROE
-    try:            
+    try:
         if roe and atr_pct and atr_pct > 0:
             ratio = roe / atr_pct
             score = 10 if ratio >= 10 else 7 if ratio >= 5 else 3 if ratio >= 2 else 0
-            hybrids["volatility_adjusted_roe"] = {"raw": ratio, "value": round(ratio, 2), "score": score,
-                                                "desc": f"ROE/Vol={ratio:.2f}", "alias": "Volatility-Adjusted ROE", "source": "hybrid"}
+            fund_hybrids["volatility_adjusted_roe"] = {
+                "raw": ratio, "value": round(ratio, 2), "score": score,
+                "desc": f"ROE/Vol={ratio:.2f}", "alias": "Volatility-Adjusted ROE", "source": "hybrid"
+            }
     except Exception as e:
         logger.debug(f" Volatility-Adjusted ROE failed {e}")
 
     # 2. Price vs Intrinsic Value
-    pe = _get_val(fundamentals, "pe_ratio")
-    eps_growth = _get_val(fundamentals, "eps_growth_5y")
     if price and pe and eps_growth and eps_growth > 0:
         try:
             iv = price * (1 / (pe / eps_growth))
             ratio = price / iv if iv != 0 else 999
             score = 10 if ratio < 0.8 else 7 if ratio < 1.0 else 3 if ratio < 1.2 else 0
-            hybrids["price_vs_intrinsic_value"] = {"raw": ratio, "value": round(ratio, 2), "score": score,
-                                                    "desc": f"Price/IV={ratio:.2f}", "alias": "Price vs Intrinsic", "source": "hybrid"}
+            fund_hybrids["price_vs_intrinsic_value"] = {
+                "raw": ratio, "value": round(ratio, 2), "score": score,
+                "desc": f"Price/IV={ratio:.2f}", "alias": "Price vs Intrinsic", "source": "hybrid"
+            }
         except Exception as e:
             logger.debug(f"Price vs Intrinsic Value failed {e}")
             pass
-    
+
     # 3. FCF Yield vs Volatility
-    fcf_yield = _get_val(fundamentals, "fcf_yield")
     if fcf_yield and atr_pct:
         try:
             ratio = fcf_yield / max(atr_pct, 0.1)
             score = 10 if ratio >= 10 else 8 if ratio >= 5 else 5 if ratio >= 2 else 2
-            hybrids["fcf_yield_vs_volatility"] = {"raw": ratio, "value": round(ratio, 2), "score": score,
-                                                "desc": f"FCF/Vol={ratio:.2f}", "alias": "FCF vs Vol", "source": "hybrid"}
+            fund_hybrids["fcf_yield_vs_volatility"] = {
+                "raw": ratio, "value": round(ratio, 2), "score": score,
+                "desc": f"FCF/Vol={ratio:.2f}", "alias": "FCF vs Vol", "source": "hybrid"
+            }
         except Exception as e:
             logger.debug(f"FCF Yield vs Volatility failed {e}")
 
     # 4. Trend Consistency
     try:
-        adx = _get_val(indicators, "adx")
+        adx = _get_val(baseline_indicators, "adx")
         if adx:
             score = 10 if adx >= 25 else 7 if adx >= 20 else 4
-            hybrids["trend_consistency"] = {"raw": adx, "value": adx, "score": score, "desc": f"ADX {adx:.1f}", "alias": "Trend Consistency", "source": "hybrid"}
+            fund_hybrids["trend_consistency"] = {"raw": adx, "value": adx, "score": score, "desc": f"ADX {adx:.1f}", "alias": "Trend Consistency", "source": "hybrid"}
     
     except Exception as e:
             logger.debug(f"Trend Consistency failed {e}")
 
     # 5. Price vs 200DMA
     try:
-        dma_200 = _get_val(indicators, "dma_200") or _get_val(indicators, "ema_200")
+        dma_200 = _get_val(baseline_indicators, "dma_200") or _get_val(baseline_indicators, "ema_200")
         if price and dma_200:
             ratio = (price / dma_200) - 1
             score = 10 if ratio > 0.1 else 7 if ratio > 0 else 3 if ratio > -0.05 else 0
-            hybrids["price_vs_200dma_pct"] = {"raw": ratio, "value": round(ratio*100, 2), "score": score,
+            fund_hybrids["price_vs_200dma_pct"] = {"raw": ratio, "value": round(ratio*100, 2), "score": score,
                                             "desc": f"vs 200DMA: {ratio*100:.2f}%", "alias": "Price vs 200DMA", "source": "hybrid"}
     except Exception as e:
             logger.debug(f"Price vs 200DMA failed {e}")
@@ -705,31 +731,86 @@ def enrich_hybrid_metrics(fundamentals: dict, indicators: dict) -> dict:
         if q_growth is not None and eps_5y is not None:
             ratio = (q_growth + eps_5y/5) / 2
             score = 10 if ratio >= 15 else 7 if ratio >= 10 else 4 if ratio >= 5 else 1
-            hybrids["fundamental_momentum"] = {"raw": ratio, "value": round(ratio, 2), "score": score,
-                                            "desc": f"Growth={ratio:.2f}%", "alias": "Fund Momentum", "source": "hybrid"}
+            fund_hybrids["fundamental_momentum"] = {
+                "raw": ratio, "value": round(ratio, 2), "score": score,
+                "desc": f"Growth={ratio:.2f}%", "alias": "Fund Momentum", "source": "hybrid"
+            }
     except Exception as e:
             logger.debug(f"Fundamental Momentum failed {e}")
-    
+
     # 7. Earnings Consistency
     try:
         net_margin = _get_val(fundamentals, "net_profit_margin")
         if roe and net_margin:
             ratio = (roe + net_margin) / 2
             score = 10 if ratio >= 25 else 7 if ratio >= 15 else 4 if ratio >= 8 else 1
-            hybrids["earnings_consistency_index"] = {"raw": ratio, "value": round(ratio, 2), "score": score,
-                                                    "desc": f"Consistency={ratio:.2f}", "alias": "Earnings Consistency", "source": "hybrid"}
+            fund_hybrids["earnings_consistency_index"] = {
+                "raw": ratio, "value": round(ratio, 2), "score": score,
+                "desc": f"Consistency={ratio:.2f}", "alias": "Earnings Consistency", "source": "hybrid"
+            }
     except Exception as e:
             logger.debug(f"Earnings Consistency failed {e}")
+
+    enriched_fundamentals = {**fundamentals, **fund_hybrids}
     
-    return hybrids
+    # --- INDICATOR ENRICHMENT (Horizons) ---
+    enriched_indicators = {}
+    
+    for horizon_name, horizon_inds in indicators_by_horizon.items():
+        if not horizon_inds: continue
+        
+        # ✅ FIX: CALCULATE COMPOSITES HERE & SAVE THEM
+        # This ensures they exist in 'analysis_data' for the UI/API
+        if "trend_strength" not in horizon_inds:
+            horizon_inds["trend_strength"] = compute_trend_strength(horizon_inds, horizon=horizon_name)
+        
+        if "momentum_strength" not in horizon_inds:
+            horizon_inds["momentum_strength"] = compute_momentum_strength(horizon_inds)
+            
+        if "volatility_quality" not in horizon_inds:
+            horizon_inds["volatility_quality"] = compute_volatility_quality(horizon_inds)
+
+        # --- Indicator Hybrids ---
+        horizon_hybrids = {}
+        h_price = _get_val(horizon_inds, "price")
+        h_adx = _get_val(horizon_inds, "adx")
+        ma_keys = _get_ma_keys(horizon_name) 
+        h_dma_200 = _get_val(horizon_inds, ma_keys["slow"])
+        
+        # 4. Trend Consistency
+        try:
+            if h_adx:
+                score = 10 if h_adx >= 25 else 7 if h_adx >= 20 else 4
+                horizon_hybrids["trend_consistency"] = {
+                    "raw": h_adx, "value": h_adx, "score": score,
+                    "desc": f"ADX {h_adx:.1f}", "alias": "Trend Consistency", "source": "hybrid"
+                }
+        except Exception: pass
+
+        # 5. Price vs 200DMA (Horizon Specific)
+        try:
+            if h_price and h_dma_200:
+                ratio = (h_price / h_dma_200) - 1
+                score = 10 if ratio > 0.1 else 7 if ratio > 0 else 3 if ratio > -0.05 else 0
+                horizon_hybrids["price_vs_200dma_pct"] = {
+                    "raw": ratio, "value": round(ratio*100, 2), "score": score,
+                    "desc": f"vs {ma_keys['slow'].upper()}: {ratio*100:.2f}%", 
+                    "alias": "Price vs 200DMA", "source": "hybrid"
+                }
+        except Exception: pass
+        
+        # Merge hybrids into this horizon
+        enriched_indicators[horizon_name] = {**horizon_inds, **horizon_hybrids}
+    
+    return enriched_fundamentals, enriched_indicators
 
 # FEATURES (A-I) - ALL 9 ADVANCED FEATURES
 
 # Feature (A): Accumulation helpers
 def is_consolidating(indicators: Dict) -> bool:
     try:
-        bb_width = ensure_numeric(_get_val(indicators, "bbwidth"))
-        atr_pct = ensure_numeric(_get_val(indicators, "atrpct"))
+        bb_width = ensure_numeric(_get_val(indicators, "bb_width"))
+        atr_pct = ensure_numeric(_get_val(indicators, "atr_pct"))
         return (bb_width / atr_pct) < 0.5 if atr_pct > 0 and bb_width > 0 else False
     except Exception as e:
         logger.debug(f"is_consolidating check failed: {e}") 
@@ -801,6 +882,17 @@ def detect_reversal_setups(indicators: Dict, horizon) -> List[Tuple[int, str]]:
         prev_st = _get_str(indicators, "prev_supertrend_signal")
         if st_signal != prev_st and "bull" in st_signal:
             candidates.append((70, "REVERSAL_ST_FLIP_UP"))
+        
+        if horizon == "short_term":
+                # --- FIX: Supertrend Flip Logic ---
+            st_signal = _get_str(indicators, "supertrend_signal") # Returns "Bullish" or "Bearish"
+            
+            # We look for the NUMERIC previous value (1.0 or -1.0)
+            prev_st_val = _get_val(indicators, "prev_supertrend")
+
+            if "bull" in st_signal and prev_st_val is not None and prev_st_val < 0:
+                candidates.append((70, "REVERSAL_ST_FLIP_UP"))
+            return candidates
         
         return candidates
     except Exception as e:
@@ -896,11 +988,11 @@ def calculate_spread_adjustment(price, market_cap):
 # #7: Entry permission
 def check_entry_permission(setup_type, setup_conf, indicators, horizon="short_term"):
     profile_cfg = HORIZON_PROFILE_MAP.get(horizon, {})
+    # Default requirement: Buy Threshold * 10 (e.g., 7.0 -> 70%)
     required_conf_base = profile_cfg.get('thresholds', {}).get('buy', 7.0) * 10
     reasons = []
     
     # BRANCH 1: BREAKOUTS (High Momentum Events)
-    # Added Pattern Breakouts here so they don't get blocked
     if setup_type in ["MOMENTUM_BREAKOUT", "MOMENTUM_BREAKDOWN", 
                       "PATTERN_DARVAS_BREAKOUT", "PATTERN_CUP_BREAKOUT", 
                       "PATTERN_VCP_BREAKOUT", "PATTERN_FLAG_BREAKOUT"]:
@@ -911,28 +1003,25 @@ def check_entry_permission(setup_type, setup_conf, indicators, horizon="short_te
             return False, reasons
 
     # BRANCH 2: TRENDS & PULLBACKS (Structure Events)
-    # Added TREND_FOLLOWING and Pattern Trends here
     elif setup_type in ["TREND_PULLBACK", "DEEP_PULLBACK", 
                         "TREND_FOLLOWING", "BEAR_TREND_FOLLOWING",
                         "BEAR_PULLBACK", "DEEP_BEAR_PULLBACK",
                         "PATTERN_GOLDEN_CROSS", "PATTERN_ICHIMOKU_SIGNAL"]:
         
         ts_val = ensure_numeric(_get_val(indicators, "trend_strength"))
-        discounted = required_conf_base - 15  # Trends are safer, so lower floor
+        discounted = required_conf_base - 15
         
-        # NEW: Extra leniency for TREND_FOLLOWING with high trend strength
         if "TREND_FOLLOWING" in setup_type and ts_val >= 7.0:
-            discounted -= 10  # Total -25 discount for strong trends
+            discounted -= 10
             
-        # Trend Strength Gate (Except for Deep Pullbacks which are inherently weak)
-        # Horizon-aware trend gate (APPLY THE DEFINED VARIABLE!)
         required_trend = {
-            "intraday": 2.0,      # Catch emerging trends early
-            "short_term": 3.5,    # Some confirmation needed
-            "long_term": 5.0,     # Proven trend required
-            "multibagger": 6.0    # Very strict on mega-trends
+            "intraday": 2.0,
+            "short_term": 3.5,
+            "long_term": 5.0,
+            "multibagger": 6.0
         }.get(horizon, 5.0)
-        if "DEEP" not in setup_type and ts_val < required_trend:  # ✅ USE required_trend, not hardcoded 5.0
+        
+        if "DEEP" not in setup_type and ts_val < required_trend:
             return (False, [f"Trend {ts_val:.1f} < {required_trend} ({horizon})"])
             
         if setup_conf >= discounted:
@@ -941,21 +1030,25 @@ def check_entry_permission(setup_type, setup_conf, indicators, horizon="short_te
             reasons.append(f"Trend conf {setup_conf}% < {discounted}%")
             return False, reasons
 
-    # BRANCH 3: ACCUMULATION & REVERSALS (Value Events)
-    # Added Pattern Reversals here
+    # BRANCH 3: ACCUMULATION, REVERSALS & SQUEEZE (Value Events)
+    # ✅ FIX: Added specific REVERSAL keys here
     elif setup_type in ["QUALITY_ACCUMULATION", "PATTERN_STRIKE_REVERSAL", 
-                        "PATTERN_DOUBLE_BOTTOM", "VOLATILITY_SQUEEZE"]:
+                        "PATTERN_DOUBLE_BOTTOM", "VOLATILITY_SQUEEZE",
+                        "REVERSAL_MACD_CROSS_UP", "REVERSAL_RSI_SWING_UP",
+                        "REVERSAL_ST_FLIP_UP", "REVERSAL_MACD_HIST_POSITIVE"]:
         
-        # Much lower floor because these are early entries
+        # Much lower floor for early entries (catching the turn)
         floor = required_conf_base - 25
         if setup_conf >= floor:
             return True, reasons
         else:
             reasons.append(f"Value/Reversal conf {setup_conf}% < {floor}%")
             return False, reasons
-    # [FIX] Add this new handler for NEUTRAL
+    
+    # BRANCH 4: NEUTRAL
     elif setup_type == "NEUTRAL":
         return False, ["Market is in Neutral state (Consolidation). Wait for clear trend or breakout."]
+    
     # Fallback
     return (False, [f"Unknown setup: {setup_type}"])
 
@@ -1195,54 +1288,126 @@ def compute_profile_score(profile_name, fundamentals, indicators, profile_map=No
             "applied_penalties": applied_penalties, "thresholds": thresholds, 
             "notes": profile.get("notes", ""), "missing_keys": missing_metrics}
 
-def compute_all_profiles(ticker: str, fundamentals: Dict, indicators: Dict, profile_map: Optional[Dict] = None) -> Dict:
-    indicators = (indicators or {}).copy()
+
+def compute_all_profiles(
+    ticker: str, 
+    fundamentals: Dict, 
+    indicators: Dict,  # ✅ NOW EXPECTS: {"intraday": {...}, "short_term": {...}}
+    profile_map: Optional[Dict] = None
+) -> Dict:
+    """
+    Computes scores for all investment profiles (intraday, short_term, etc.).
+    
+    Args:
+        indicators: MUST be nested dict with horizon keys:
+                    {"intraday": {...}, "short_term": {...}, ...}
+    """
     fundamentals = (fundamentals or {}).copy()
     _reset_missing_keys()
     pm = profile_map or HORIZON_PROFILE_MAP
     
-    # # Enrich
-    # hybrids = enrich_hybrid_metrics(fundamentals, indicators)
-    # if hybrids: fundamentals.update(hybrids)
+    # ✅ VALIDATE INPUT STRUCTURE
+    if not isinstance(indicators, dict):
+        raise ValueError("indicators must be a dict")
     
-    # Compute composites
-    base_inds = indicators.copy()
-    try: base_inds["roe_stability"] = compute_roe_stability(fundamentals)
+    # Check if nested structure exists
+    has_horizons = any(h in indicators for h in ["intraday", "short_term", "long_term", "multibagger"])
+    
+    if not has_horizons:
+        # Fallback: treat as flat dict and replicate for all horizons
+        logger.warning(f"[{ticker}] Indicators not nested, replicating flat dict")
+        indicators = {
+            "intraday": indicators.copy(),
+            "short_term": indicators.copy(),
+            "long_term": indicators.copy(),
+            "multibagger": indicators.copy()
+        }
+    
+    # Compute ROE stability once (fundamental metric)
+    try:
+        fundamentals["roe_stability"] = compute_roe_stability(fundamentals)
     except Exception as e:
-            logger.debug(f"_compute_roe_stability failed {e}")
-            pass
+        logger.debug(f"ROE stability failed: {e}")
     
+    profiles_out = {}
+    best_fit = None
+    best_score = -1.0
     
-    profiles_out, best_fit, best_score = {}, None, -1.0
     for pname in pm.keys():
         try:
-            inds_for_profile = indicators[pname].copy() if isinstance(indicators.get(pname), dict) else base_inds.copy()
+            # ✅ Get horizon-specific indicators
+            inds_for_profile = indicators.get(pname, {}).copy()
+            
+            if not inds_for_profile:
+                logger.warning(f"[{ticker}] No indicators for horizon '{pname}'")
+                continue
+            
+            # ✅ COMPUTE COMPOSITES (if missing)
             if "trend_strength" not in inds_for_profile:
-                inds_for_profile["trend_strength"] = compute_trend_strength(inds_for_profile, horizon=pname)
+                inds_for_profile["trend_strength"] = compute_trend_strength(
+                    inds_for_profile, horizon=pname
+                )
+            
             if "momentum_strength" not in inds_for_profile:
-                inds_for_profile["momentum_strength"] = compute_momentum_strength(inds_for_profile)
+                inds_for_profile["momentum_strength"] = compute_momentum_strength(
+                    inds_for_profile
+                )
+            
             if "volatility_quality" not in inds_for_profile:
-                inds_for_profile["volatility_quality"] = compute_volatility_quality(inds_for_profile)            
-            out = compute_profile_score(pname, fundamentals, inds_for_profile, profile_map=pm)
+                inds_for_profile["volatility_quality"] = compute_volatility_quality(
+                    inds_for_profile
+                )
+            
+            # ✅ SCORE THIS PROFILE
+            out = compute_profile_score(
+                pname, fundamentals, inds_for_profile, profile_map=pm
+            )
             profiles_out[pname] = out
+            
         except Exception as e:
-            logger.debug(f"Profile {pname} failed: {e}")
-            profiles_out[pname] = {"profile": pname, "error": str(e), "base_score": 0.0, "final_score": 0.0,
-                                  "penalty_total": 0.0, "category": "HOLD", "metric_details": {}, 
-                                  "applied_penalties": [], "thresholds": {}, "missing_keys": []}
+            logger.error(f"[{ticker}] Profile {pname} failed: {e}")
+            profiles_out[pname] = {
+                "profile": pname, 
+                "error": str(e), 
+                "base_score": 0.0, 
+                "final_score": 0.0,
+                "penalty_total": 0.0, 
+                "category": "HOLD", 
+                "metric_details": {}, 
+                "applied_penalties": [], 
+                "thresholds": {}, 
+                "missing_keys": []
+            }
         
+        # Track best profile
         fs = profiles_out[pname].get("final_score", 0.0)
         if fs is not None and float(fs) > float(best_score):
-            best_score, best_fit = float(fs), pname
+            best_score = float(fs)
+            best_fit = pname
     
-    avg_signal = round(sum(p.get("final_score", 0) for p in profiles_out.values()) / len(profiles_out), 2) if profiles_out else 0.0
-    missing_map = {p: profiles_out[p].get("missing_keys", []) for p in profiles_out if profiles_out[p].get("missing_keys")}
+    # Aggregate metrics
+    avg_signal = round(
+        sum(p.get("final_score", 0) for p in profiles_out.values()) / len(profiles_out), 
+        2
+    ) if profiles_out else 0.0
     
-    return {"ticker": ticker, "best_fit": best_fit, "best_score": best_score, "aggregate_signal": avg_signal,
-            "profiles": profiles_out, "missing_indicators": missing_map,
-            "missing_count": {k: len(v) for k, v in missing_map.items()},
-            "missing_unique": sorted({v for arr in missing_map.values() for v in arr}) if missing_map else []}
-
+    missing_map = {
+        p: profiles_out[p].get("missing_keys", []) 
+        for p in profiles_out 
+        if profiles_out[p].get("missing_keys")
+    }
+    
+    return {
+        "ticker": ticker, 
+        "best_fit": best_fit, 
+        "best_score": best_score, 
+        "aggregate_signal": avg_signal,
+        "profiles": profiles_out, 
+        "missing_indicators": missing_map,
+        "missing_count": {k: len(v) for k, v in missing_map.items()},
+        "missing_unique": sorted({v for arr in missing_map.values() for v in arr}) 
+                          if missing_map else []
+    }
 # 
 # ============================================================================
 # TRADE PLAN GENERATOR DEBUG INSTRUMENTATION (Add to signal_engine.py)
@@ -1281,13 +1446,9 @@ def log_signal_decision(symbol, indicators, setup_type, setup_conf,
             "trend_strength": _get_val(indicators, "trend_strength"),
             "rsi": _get_val(indicators, "rsi"),
             "volume_rvol": _get_val(indicators, "rvol"),
-            "bb_position": _get_val(indicators, "bb_position"),
             "supertrend_signal": _get_str(indicators, "supertrend_signal")
         }
     }
-    
-    logger.info(f"[SIGNAL_DEBUG] {symbol}: {setup_type} (Conf {setup_conf}% vs Floor {dyn_floor}%) → {blocked_by_list or 'APPROVED'}")
-    
     return debug_info
 
 def _calculate_execution_levels(setup_type: str, category: str, price_val: float, stop_loss: Optional[float], atr_val: float, horizon: str, indicators: Dict, fundamentals: Dict,trade_valid: bool,div_info: Dict,adx: float) -> Dict[str, Any]:
@@ -1669,6 +1830,7 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
         symbol, indicators, setup_type, setup_conf, 
         dyn_floor, True, True, plan["reason"], category, blocked_by
     )
+    logger.debug(f"generated plan for {symbol} is : {plan}")
 
     return plan
 

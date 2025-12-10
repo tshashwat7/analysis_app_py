@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional
 import pandas as pd
 import logging
 
-logger = logging.getLogger("pattern_engine")
+logger = logging.getLogger(__name__)
 
 class BasePattern(ABC):
     """

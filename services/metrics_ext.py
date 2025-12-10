@@ -36,7 +36,6 @@ from services.data_fetch import _retry, safe_float, safe_get
 from services import macro_filter
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 # --------------------
 # Macro Trend Config <-- NEW SECTION

@@ -6,7 +6,7 @@ import polars as pl
 from pathlib import Path
 from datetime import datetime, timezone
 
-logger = logging.getLogger("data_layer")
+logger = logging.getLogger(__name__)
 
 # Configuration
 STORE_DIR = Path("data/store")

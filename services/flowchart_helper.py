@@ -30,7 +30,6 @@ from services.data_fetch import (
 )
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 
 # -------------------------------------------------------------------

@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 # Shared helpers
 from config.constants import (
-    ATR_HORIZON_CONFIG, ATR_MULTIPLIERS, CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, 
-    QUALITY_WEIGHTS, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, 
+    ADX_HORIZON_CONFIG, ATR_HORIZON_CONFIG, ATR_MULTIPLIERS, CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, 
+    QUALITY_WEIGHTS, STOCH_HORIZON_CONFIG, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, 
     TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
 )
 from services.data_fetch import (
@@ -144,8 +144,9 @@ def compute_cci(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]
         return {"cci": {"value": round(val, 2), "score": score, "desc": desc}}
     return _wrap_calc(_inner, "CCI")
 
-def compute_adx(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
+def compute_adx(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict[str, Any]]:
     def _inner():
+        length = ADX_HORIZON_CONFIG.get(horizon, 14)
         _Validator.require(df, ["High", "Low", "Close"])
         adx_df = ta.adx(df["High"], df["Low"], df["Close"], length=length)
         if adx_df is None or adx_df.empty: raise ValueError("ADX empty")
@@ -174,18 +175,25 @@ def compute_adx(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
         }
     return _wrap_calc(_inner, "ADX")
 
-def compute_stochastic(df: pd.DataFrame, k_length: int = 14, d_length: int = 3, smooth_k: int = 3) -> Dict[str, Dict[str, Any]]:
+def compute_stochastic(df: pd.DataFrame, horizon:str = "short_term") -> Dict[str, Dict[str, Any]]:
     def _inner():
         _Validator.require(df, ["High", "Low", "Close"])
-        stoch_df = ta.stoch(df["High"], df["Low"], df["Close"], k=k_length, d=d_length, smooth_k=smooth_k)
+        # 1. Get dynamic settings
+        cfg = STOCH_HORIZON_CONFIG.get(horizon, STOCH_HORIZON_CONFIG["short_term"])
+        k_len = cfg["k"]
+        d_len = cfg["d"]
+        s_k   = cfg["smooth"]
+        
+        # 2. Calculate using dynamic settings
+        stoch_df = ta.stoch(df["High"], df["Low"], df["Close"], k=k_len, d=d_len, smooth_k=s_k)
         if stoch_df is None or stoch_df.empty: raise ValueError("Stoch empty")
 
         stoch_df.columns = [c.lower() for c in stoch_df.columns]
         k_col = next((c for c in stoch_df.columns if "k" in c), None)
         d_col = next((c for c in stoch_df.columns if "d" in c), None)
 
-        k_val = _Validator.extract_last(stoch_df[k_col], "Stoch %K")
-        d_val = _Validator.extract_last(stoch_df[d_col], "Stoch %D")
+        k_val = _Validator.extract_last(stoch_df[k_col], f"Stoch %K({k_len})")
+        d_val = _Validator.extract_last(stoch_df[d_col], f"Stoch %D({d_len})")
         
         if k_val is None or d_val is None: return {}
 
@@ -202,7 +210,7 @@ def compute_stochastic(df: pd.DataFrame, k_length: int = 14, d_length: int = 3, 
                 elif k_prev >= d_prev and k_val < d_val: cross_status, cross_score = "Bearish", 0
 
         return {
-            "stoch_k": {"value": round(k_val, 2), "score": score},
+            "stoch_k": {"value": round(k_val, 2), "score": score, "desc": f"Stoch({k_len})"},
             "stoch_d": {"value": round(d_val, 2), "score": score},
             "stoch_cross": {"value": cross_status, "score": cross_score},
         }
@@ -224,6 +232,11 @@ def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         macd_val = _Validator.extract_last(macd_df[macd_col], "MACD")
         sig_val = _Validator.extract_last(macd_df[sig_col], "Signal")
         hist_val = _Validator.extract_last(macd_df[hist_col], "Hist")
+
+        # We use safe_float on iloc[-2] if it exists
+        prev_hist_val = 0.0
+        if len(macd_df) >= 2:
+            prev_hist_val = safe_float(macd_df[hist_col].iloc[-2]) or 0.0
         
         if macd_val is None or sig_val is None: return {}
 
@@ -248,6 +261,7 @@ def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "macd_cross": {"value": cross, "score": score, "desc": f"macd_cross -> {cross}"},
             "macd_hist_z": {"value": round(hist_z, 4), "score": hist_score, "desc": "MACD Hist Z-Score"},
             "macd_histogram": {"value": round(hist_val, 3), "score": hist_strength, "desc": f"Hist {hist_val:.3f}"},
+            "prev_macd_histogram": {"value": round(prev_hist_val, 3), "score": 0, "desc": "Prev Hist"}
         }
     return _wrap_calc(_inner, "MACD")
 
@@ -397,6 +411,9 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
         atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=length)
         atr_val = _Validator.extract_last(atr_series, f"ATR_{length}")
 
+        sma_series = ta.sma(df["Close"], length=length)
+        sma_val = _Validator.extract_last(sma_series, f"SMA_{length}")
+
         if atr_val is None: return {}
 
         price = _Validator.extract_last(df["Close"], "Close")
@@ -412,6 +429,10 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
         elif pct <= 5.0: score = 5
         else: score = 0
 
+        atr_sma_ratio = 0.0
+        if sma_val and sma_val > 0:
+            atr_sma_ratio = atr_val / sma_val
+
         return {
             "atr_dynamic": {
                 "value": round(atr_val, 2),
@@ -426,6 +447,11 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
                 "score": score,
                 "desc": f"Volatility {pct:.2f}%",
                 "source": "technical"
+            },
+            "atr_sma_ratio": {
+                "value": round(atr_sma_ratio, 4),
+                "score": 0, # Usually just a filter, not a scorer
+                "desc": f"ATR/SMA Ratio: {atr_sma_ratio:.4f}"
             }
         }
     return _wrap_calc(_inner, "Dynamic ATR")
@@ -481,12 +507,18 @@ def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3
         close = _Validator.extract_last(df["Close"], "Close")
         # 3. Robust Extraction of Direction (trend_val)
         trend_val = None
+        prev_trend_val = None
+
         if d_col:
             trend_val = _safe_float(st[d_col].iloc[-1])
+            if len(st) >= 2:
+                prev_trend_val = _safe_float(st[d_col].iloc[-2])
+
         # 4. Robust Extraction of Level (st_level_val)
         st_level_val = None
         if l_col:
             st_level_val = _safe_float(st[l_col].iloc[-1])
+            
         # Fallback Logic If direction missing, infer from level
         if trend_val is None and st_level_val is not None:
              trend_val = 1.0 if close > st_level_val else -1.0
@@ -498,7 +530,8 @@ def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3
         
         return {
             "supertrend_signal": { "value": sig, "score": score, "desc": f"ST ({length},{multiplier}) {sig}"},
-            "supertrend_value": {"value": st_level_val, "score": 0, "desc": f"Level {st_level_val}","alias": "SuperTrend Value"}
+            "supertrend_value": {"value": st_level_val, "score": 0, "desc": f"Level {st_level_val}","alias": "SuperTrend Value"},
+            "prev_supertrend": {"value": prev_trend_val if prev_trend_val is not None else 0, "score": 0}
         }
     return _wrap_calc(_inner, "SuperTrend")
 
@@ -519,32 +552,33 @@ def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         return {"price_action": {"value": round(pos*100, 1), "score": score, "signal": sig, "desc": f"price_action -> {round(pos*100, 1)}"}}
     return _wrap_calc(_inner, "Price Action")
 
-def compute_200dma(df: pd.DataFrame, close, price, horizon: str = "short_term"):
+def compute_price_vs_base_ma(df: pd.DataFrame, close, price, horizon: str = "short_term"):
+    """Returns price_vs_primary_trend_pct (Renamed from compute_200dma)"""
+    lens = {"intraday": 200, "short_term": 200, "long_term": 50, "multibagger": 12}
+    types = {"intraday": "EMA", "short_term": "EMA", "long_term": "WMA", "multibagger": "MMA"}
+    L = lens.get(horizon, 200)
+    T = types.get(horizon, "EMA")
+    
     def _inner():
-        lens = {"intraday": 200, "short_term": 200, "long_term": 50, "multibagger": 12}
-        types = {"intraday": "MA", "short_term": "DMA", "long_term": "WMA", "multibagger": "MMA"}
-        
-        L = lens.get(horizon, 200)
-        T = types.get(horizon, "MA")
-        
         sma = _Validator.extract_last(ta.sma(close, length=L), f"{L}{T}")
-        
+        if not sma: return {}
         diff = ((price - sma) / sma) * 100
-        if diff > 0: score, desc = 10, "Uptrend"
-        elif abs(diff) < 3: score, desc = 5, "Neutral"
-        else: score, desc = 0, "Downtrend"
+        score = 10 if diff > 0 else 5 if abs(diff) < 3 else 0
+        desc = "Above" if diff > 0 else "Below"
         
         return {
-            f"price_vs_{L}{T.lower()}_pct": {"value": round(diff, 2), "score": score, "desc": f"{desc} ({diff:.1f}%)"},
-            f"{T.lower()}_{L}": {"value": round(sma, 2), "score": 0, "desc": f"{T.lower()}_{L} -> {sma:.2f}"}
+            "price_vs_primary_trend_pct": {"value": round(diff, 2), "score": score, "desc": f"{desc} {T}{L} ({diff:.1f}%)", "alias": f"Price vs {T}{L}"},
+            f"price_vs_{L}{T.lower()}_pct": {"value": round(diff, 2), "score": score} # Legacy
         }
-    return _wrap_calc(_inner, "Long-Term MA")
+    return _wrap_calc(_inner, "Price vs Trend")
 
-def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term", lookback: int = 10):
+def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
     """
-    Dynamic Slope Calculator: Switches between EMA (Short) and WMA/MMA (Long) based on horizon.
+    Calculates Normalized Slopes. 
+    Fixes: Scaling issue (uses %), Configurable Lookback, Zero Division Guard.
     """
     def _inner():
+        # 1. Horizon Configs
         cfg = {
             "intraday":    {"type": "EMA", "l_s": 20, "l_l": 50},
             "short_term":  {"type": "EMA", "l_s": 20, "l_l": 50},
@@ -552,34 +586,56 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term", lookback: i
             "multibagger": {"type": "MMA", "l_s": 20, "l_l": 50}
         }.get(horizon, {"type": "EMA", "l_s": 20, "l_l": 50})
         
-        fn = ta.ema if cfg["type"] == "EMA" else ta.sma # WMA/MMA approximated by SMA for slope stability
-        prefix = "ema" if cfg["type"] == "EMA" else "wma" if cfg["type"] == "WMA" else "mma"
+        # 2. Dynamic Lookback
+        lookback = {"intraday": 5, "short_term": 10, "long_term": 10, "multibagger": 10}.get(horizon, 10)
         
+        fn = ta.ema if cfg["type"] == "EMA" else ta.sma 
+        prefix = "ema" if cfg["type"] == "EMA" else "wma" if cfg["type"] == "WMA" else "mma"
         close = df["Close"]
         
-        def _get_slope(series):
-            if len(series) < lookback: return 0.0
-            y = series.tail(lookback).values
-            if np.isnan(y).any(): return 0.0
-            x = np.arange(lookback)
-            slope, _ = np.polyfit(x, y, 1)
-            return degrees(atan(slope))
+        def _get_normalized_angle(series, period):
+            if len(series) < period: return 0.0
+            y_raw = series.tail(period).values
+            if np.isnan(y_raw).any(): return 0.0
+            
+            # ✅ FIX #2: Zero Division Guard
+            if y_raw[0] == 0: return 0.0
+            
+            # ✅ NORMALIZE: Convert to % index (Starts at 100)
+            y_norm = (y_raw / y_raw[0]) * 100.0
+            
+            x = np.arange(period)
+            slope, _ = np.polyfit(x, y_norm, 1)
+            return np.degrees(np.arctan(slope))
 
         s_ma = fn(close, length=cfg["l_s"])
         l_ma = fn(close, length=cfg["l_l"])
         
-        ang_s = _get_slope(s_ma)
-        ang_l = _get_slope(l_ma)
+        ang_s = _get_normalized_angle(s_ma, lookback)
+        ang_l = _get_normalized_angle(l_ma, lookback)
         
-        score = 10 if ang_s > 1.5 else 5 if ang_s > 0 else 0
+        # ✅ FIX #1: Realistic Thresholds for Normalized Data
+        # 20° ~= 3.6% move over 10 bars (Strong Trend)
+        # 5°  ~= 0.9% move over 10 bars (Moderate Trend)
+        score = 10 if ang_s > 20 else 7 if ang_s > 5 else 0
         
         return {
-            f"{prefix}_{cfg['l_s']}_slope": {"value": round(ang_s, 2), "raw": ang_s, "score": score, "desc": f"{ang_s:.1f}°"},
-            f"{prefix}_{cfg['l_l']}_slope": {"value": round(ang_l, 2), "raw": ang_l, "score": 0, "desc": f"{ang_l:.1f}°"}
+            "ma_fast_slope": {
+                "value": round(ang_s, 2), "raw": ang_s, "score": score, 
+                "desc": f"{ang_s:.1f}°", "alias": f"{prefix.upper()} Slope"
+            },
+            "ma_slow_slope": {
+                "value": round(ang_l, 2), "raw": ang_l, "score": 0, 
+                "desc": f"{ang_l:.1f}°", "alias": f"{prefix.upper()} Slow Slope"
+            },
+            # Legacy keys for safety
+            f"{prefix}_{cfg['l_s']}_slope": {"value": round(ang_s, 2), "score": score},
+            f"{prefix}_{cfg['l_l']}_slope": {"value": round(ang_l, 2), "score": 0}
         }
     return _wrap_calc(_inner, "MA Slopes")
 
 def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = "short_term"):
+    """Returns ma_cross_signal"""
     cfg = {
         "intraday":    {"l": (20, 50), "t": "EMA", "p": "ema"},
         "short_term":  {"l": (20, 50), "t": "EMA", "p": "ema"},
@@ -594,7 +650,6 @@ def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = 
     def _inner():
         s_ma = fn(close, length=s_len)
         l_ma = fn(close, length=l_len)
-        
         vals_s = _safe_last_vals(s_ma, 2)
         vals_l = _safe_last_vals(l_ma, 2)
         
@@ -611,15 +666,15 @@ def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = 
             val, desc = -1, "Bearish Cross"
             
         return {
-            f"{prefix}_{s_len}": {"value": round(s_curr, 2), "score": 0, "desc": f"{prefix}_{s_len} -> {s_curr:.2f}"},
-            f"{prefix}_{l_len}": {"value": round(l_curr, 2), "score": 0, "desc": f"{prefix}_{l_len} -> {l_curr:.2f}"},
-            f"{prefix}_{s_len}_{l_len}_cross": {"value": val, "score": score, "desc": desc}
+            "ma_cross_signal": {"value": val, "score": score, "desc": desc, "alias": f"{prefix.upper()} Cross"},
+            f"{prefix}_{s_len}_{l_len}_cross": {"value": val, "score": score} # Legacy
         }
-    return _wrap_calc(_inner, f"{prefix.upper()} Cross")
+    return _wrap_calc(_inner, "MA Cross")
 
 def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
     """
-    Calculates 3-MA trend AND returns individual MA values to ensure database completeness.
+    Calculates Trend Alignment using Horizon-Specific Physics.
+    Returns: ma_fast, ma_mid, ma_slow, ma_trend_signal
     """
     cfg = {
         "intraday":    {"l": (20, 50, 200), "t": "EMA", "p": "ema"},
@@ -634,6 +689,7 @@ def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
 
     def _inner():
         _Validator.require(df, ["Close"])
+        
         s_val = _Validator.extract_last(fn(df["Close"], length=l_s), "MA Fast")
         m_val = _Validator.extract_last(fn(df["Close"], length=l_m), "MA Mid")
         try: l_val = _Validator.extract_last(fn(df["Close"], length=l_l), "MA Slow")
@@ -643,15 +699,20 @@ def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
         if l_val:
             if s_val > m_val > l_val: val, score, desc = 1, 10, "Strong Uptrend"
             elif s_val < m_val < l_val: val, score, desc = -1, 0, "Strong Downtrend"
-            elif s_val > m_val > l_val: val, score, desc = 0.5, 7, "Moderate Uptrend"
-            # FIX: Partial Trend Logic (Short > Mid, even if Mid < Long)
             elif s_val > m_val: val, score, desc = 0.5, 7, "Developing Uptrend"
             
         return {
-            f"{pre}_{l_s}": {"value": round(s_val, 2), "score": 0, "desc": f"{pre}_{l_s} -> {s_val:.2f}"},
-            f"{pre}_{l_m}": {"value": round(m_val, 2), "score": 0, "desc": f"{pre}_{l_m} -> {m_val:.2f}"},
-            f"{pre}_{l_l}": {"value": round(l_val, 2) if l_val else None, "score": 0, "desc": f"{pre}_{l_l} -> {l_val:.2f}" if l_val else "N/A"},
-            f"{pre}_{l_s}_{l_m}_{l_l}_trend": {"value": val, "score": score, "desc": desc}
+            # ✅ STANDARDIZED KEYS
+            "ma_fast": {"value": round(s_val, 2), "score": 0, "desc": f"{pre.upper()}({l_s})", "length": l_s, "type": cfg["t"], "alias": f"{pre.upper()} Fast"},
+            "ma_mid":  {"value": round(m_val, 2), "score": 0, "desc": f"{pre.upper()}({l_m})", "length": l_m, "type": cfg["t"], "alias": f"{pre.upper()} Mid"},
+            "ma_slow": {"value": round(l_val, 2) if l_val else None, "score": 0, "desc": f"{pre.upper()}({l_l})" if l_val else "N/A", "length": l_l, "type": cfg["t"], "alias": f"{pre.upper()} Slow"},
+            "ma_trend_signal": {"value": val, "score": score, "desc": desc, "alias": "MA Trend Alignment"},
+            
+            # Legacy
+            f"{pre}_{l_s}": {"value": round(s_val, 2), "score": 0},
+            f"{pre}_{l_m}": {"value": round(m_val, 2), "score": 0},
+            f"{pre}_{l_l}": {"value": round(l_val, 2) if l_val else None, "score": 0},
+            f"{pre}_{l_s}_{l_m}_{l_l}_trend": {"value": val, "score": score}
         }
     return _wrap_calc(_inner, f"{pre.upper()} Trend")
 
@@ -967,9 +1028,9 @@ def compute_technical_score(indicators: Dict[str, Dict[str, Any]], weights=None)
 INDICATOR_METRIC_MAP = {
     "rsi": {"func": compute_rsi, "horizon": "default"},
     "mfi": {"func": compute_mfi, "horizon": "default"},
-    "adx": {"func": compute_adx, "horizon": "short_term"},
+    "adx": {"func": compute_adx, "horizon": "default"},
     "cci": {"func": compute_cci, "horizon": "short_term"},
-    "stoch_k": {"func": compute_stochastic, "horizon": "short_term"},
+    "stoch_k": {"func": compute_stochastic, "horizon": "default"},
     "macd": {"func": compute_macd, "horizon": "default"},
     "vwap": {"func": compute_vwap, "horizon": "intraday"},
     "bb_high": {"func": compute_bollinger_bands, "horizon": "default"},
@@ -989,10 +1050,17 @@ INDICATOR_METRIC_MAP = {
     "gap_percent": {"func": compute_gap_percent, "horizon": "long_term"},
     "rel_strength_nifty": {"func": compute_relative_strength, "horizon": "long_term"},
     # Consolidated Trend + Components
-    "ma_trend_setup": {"func": compute_dynamic_ma_trend, "horizon": "default"},
-    "ma_cross_setup": {"func": compute_dynamic_ma_cross, "horizon": "short_term"},
-    "price_vs_200dma_pct": {"func": compute_200dma, "horizon": "default"},
-    "ma_slopes": {"func": compute_ema_slope, "horizon": "default"},
+
+    "ma_trend_signal": {"func": compute_dynamic_ma_trend, "horizon": "default"},
+    "ma_cross_signal": {"func": compute_dynamic_ma_cross, "horizon": "default"},
+    "price_vs_primary_trend_pct": {"func": compute_price_vs_base_ma, "horizon": "default"},
+    "ma_fast_slope": {"func": compute_ema_slope, "horizon": "default"},
+
+    # "ma_trend_setup": {"func": compute_dynamic_ma_trend, "horizon": "default"},
+    # "ma_cross_setup": {"func": compute_dynamic_ma_cross, "horizon": "short_term"},
+    # "price_vs_200dma_pct": {"func": compute_200dma, "horizon": "default"},
+    # "ma_slopes": {"func": compute_ema_slope, "horizon": "default"},
+
     "pivot_point": {"func": compute_pivot_points, "horizon": "short_term"},
     "ttm_squeeze": {"func": compute_keltner_squeeze, "horizon": "short_term"},
     "true_range": {"func": compute_true_range, "horizon": "default"},
@@ -1030,16 +1098,16 @@ def compute_indicators(
     # 🚨 RESTORED LEGACY DENSITY: Force crucial structure metrics
     # This matches the legacy "calculate everything" approach for completeness
     ALWAYS_CALC = {
-        "macd", "adx", "rsi", "ma_slopes", "cmf_signal", 
-        "obv_div", "price_vs_200dma_pct", "gap_percent", "ma_trend_setup",
+        "macd", "adx", "rsi", "ma_fast_slope", "cmf_signal", # Changed ma_slopes -> ma_fast_slope
+        "obv_div", "price_vs_primary_trend_pct", "gap_percent", "ma_trend_signal", # Changed ma_trend_setup -> ma_trend_signal
         "supertrend_signal", "psar_trend", "ttm_squeeze", "bb_width", 
         "bb_percent_b", "vol_spike_ratio", "pivot_point",
-        # 🚨 FIX: Explicitly add Short Term Cross back
-        "ma_cross_setup" , "wick_rejection", "atr_dynamic", "sl_atr_dynamic","ichi_cloud","true_range","hv_10"
+        "ma_cross_signal", # Changed ma_cross_setup -> ma_cross_signal
+        "wick_rejection", "atr_dynamic", "sl_atr_dynamic","ichi_cloud","true_range","hv_10","stoch_k", "stoch_d"
     }
     raw_metrics.update(ALWAYS_CALC)
     
-    PRIORITY = ["rsi", "macd", "ma_trend_setup", "pivot_point"]
+    PRIORITY = ["rsi", "macd", "ma_trend_signal", "pivot_point"]
     ordered = [m for m in PRIORITY if m in raw_metrics] + [m for m in raw_metrics if m not in PRIORITY]
     
     required_horizons = {horizon}
@@ -1097,10 +1165,14 @@ def compute_indicators(
         if metric in done_flags: continue
         
         # Special Bundle Handling
-        if metric == "ma_trend_setup":
-            # This handles ema_20, ema_50, ema_200 AND trend
+        if metric == "ma_trend_signal":
+            done_flags.update(["ma_fast", "ma_mid", "ma_slow", "ma_trend_signal"])
             done_flags.update(["ema_20", "ema_50", "ema_200", "wma_10", "wma_40", "wma_50", "mma_6", "mma_12"])
             
+        elif metric == "ma_fast_slope":
+            done_flags.update(["ma_fast_slope", "ma_slow_slope"])
+            done_flags.update(["ema_20_slope", "ema_50_slope", "wma_50_slope", "mma_12_slope"])
+
         fn = meta["func"]
         h_req = meta.get("horizon", "default")
         data_h = horizon if h_req == "default" else h_req
@@ -1152,3 +1224,12 @@ def compute_indicators(
     except: pass
 
     return indicators
+
+# Legacy Key (Hardcoded),Dynamic Key (Replacement),Why?
+# "ema_20, wma_10, mma_6",ma_fast,"The ""Fast"" trend component for any horizon."
+# "ema_50, wma_40, mma_12",ma_mid,"The ""Medium"" trend component."
+# "ema_200, wma_50, mma_12",ma_slow,"The ""Slow"" trend baseline."
+# "ema_20_slope, wma_50_slope",ma_fast_slope,The velocity of the active trend.
+# "dma_200_slope, mma_12_slope",ma_slow_slope,The velocity of the baseline trend.
+# price_vs_200dma_pct,price_vs_primary_trend_pct,Extension from the main baseline.
+# ema_20_50_cross,ma_cross_signal,The primary crossover signal.

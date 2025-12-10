@@ -27,7 +27,7 @@ from config.constants import (
     ATR_MULTIPLIERS,
 )
 
-logger = logging.getLogger("backtester_v6_1")
+logger = logging.getLogger(__name__)
 # logger.setLevel(logging.DEBUG) # Uncomment to see per-candle logic
 
 # INCREASED CAPITAL to handle high-priced stocks (e.g. TCS > 3000)
@@ -59,8 +59,8 @@ class BacktestEngine:
         self.results: List[Dict[str, Any]] = []
         self.active_trade: Optional[Dict[str, Any]] = None
         self.debug = debug
-        if debug:
-            logger.setLevel(logging.DEBUG)
+        # if debug:
+            # logger.setLevel(logging.DEBUG)
 
         cfg = HORIZON_FETCH_CONFIG.get(self.horizon) or HORIZON_FETCH_CONFIG.get(self.horizon.replace("_", ""), {})
         self.interval = cfg.get("interval", "1d")

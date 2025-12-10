@@ -1,3 +1,4 @@
+# services/tradeplan/time_estimator.py
 import math
 from typing import Dict, Any, Optional
 
@@ -23,27 +24,56 @@ def _extract_score(x):
 # --- MAIN DUAL ESTIMATOR ---
 def estimate_hold_time_dual(
     entry: float,
-    t1: float,
-    t2: float,
+    t1: Optional[float],
+    t2: Optional[float],
     atr: float,
     horizon: str,
     indicators: Dict,
     strategy_summary: Dict = None,
     multiplier: float = 1.0
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """
     Estimates distinct hold times for T1 (Conservation) and T2 (Extension).
+    Robustly handles cases where Targets or Entry are missing.
     """
-    if not entry or entry <= 0:
-        return {"t1_estimate": "-", "t2_estimate": "-", "note": "Invalid Entry"}
+    # Safe default for confidence to prevent UI crashes
+    safe_conf = {"t1": "Low", "t2": "Low"}
 
-    # 1. Calculate Distances
-    t1_dist = abs(t1 - entry)
-    t2_dist = abs(t2 - entry)
+    # 1. Guard: Entry Validity
+    if not entry or entry <= 0:
+        return {
+            "t1_estimate": "-", "t2_estimate": "-", 
+            "note": "Invalid Entry", 
+            "confidence": safe_conf
+        }
+
+    # 2. Guard: Target Validity (Fixes the Crash)
+    if t1 is None or t2 is None:
+        return {
+            "t1_estimate": "-", "t2_estimate": "-", 
+            "note": "No Targets Set", 
+            "confidence": safe_conf
+        }
+
+    # 3. Calculate Distances
+    try:
+        t1_dist = abs(t1 - entry)
+        t2_dist = abs(t2 - entry)
+    except TypeError:
+        return {
+            "t1_estimate": "-", "t2_estimate": "-", 
+            "note": "Invalid Target Data", 
+            "confidence": safe_conf
+        }
     
-    # 2. Get Velocity Metrics
+    # 4. Get Velocity Metrics
     atr_val = _ensure_numeric(atr)
-    if atr_val <= 0: return {"t1_estimate": "-", "t2_estimate": "-", "note": "Invalid ATR"}
+    if atr_val <= 0: 
+        return {
+            "t1_estimate": "-", "t2_estimate": "-", 
+            "note": "Invalid ATR", 
+            "confidence": safe_conf
+        }
     
     # Trend Speed Adjustment (The "Physics")
     ts_raw = _get_val_local(indicators, "trend_strength")
@@ -61,15 +91,15 @@ def estimate_hold_time_dual(
     # Apply Strategy Multiplier (e.g. Momentum = Fast, Value = Slow)
     final_velocity = atr_val * velocity_factor * (1.0 / multiplier) # Lower multiplier = Faster
 
-    # 3. Calculate Bars
+    # 5. Calculate Bars
     t1_bars = t1_dist / max(final_velocity, 0.01)
     t2_bars = t2_dist / max(final_velocity, 0.01)
 
-    # 4. Confidence Logic
+    # 6. Confidence Logic
     t1_conf = "High" if trend_strength > 6 else "Medium"
     t2_conf = "Medium" if (trend_strength > 6 and adx > 25) else "Low"
 
-    # 5. Formatter
+    # 7. Formatter
     def fmt_bars(bars, hz):
         if hz == "intraday":
             mins = bars * 15 # Assuming 15m candles

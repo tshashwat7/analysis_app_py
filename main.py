@@ -17,7 +17,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import pandas as pd
-import logging
+from config.logger_config import setup_logger
+logger = setup_logger()
 
 # --- Modular services ---
 from config.constants import ENABLE_CACHE_WARMER, ENABLE_JSON_ENRICHMENT, INDEX_TICKERS
@@ -32,7 +33,10 @@ from services.fundamentals import compute_fundamentals
 from services.indicators import compute_indicators
 from services.signal_engine import (
     compute_all_profiles,
-    enrich_hybrid_metrics,
+    compute_momentum_strength,
+    compute_trend_strength,
+    compute_volatility_quality,
+    enrich_hybrid_metrics_multi_horizon,
     generate_trade_plan,
     score_value_profile,
     score_growth_profile,
@@ -75,8 +79,6 @@ def run_analysis_for_cache(symbol: str):
         logger.debug(f"[WARMER] Successfully warmed cache for {symbol}.")
     except Exception as e:
         logger.error(f"[WARMER] Failed to run analysis for {symbol}: {e}")
-
-logger = logging.getLogger("warmer")
 
 # ==============================================================================
 # ### GLOBAL STATE & EXECUTORS (Lazy & Safe)
@@ -380,8 +382,6 @@ class QuickScoresRequest(BaseModel):
 class CorpActionsRequest(BaseModel):
     tickers: List[str]
 
-logger = logging.getLogger("stock_analyzer")
-logging.basicConfig(level=logging.INFO)
 
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -567,31 +567,41 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
     db = None
     enrichment_info = None
     try:
-        # Workers must build their own map if needed
         global STOCK_TO_INDEX_MAP
         if not STOCK_TO_INDEX_MAP:
             build_smart_index_map()
             
         db = SessionLocal()
         analysis_data = {
-            "symbol": symbol, "fundamentals": {}, "indicators": {}, 
-            "full_report": {}, "trade_recommendation": {}, "meta_scores": {},
-            "macro_trend_status": "N/A", "macro_close": None, 
-            "strategy_report": {}, "partial_error": False, "error_details": []
+            "symbol": symbol, 
+            "fundamentals": {}, 
+            "raw_indicators_by_horizon": {},  # ✅ Nested structure for profiles
+            "indicators": {},                  # ✅ Flat structure for UI/Trade Plan
+            "full_report": {}, 
+            "trade_recommendation": {}, 
+            "meta_scores": {},
+            "macro_trend_status": "N/A", 
+            "macro_close": None, 
+            "strategy_report": {}, 
+            "partial_error": False, 
+            "error_details": []
         }
         horizons = ["intraday", "short_term", "long_term", "multibagger"]
 
+        # Determine benchmark
         target_index = index_name
         clean_sym = symbol.strip().upper()
         if index_name in ["NSEStock", "default", "nifty500"]:
             smart_index = STOCK_TO_INDEX_MAP.get(clean_sym)
-            if smart_index: target_index = smart_index
+            if smart_index: 
+                target_index = smart_index
         bench_symbol = INDEX_TICKERS.get(target_index, INDEX_TICKERS["default"])
 
-        # 1. Fundamentals
+        # =====================================================================
+        # STEP 1: FUNDAMENTALS
+        # =====================================================================
         try:
             analysis_data["fundamentals"] = compute_fundamentals(symbol)
-            # Capture Name for Enrichment
             fund_data = analysis_data.get("fundamentals", {})
             raw_name = fund_data.get("name")
             if raw_name and raw_name != symbol:
@@ -601,102 +611,173 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
             analysis_data["error_details"].append(f"Fundamentals Failed: {e}")
             logger.error(f"[{symbol}] Fundamentals failed: {e}")
 
-        # 2. Indicators
-        analysis_data["raw_indicators_by_horizon"] = {}
-        all_indicators = {}
+        # =====================================================================
+        # STEP 2: INDICATORS (Multi-Horizon)
+        # =====================================================================
         for h in horizons:
             try:
-                h_indicators = compute_indicators(symbol, horizon=h, benchmark_symbol=bench_symbol)
+                h_indicators = compute_indicators(
+                    symbol, horizon=h, benchmark_symbol=bench_symbol
+                )
                 analysis_data["raw_indicators_by_horizon"][h] = h_indicators
-                all_indicators.update(h_indicators)
+                logger.info(f"[{symbol}] Computed {len(h_indicators)} indicators for {h}")
             except Exception as e:
                 analysis_data["partial_error"] = True
-                analysis_data["error_details"].append(f"Indicators for {h} Failed: {e}")
-                logger.warning(f"[{symbol}] Failed to compute indicators for horizon '{h}': {e}")
+                analysis_data["error_details"].append(f"Indicators/{h}: {e}")
+                logger.warning(f"[{symbol}] Failed indicators for '{h}': {e}")
 
-        analysis_data["indicators"] = all_indicators
-
-        # 3. Hybrids
-        if analysis_data["fundamentals"] and analysis_data["indicators"]:
+        # =====================================================================
+        # STEP 3: ENRICH HYBRIDS (Multi-Horizon Aware)
+        # =====================================================================
+        if analysis_data["fundamentals"] and analysis_data["raw_indicators_by_horizon"]:
             try:
-                hybrids = enrich_hybrid_metrics(analysis_data["fundamentals"], analysis_data["indicators"])
-                if hybrids: analysis_data["fundamentals"].update(hybrids)
-                else:
-                    logger.warning(f"[{symbol}] All hybrid metrics failed - fundamentals incomplete")
-                    analysis_data["error_details"].append("Hybrid metrics: All 7 calculations failed")
+                enriched_fund, enriched_inds = enrich_hybrid_metrics_multi_horizon(
+                    analysis_data["fundamentals"], 
+                    analysis_data["raw_indicators_by_horizon"]
+                )
+                
+                # Update nested structure
+                analysis_data["fundamentals"] = enriched_fund
+                analysis_data["raw_indicators_by_horizon"] = enriched_inds
+                
             except Exception as e:
-                logger.warning(f"[{symbol}] All hybrid metrics failed - fundamentals incomplete")
+                logger.warning(f"[{symbol}] Hybrid enrichment failed: {e}")
                 analysis_data["error_details"].append(f"Hybrid Failed: {e}")
 
-        # 4. Macro
+        # =====================================================================
+        # STEP 4: MACRO TREND (using short_term as baseline)
+        # =====================================================================
         try:
-            nifty_metric = analysis_data["indicators"].get("nifty_trend_score")
+            short_inds = analysis_data["raw_indicators_by_horizon"].get("short_term", {})
+            nifty_metric = short_inds.get("nifty_trend_score")
             if nifty_metric:
                 analysis_data["macro_trend_status"] = nifty_metric.get("desc", "N/A")
                 analysis_data["macro_close"] = nifty_metric.get("value")
-                if not analysis_data["macro_trend_status"]  or analysis_data["macro_trend_status"] == "N/A": analysis_data["macro_trend_status"] = "Neutral"
-        except Exception: pass
+                if not analysis_data["macro_trend_status"] or \
+                   analysis_data["macro_trend_status"] == "N/A":
+                    analysis_data["macro_trend_status"] = "Neutral"
+        except Exception as e:
+            logger.debug(f"[{symbol}] Macro trend failed: {e}")
 
-        # 5. Profiles
-        if analysis_data["fundamentals"] and analysis_data["indicators"]:
+        # =====================================================================
+        # STEP 5: PROFILE SCORING (using nested structure)
+        # =====================================================================
+        if analysis_data["fundamentals"] and analysis_data["raw_indicators_by_horizon"]:
             try:
-                full_report = compute_all_profiles(symbol, analysis_data["fundamentals"], analysis_data["raw_indicators_by_horizon"])
+                full_report = compute_all_profiles(
+                    symbol, 
+                    analysis_data["fundamentals"], 
+                    analysis_data["raw_indicators_by_horizon"]
+                )
                 analysis_data["full_report"] = full_report
+                
+                # Meta scores (baseline: short_term)
+                short_inds = analysis_data["raw_indicators_by_horizon"].get("short_term", {})
                 analysis_data["meta_scores"] = {
                     "value": score_value_profile(analysis_data["fundamentals"]),
                     "growth": score_growth_profile(analysis_data["fundamentals"]),
                     "quality": score_quality_profile(analysis_data["fundamentals"]),
-                    "momentum": score_momentum_profile(analysis_data["fundamentals"], analysis_data["indicators"]),
+                    "momentum": score_momentum_profile(
+                        analysis_data["fundamentals"], short_inds
+                    ),
                 }
             except Exception as e:
                 analysis_data["partial_error"] = True
                 analysis_data["error_details"].append(f"Scoring Failed: {e}")
+                logger.error(f"[{symbol}] Profile scoring failed: {e}")
 
-        # 6. Strategy
+        # =====================================================================
+        # STEP 6: SMART MERGE FOR UI (Create Flat indicators dict)
+        # =====================================================================
+        best_horizon_for_ui = "short_term"  # Default
+        
+        if "full_report" in analysis_data:
+            best_horizon_for_ui = analysis_data["full_report"].get("best_fit", "short_term")
+        
+        # ✅ CRITICAL: Merge best-fit horizon into flat dict for UI
+        analysis_data["indicators"] = analysis_data["raw_indicators_by_horizon"].get(
+            best_horizon_for_ui, {}
+        ).copy()
+        
+        logger.info(f"[{symbol}] UI using '{best_horizon_for_ui}' indicators ({len(analysis_data['indicators'])} keys)")
+
+        # =====================================================================
+        # STEP 7: STRATEGY ANALYSIS
+        # =====================================================================
         try:
             full_rep = analysis_data.get("full_report", {})
             best_horizon = full_rep.get("best_fit", "short_term")
-            target_inds = analysis_data["raw_indicators_by_horizon"].get(best_horizon)
-            if not target_inds: target_inds = analysis_data.get("indicators", {})  # Fallback to merged
-            # 3. Run Strategy Engine on the BEST horizon
-            strategy_report = analyze_strategies(target_inds, analysis_data["fundamentals"], horizon=best_horizon)
+            
+            # Use best-fit horizon's indicators
+            target_inds = analysis_data["raw_indicators_by_horizon"].get(best_horizon, {})
+            
+            strategy_report = analyze_strategies(
+                target_inds, 
+                analysis_data["fundamentals"], 
+                horizon=best_horizon
+            )
             analysis_data["strategy_report"] = strategy_report
+            
         except Exception as e:
             logger.error(f"[{symbol}] Strategy Analyzer Failed: {e}")
             analysis_data["strategy_report"] = {}
 
-        # 7. Trade Plan
+        # =====================================================================
+        # STEP 8: TRADE PLAN (with Composites)
+        # =====================================================================
         if "full_report" in analysis_data:
             try:
                 full_rep = analysis_data["full_report"]
-                best_profile_name = full_rep.get("best_fit", "short_term")
-                best_profile_data = full_rep.get("profiles", {}).get(best_profile_name, {})
                 best_horizon = full_rep.get("best_fit", "short_term")
-                horizon_inds = analysis_data["raw_indicators_by_horizon"].get(best_horizon)
+                best_profile_data = full_rep.get("profiles", {}).get(best_horizon, {})
+                
+                # Get enriched indicators for this horizon
+                horizon_inds = analysis_data["raw_indicators_by_horizon"].get(
+                    best_horizon, {}
+                ).copy()
+                
+                # ✅ ENSURE COMPOSITES EXIST (Safety Net)
+                if "trend_strength" not in horizon_inds:
+                    horizon_inds["trend_strength"] = compute_trend_strength(horizon_inds, best_horizon)
+                    horizon_inds["momentum_strength"] = compute_momentum_strength(horizon_inds)
+                    horizon_inds["volatility_quality"] = compute_volatility_quality(horizon_inds)
+                    
+                    logger.info(f"[{symbol}] Added composites to {best_horizon}")
                 
                 trade_plan = generate_trade_plan(
-                    best_profile_data, horizon_inds, analysis_data.get("macro_trend_status", "N/A"),
-                    horizon=best_profile_name, strategy_report=analysis_data["strategy_report"],
+                    best_profile_data, 
+                    horizon_inds,
+                    analysis_data.get("macro_trend_status", "N/A"),
+                    horizon=best_horizon, 
+                    strategy_report=analysis_data["strategy_report"],
                     fundamentals=analysis_data["fundamentals"]
                 )
                 analysis_data["trade_recommendation"] = trade_plan
+
             except Exception as e:
+                logger.error(f"[{symbol}] Trade Plan Failed: {e}", exc_info=True)
                 analysis_data["error_details"].append(f"Trade Plan Failed: {e}")
 
-        # 8. Save
+        # =====================================================================
+        # STEP 9: DATABASE PERSISTENCE
+        # =====================================================================
         if "full_report" in analysis_data:
             _save_analysis_to_db(db, symbol, analysis_data, index_name)
 
-        # [NEW] Attach hidden data before returning
-            if enrichment_info:
-                analysis_data["_enrichment"] = enrichment_info
+        # =====================================================================
+        # STEP 10: ENRICHMENT METADATA (for background task)
+        # =====================================================================
+        if enrichment_info:
+            analysis_data["_enrichment"] = enrichment_info
 
         return analysis_data
+        
     except Exception as e:
-        logger.error(f"[{symbol}] Worker Error: {e}")
+        logger.error(f"[{symbol}] Worker Error: {e}", exc_info=True)
         return {"symbol": symbol, "error": str(e)}
     finally:
-        if db: db.close()
+        if db: 
+            db.close()
 
 def _save_analysis_to_db(db: Session, symbol: str, data: Dict[str, Any], index_name: str):
     try:
@@ -889,12 +970,14 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50", 
         )
         final_score = profile_report.get("final_score", 0)
         meta_scores = analysis_data.get("meta_scores", {})
-        summary_payload = {
-            **profile_report, "score": final_score * 10, "recommendation": profile_report.get("category", "HOLD"),
-            "bull_signal": trade_plan.get("signal", "N/A"), "macro_trend_status": analysis_data.get("macro_trend_status", "N/A"),
-            "macro_close": analysis_data.get("macro_close"), "macro_index_name": index.upper(),
+        summary_context = {
+            "indicators": analysis_data.get("indicators", {}),
+            "trade_recommendation": trade_plan,
+            "profile_report": profile_report,
+            "meta_scores": analysis_data.get("meta_scores", {}),
+            "macro_trend_status": analysis_data.get("macro_trend_status", "N/A")
         }
-        summaries = build_all_summaries(summary_payload)
+        summaries = build_all_summaries(summary_context)
 
         context = {
             "request": request, "symbol": symbol, "current_index": index, "selected_horizon": selected_profile_name,
@@ -908,6 +991,7 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50", 
             "macro_trend_status": analysis_data.get("macro_trend_status", "N/A"), "macro_close": analysis_data.get("macro_close"),
             "reasons": [trade_plan.get("reason", "")], "strategy_report": analysis_data.get("strategy_report", {}),
         }
+        logger.debug(f" context passed to result.html for {symbol} is {context}")
         return templates.TemplateResponse("result.html", context)
     except Exception as e:
         logger.exception(f"Error in analyze_common for {symbol}: {e}")

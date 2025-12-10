@@ -15,9 +15,19 @@ STOCH_THRESHOLDS = {"overbought": 80, "oversold": 20}
 ENABLE_CACHE = False
 ENABLE_CACHE_WARMER = os.getenv("ENABLE_CACHE_WARMER", "false").lower() == "true"
 ENABLE_JSON_ENRICHMENT = os.getenv("ENABLE_JSON_ENRICHMENT", "true").lower() == "true"
-STOCH_THRESHOLDS = {
-    "overbought": 80,
-    "oversold": 20,
+
+ADX_HORIZON_CONFIG = {
+    "intraday": 10,     # Fast
+    "short_term": 14,   # Standard
+    "long_term": 14,
+    "multibagger": 20   # Slow/Smooth
+}
+
+STOCH_HORIZON_CONFIG = {
+    "intraday": {"k": 8, "d": 3, "smooth": 3},   # Faster
+    "short_term": {"k": 14, "d": 3, "smooth": 3}, # Standard
+    "long_term": {"k": 14, "d": 3, "smooth": 3},
+    "multibagger": {"k": 21, "d": 5, "smooth": 5} # Very smooth
 }
 
 # ATR-based stoploss/target multipliers
@@ -616,137 +626,127 @@ SECTOR_PE_AVG = {
     "Industrials": 29.4,
 }
 
+# ============================================================================
+# PRODUCTION-READY HORIZON_PROFILE_MAP
+# Uses Standardized Dynamic Keys + Fixes from Analysis
+# ============================================================================
+
 HORIZON_PROFILE_MAP = {
     "intraday": {
         "metrics": {
-            "vwap_bias": 0.18,
-            "price_action": 0.15,
-            "rsi_slope": 0.12,
-            "vol_spike_ratio": 0.08,
-            "rvol": 0.05,
-            "bb_percent_b": 0.05,
-            "adx": 0.05,
-            "ttm_squeeze": 0.04,
-            "momentum_strength": 0.20,      # composite (signal_engine should compute and add into indicators before scoring)
-            "volatility_quality": 0.15,
+            "ma_fast_slope": 0.15,
+            "rsi_slope": 0.15,
+            "price_action": 0.10,
+            "vwap_bias": 0.15,
+            "vol_spike_ratio": 0.10,
+            "volatility_quality": 0.10,
+            "ma_trend_signal": 0.10,
+            "momentum_strength": 0.10,
+            "ttm_squeeze": 0.05,
         },
         "penalties": {
+            "gap_percent": {"operator": "<", "value": 0.3, "penalty": 0.2},
+            "ma_fast_slope": {"operator": "<", "value": 0, "penalty": 0.5},
             "atr_pct": {"operator": "<", "value": 0.75, "penalty": 0.5},
-            "rvol": {"operator": "<", "value": 0.8, "penalty": 0.3},
-            "bb_width": {"operator": "<", "value": 3.0, "penalty": 0.2},
-            "gap_percent": {"operator": "<", "value": 1.0, "penalty": 0.4},
             "nifty_trend_score": {"operator": "<", "value": 4, "penalty": 0.3},
+            # 🟢 SYNC WITH ENGINE: Penalty for dead stocks (Engine hates low vol)
+            "bb_width": {"operator": "<", "value": 1, "penalty": 0.3} 
         },
         "thresholds": {"buy": 7.5, "hold": 5.5, "sell": 3.5},
     },
 
     "short_term": {
         "metrics": {
-            "trend_strength": 0.20,
-            "momentum_strength": 0.05,
-            "volatility_quality": 0.10,
-            "macd_cross": 0.10,
-            "ema_20_50_cross": 0.08,
-            "price_vs_200dma_pct": 0.05,
-            "psar_trend": 0.05,
-            "ttm_squeeze": 0.05,
-            "quarterly_growth": 0.05,
-            "analyst_rating": 0.04,
-            "fcf_yield": 0.03,
-            "pe_vs_sector": 0.03,
-            "nifty_trend_score": 0.04,
+            "trend_strength": 0.10,
+            "ma_trend_signal": 0.10,
+            "price_vs_primary_trend_pct": 0.10,
+            "ma_fast_slope": 0.05,  # (Note: Double-weighted via trend_strength, acceptable for aggression)
+            "supertrend_signal": 0.10,
+            "momentum_strength": 0.10,
+            "rsi_slope": 0.05,
+            "macd_cross": 0.05,
             "cmf_signal": 0.05,
             "obv_div": 0.05,
-            "rvol": 0.05,
-            "bb_percent_b": 0.05,
-            "ps_ratio": 0.03,
-            "rsi_slope": 0.05,      # Helps detect momentum acceleration
-            "ema_20_slope": 0.05,   # Helps detect trend velocity
+            "volatility_quality": 0.05,
+            # 🟢 SYNC WITH ENGINE: Prevent "Signal Buy -> Plan Reject" on low vol
+            "rvol": 0.05, 
+            "quarterly_growth": 0.05,
+            "analyst_rating": 0.05,
+            "pe_vs_sector": 0.05,
+            "nifty_trend_score": 0.05,
         },
         "penalties": {
             "days_to_earnings": {"operator": "<", "value": 7, "penalty": 1.0},
-            "bb_percent_b": {"operator": ">", "value": 0.95, "penalty": 0.3},
-            "beta": {"operator": ">", "value": 1.8, "penalty": 0.1},
-            "52w_position": {"operator": ">", "value": 85, "penalty": 0.15},
-            "adx": {"operator": "<", "value": 20, "penalty": 0.3},
-            "vol_spike_ratio": {"operator": "<", "value": 1.2, "penalty": 0.2},
-            "price_vs_200dma_pct": {"operator": "<", "value": 0, "penalty": 0.4},
-            "short_interest": {"operator": ">", "value": 10.0, "penalty": 0.2},
+            "price_vs_primary_trend_pct": {"operator": "<", "value": 0, "penalty": 0.5},
+            "ma_fast_slope": {"operator": "<", "value": -5, "penalty": 0.3},
+            # "supertrend_signal": {"operator": "==", "value": "bearish", "penalty": 0.5}, let the entry permission logic handle it The engine already blocks bearish Supertrend in _calculate_execution_levels()
+            # 🟢 SAFETY: Avoid "Fakeouts" common in swing trading
+            "rvol": {"operator": "<", "value": 0.8, "penalty": 0.3} 
         },
         "thresholds": {"buy": 7.0, "hold": 5.5, "sell": 4.0},
     },
 
     "long_term": {
         "metrics": {
-            "roe": 0.08,
+            "ma_trend_signal": 0.15,
+            "ma_fast_slope": 0.10,
+            "price_vs_primary_trend_pct": 0.10,
+            "roe": 0.10,
             "roce": 0.08,
             "roic": 0.08,
-            "net_profit_margin": 0.08,
+            "earnings_stability": 0.08,
             "fcf_yield": 0.08,
-            "eps_growth_5y": 0.08,
-            "fcf_growth_3y": 0.05,
-            "revenue_growth_5y": 0.05,
+            "eps_growth_5y": 0.06,
             "piotroski_f": 0.05,
+            "de_ratio": 0.03,
             "promoter_holding": 0.05,
-            "dividend_yield": 0.05,
-            "dividend_payout": 0.05,
-            "earnings_stability": 0.05,
-            "current_ratio": 0.04,
-            "de_ratio": 0.04,
-            "price_vs_200dma_pct": 0.05,
-            "dma_200_slope": 0.04,
             "rel_strength_nifty": 0.04,
-            "supertrend_signal": 0.03,
+            # 🟢 SYNC WITH STRATEGY ANALYZER: Valuation Check
+            "peg_ratio": 0.05 
         },
         "penalties": {
-            "fcf_yield": {"operator": "<", "value": 2, "penalty": 0.3},
+            "price_vs_primary_trend_pct": {"operator": "<", "value": 0, "penalty": 0.5},
             "roe": {"operator": "<", "value": 10, "penalty": 0.3},
-            "price_vs_200dma_pct": {"operator": "<", "value": 0, "penalty": 0.4},
-            "dividend_payout": {"operator": ">", "value": 80.0, "penalty": 0.3},
-            "beta": {"operator": ">", "value": 1.5, "penalty": 0.15},
+            "fcf_yield": {"operator": "<", "value": 2, "penalty": 0.3},
             "promoter_pledge": {"operator": ">", "value": 15.0, "penalty": 0.2},
-            "ocf_vs_profit": {"operator": "<", "value": 0.8, "penalty": 0.4},
+            # 🟢 FRAUD CHECK: High Profit but No Cash Flow
+            "ocf_vs_profit": {"operator": "<", "value": 0.6, "penalty": 0.5} 
         },
         "thresholds": {"buy": 7.5, "hold": 6.0, "sell": 4.0},
     },
 
     "multibagger": {
         "metrics": {
-            "revenue_growth_5y": 0.12,
+            "ma_trend_signal": 0.10,
+            "ma_fast_slope": 0.10,
+            "price_vs_primary_trend_pct": 0.05,
             "eps_growth_5y": 0.10,
-            "fcf_growth_3y": 0.08,
-            "roic": 0.08,
+            "revenue_growth_5y": 0.10,
+            # 🟢 SYNC WITH CANSLIM STRATEGY: Recent Growth
+            "quarterly_growth": 0.05, 
+            "market_cap_cagr": 0.08,
+            "roic": 0.10,
             "roe": 0.08,
             "peg_ratio": 0.08,
-            "r_d_intensity": 0.08,
-            "market_cap_cagr": 0.06,
+            "r_d_intensity": 0.05,
             "promoter_holding": 0.05,
-            "piotroski_f": 0.05,
-            "earnings_stability": 0.04,  # Prevent over-cyclicals
-            "rel_strength_nifty": 0.04,
-            "mma_12_slope": 0.04,
-            "fundamental_momentum": 0.04,
             "institutional_ownership": 0.03,
-            "quarterly_growth": 0.03,
             "ocf_vs_profit": 0.06,
+            "rel_strength_nifty": 0.05,
         },
         "penalties": {
-            "peg_ratio": {"operator": ">", "value": 2.0, "penalty": 0.3},
-            "fcf_margin": {"operator": "<", "value": 0, "penalty": 0.4},
+            "ma_fast_slope": {"operator": "<", "value": 0, "penalty": 0.5},
+            "peg_ratio": {"operator": ">", "value": 3.0, "penalty": 0.3},
+            "market_cap": {"operator": ">", "value": 1e12, "penalty": 0.5},
             "de_ratio": {"operator": ">", "value": 1.0, "penalty": 0.2},
-            "52w_position": {"operator": ">", "value": 85, "penalty": 0.2},
-            "market_cap": {"operator": ">", "value": 5e11, "penalty": 0.3},
-            "market_cap_floor": {"operator": "<", "value": 5e9, "penalty": 0.3},
             "roe": {"operator": "<", "value": 12, "penalty": 0.2},
-            "rel_strength_nifty": {"operator": "<", "value": 0, "penalty": 0.3},
             "institutional_ownership": {"operator": ">", "value": 85, "penalty": 0.3},
-            "quarterly_growth": {"operator": "<", "value": 3, "penalty": 0.2},
-            "promoter_pledge": {"operator": ">", "value": 10.0, "penalty": 0.3},
+            # 🟢 SAFETY: Governance Risk
+            "promoter_pledge": {"operator": ">", "value": 10.0, "penalty": 0.4} 
         },
         "thresholds": {"buy": 8.0, "hold": 6.5, "sell": 4.5},
     }
 }
-
 HORIZON_FETCH_CONFIG = {
     "intraday": {
         "period": "1mo",   # CHANGED from '5d'. Gives ~500 bars (25 * 20 days). Plenty for EMA200 + Warmup.

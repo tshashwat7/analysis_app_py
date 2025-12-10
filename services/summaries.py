@@ -8,34 +8,88 @@ def _fmt_money(v: Optional[float]) -> str:
     except Exception:
         return "None"
 
+# services/summaries.py
+from typing import Dict, Any, Optional
+
+
+
+def summarize_patterns(indicators: Dict[str, Any]) -> str:
+    """
+    Scans for ALL your patterns (Cup, VCP, etc.) and reports the active one.
+    """
+    active_patterns = []
+    
+    # List of keys from your services/patterns/
+    keys = ["cup_handle", "minervini_stage2", "darvas_box", "bollinger_squeeze", 
+            "flag_pennant", "golden_cross", "three_line_strike"]
+            
+    for k in keys:
+        p = indicators.get(k, {})
+        if p.get("found"):
+            name = k.replace("_", " ").title()
+            meta = p.get("meta", {})
+            desc = f"**{name}**"
+            
+            # Add context based on pattern type
+            if k == "cup_handle":
+                desc += f" (Depth: {meta.get('depth_pct')}%)"
+            elif k == "minervini_stage2":
+                desc += f" (Contraction: {meta.get('tightness')})"
+            elif k == "bollinger_squeeze":
+                desc += " (Volatility Compression)"
+                
+            active_patterns.append(desc)
+            
+    if not active_patterns:
+        return "No classical chart patterns detected currently."
+        
+    return "🚀 **Chart Patterns:** " + ", ".join(active_patterns)
+
+
 def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
-    if not tr:
-        return "No trade recommendation available."
-    rec = (tr.get("recommendation") or "").upper()
-    reason = tr.get("reason") or ""
-    entry = tr.get("entry_price_used")
-    target = tr.get("target_price")
-    sl = tr.get("suggested_sl")
+    """
+    Intelligent Signal Analysis: Explains WHY a trade is valid or blocked.
+    """
+    if not tr: return "No analysis available."
+    
+    signal = tr.get("signal", "N/A")
+    setup = tr.get("setup_type", "Generic").replace("_", " ").title()
+    conf = tr.get("setup_confidence", 0)
+    
+    # 1. POSITIVE SCENARIO (Execute)
+    if "BUY" in signal and "WAIT" not in signal:
+        targets = tr.get("targets", {})
+        t1 = _fmt_money(targets.get("t1"))
+        t2 = _fmt_money(targets.get("t2"))
+        return (
+            f"**Actionable {setup} Detected.** "
+            f"Confidence is high ({conf}%) with a clear path to {t1}. "
+            f"The risk-reward profile supports entry near {_fmt_money(tr.get('entry'))}."
+        )
 
-    if rec in ("BUY", "STRONG BUY"):
-        msg = f"The model suggests a **{rec}**, supported by strong momentum signals."
-    elif rec in ("SELL", "STRONG SELL"):
-        msg = f"The model suggests a **{rec}**, as the long-term trend indicates weakness."
-    else:
-        msg = f"The model gives a **{rec or 'neutral'}** stance, awaiting confirmation."
-
-    if reason:
-        msg += f" Reason: {reason.strip()}."
-
-    if entry:
-        msg += f" Entry zone near {_fmt_money(entry)}."
-    if target:
-        msg += f" Target around {_fmt_money(target)}."
-    if sl:
-        msg += f" Stop-loss near {_fmt_money(sl)}."
-    if not any([entry, target, sl]):
-        msg += " No valid entry, target, or stop levels detected yet."
-    return msg
+    # 2. WATCHLIST SCENARIO (Valid Setup, but Blocked)
+    if "WAIT" in signal or "NA_" in signal:
+        # Decode the blocker from the signal string or debug info
+        reason = tr.get("reason", "conditions not met")
+        
+        if "VOLATILITY" in signal:
+            return (
+                f"**High Quality {setup} Setup identified ({conf}%)**, but volatility is too high. "
+                f"Current ATR indicates chop/whipsaw risk. **Wait for VIX/ATR to cool down** before entering."
+            )
+        if "RESISTANCE" in signal:
+            return (
+                f"**Setup is forming**, but price is blocked by immediate resistance. "
+                f"Do not buy yet. **Wait for a breakout above {tr.get('debug', {}).get('indicators_snapshot', {}).get('price')}** to confirm."
+            )
+        if "ENTRY_PERMISSION" in signal:
+            return (
+                f"**Technically valid {setup}**, but it failed the Entry Gate. "
+                f"Reason: {reason}. Monitor for improved momentum."
+            )
+            
+    # 3. NEGATIVE SCENARIO
+    return f"Current structure is **{setup}** but lacks conviction ({conf}%). {tr.get('reason')}."
 
 def summarize_risk_execution(tr: Dict[str, Any]) -> str:
     rr = tr.get("RR_Ratio")
@@ -71,9 +125,6 @@ def summarize_entry_stop(indicators: Dict[str, Any]) -> str:
     else:
         return f"The stock is volatile (~{atr_str}). A buy signal confirms above {entry_str}. Suggested stop-loss (2×ATR) is {sl_str}."
 
-#
-# --- REPLACE this function in summaries.py ---
-#
 def summarize_market_status(trend: str, close: Any, index: str) -> str:
     trend = trend or "N/A"
     idx = index or "NIFTY50"
@@ -101,40 +152,31 @@ def summarize_market_status(trend: str, close: Any, index: str) -> str:
         msg = f"Market trend for {idx} is neutral with {close_text}."
     return msg
 
-#
-# --- REPLACE this function in summaries.py ---
-#
-def summarize_score_breakdown(final_score: float, meta_scores: Dict[str, float]) -> str:
+def summarize_score_breakdown(final_score: float, meta_scores: Dict[str, float], profile_report: Dict) -> str:
     """
-    Summarizes the stock's archetype based on its meta-scores.
+    Intelligent Attribution: Tells you WHAT is driving the score.
     """
-    try:
-        if not meta_scores:
-            return "Score breakdown is not available."
-
-        # Find the highest and lowest scoring archetypes
-        best_archetype = max(meta_scores, key=meta_scores.get)
-        best_score = meta_scores[best_archetype]
+    drivers = []
+    drags = []
+    
+    # Analyze the metric_details from profile_report
+    details = profile_report.get("metric_details", {})
+    
+    for k, score in details.items():
+        if score >= 9: drivers.append(k.replace("_", " ").title())
+        elif score <= 3: drags.append(k.replace("_", " ").title())
+            
+    msg = f"**Final Score: {final_score}/10.** "
+    
+    if drivers:
+        top_3 = ", ".join(drivers[:3])
+        msg += f"Strength is driven by **{top_3}**. "
+    
+    if drags:
+        top_2 = ", ".join(drags[:2])
+        msg += f"However, **{top_2}** are creating drag."
         
-        worst_archetype = min(meta_scores, key=meta_scores.get)
-        worst_score = meta_scores[worst_archetype]
-
-        msg = f"This stock's **Final Score is {final_score:.1f}/10**. "
-        
-        # Describe the stock based on its strongest and weakest points
-        if best_score >= 7.5:
-            msg += f"Its primary strength is **{best_archetype.title()}** (Score: {best_score:.1f}). "
-        else:
-            msg += "It shows a balanced profile. "
-
-        if worst_score <= 3.0:
-            msg += f"Its main weakness is **{worst_archetype.title()}** (Score: {worst_score:.1f})."
-        
-        return msg
-        
-    except Exception as e:
-        logger.warning(f"Error in summarize_score_breakdown: {e}")
-        return "Could not generate score summary."
+    return msg
 
 def summarize_actionable_risk(indicators: Dict[str, Any]) -> str:
     atr = indicators.get('ATR (14)', {}).get('value') if indicators else None
@@ -164,20 +206,16 @@ def summarize_corporate_actions(actions: list) -> str:
 def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
     indicators = result.get("indicators", {}) or {}
     tr = result.get("trade_recommendation", {}) or {}
-    summaries = {
+    prof = result.get("profile_report", {}) or {}
+    
+    return {
         "trade": summarize_trade_recommendation(tr),
-        "risk": summarize_risk_execution(tr),
-        "entry_stop": summarize_entry_stop(indicators),
-        "market": summarize_market_status(
-            result.get("macro_trend_status"),
-            result.get("macro_close"),
-            result.get("macro_index_name")
-        ),
         "score": summarize_score_breakdown(
-            result.get("profile_report", {}).get("final_score", 0), # Get the real final score
-            result.get("meta_scores", {})                          # Pass the archetype scores
+            prof.get("final_score", 0), 
+            result.get("meta_scores", {}),
+            prof
         ),
-        "actionable_risk": summarize_actionable_risk(indicators),
-        "corporate": summarize_corporate_actions(result.get("corporate_actions") or []),
+        "patterns": summarize_patterns(indicators), # New Summary Field
+        "market": f"Market Trend: {result.get('macro_trend_status', 'Neutral')}",
+        "risk": f"Suggested Stop Loss: {_fmt_money(tr.get('stop_loss'))} ({tr.get('execution_hints', {}).get('risk_note', 'Standard Risk')})"
     }
-    return summaries

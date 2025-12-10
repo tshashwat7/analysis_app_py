@@ -1,11 +1,10 @@
 # seed_backtest_data.py
-import logging
 from services.data_fetch import safe_history
 from services.data_layer import ParquetStore
 
 # Configure logging to see what's happening
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("seeder")
+import logging
+logger = logging.getLogger(__name__)
 
 # 1. The stocks you want to backtest
 TEST_SYMBOLS = [

@@ -330,6 +330,26 @@
 
     </div>
 
+    <div class="card mb-3">
+        <div class="card-header">
+            <h5 class="mb-0">
+                {{ summaries.patterns | safe }} 
+                </h5>
+        </div>
+        
+        <div class="card-body">
+            
+            <div class="alert alert-light border-start border-4 border-primary">
+                <strong>Analysis:</strong> {{ summaries.trade | safe }}
+                </div>
+
+            <div class="alert alert-light border-start border-4 border-success mt-2">
+                <strong>Score Drivers:</strong> {{ summaries.score | safe }}
+                </div>
+
+        </div>
+    </div>
+
     <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0"
       style="border-left-width: 5px !important;">
       <div class="card-body p-0">

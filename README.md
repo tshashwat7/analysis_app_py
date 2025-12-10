@@ -611,4 +611,14 @@ Private project — all rights reserved.
 
 ---
 
-If you need help extending or deploying this project, feel free to reach out!
+Have replaced generic `WAIT` with **specific rejection codes**:
+
+| Old Signal | New Signal | Meaning |
+|------------|------------|---------|
+| `WAIT` | `NA_INVALID_INPUTS` | Price/ATR data missing |
+| `WAIT` | `NA_VOLATILITY_BLOCKED` | Market too chaotic |
+| `WAIT` | `NA_ENTRY_PERMISSION_FAILED` | Setup doesn't meet entry rules |
+| `WAIT` | `NA_LOW_CONFIDENCE` | Below dynamic confidence floor |
+| `WAIT` | `NA_DIVERGENCE_DETECTED` | Bearish divergence warning |
+| `WAIT` | `NA_POOR_VOLUME` | Volume drought detected |
+| `WAIT_LOW_RR` | (Unchanged) | Risk:Reward < 1.5:1 |

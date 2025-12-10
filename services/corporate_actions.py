@@ -27,13 +27,12 @@ import pandas as pd
 # Helpers from your codebase
 from services.data_fetch import _fmt_date, _retry, safe_float
 
-logger = logging.getLogger("corporate_actions")
+logger = logging.getLogger(__name__)
 if not logger.handlers:
     handler = logging.StreamHandler()
     fmt = "[%(asctime)s] [%(levelname)s] corporate_actions: %(message)s"
     handler.setFormatter(logging.Formatter(fmt, "%Y-%m-%d %H:%M:%S"))
     logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
 
 
 # -------------------------------
