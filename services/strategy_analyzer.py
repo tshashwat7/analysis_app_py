@@ -14,6 +14,7 @@ Features:
 
 from typing import Dict, Any, List, Optional
 import math
+from config.constants import MASTER_CONFIG as MASTERCONFIG
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,18 +22,53 @@ logger = logging.getLogger(__name__)
 # -------------------------
 # 1. Configuration (Centralized Tuning)
 # -------------------------
-STRATEGY_CONFIG = {
-    "swing": {"fit_thresh": 50},
-    "day_trading": {"fit_thresh": 60},
-    "trend_following": {"fit_thresh": 60},
-    "position_trading": {"fit_thresh": 65},
-    "momentum": {"fit_thresh": 60},
-    "value": {"fit_thresh": 50},
-    "income": {"fit_thresh": 55},
-    # NEW STRATEGIES
-    "minervini": {"fit_thresh": 70}, # Stricter
-    "canslim": {"fit_thresh": 65}
-}
+def get_default_strategy_config() -> Dict[str, Any]:
+    """
+    Fallback defaults if MASTERCONFIG doesn't have strategy_classification.
+    These match the values from constants.py.
+    """
+    return {
+        'breakout': {
+            'high_vol_threshold': 1.5,
+            'low_vol_threshold': 0.8,
+            'min_confidence': 60,
+        },
+        'accumulation': {
+            'consolidation_days': 5,
+            'volume_ratio': 0.8,
+            'min_confidence': 50,
+        },
+        'pullback': {
+            'max_retracement': 0.5,
+            'trend_confirmation': True,
+            'min_confidence': 55,
+        },
+        # Add any other strategies...
+    }
+
+def get_strategy_config() -> Dict[str, Any]:
+    """
+    ✅ FIXED: Reads strategy classification thresholds from MASTERCONFIG
+    instead of using hardcoded STRATEGY_CONFIG.
+    
+    Reads from: MASTERCONFIG['global']['strategy_classification']
+    """
+
+    
+    try:
+        strategy_cfg = MASTERCONFIG.get('global', {}).get('strategy_classification', {})
+        
+        if not strategy_cfg:
+            logger.warning("No strategy_classification in MASTERCONFIG, using defaults")
+            return get_default_strategy_config()
+        
+        logger.info(f"Loaded strategy_classification from MASTERCONFIG: {list(strategy_cfg.keys())}")
+        return strategy_cfg
+    
+    except Exception as e:
+        logger.error(f"Failed to load strategy_classification: {e}")
+        return get_default_strategy_config()
+
 
 # -------------------------
 # 2. Robust Helpers
@@ -86,7 +122,8 @@ def _norm_score(x: float) -> float:
     return max(0.0, min(100.0, float(x) if x else 0.0))
 
 def _build_result(name, score, reasons, details):
-    thresh = STRATEGY_CONFIG.get(name, {}).get("fit_thresh", 50)
+    strategy_config = get_strategy_config()
+    thresh = strategy_config.get(name, {}).get("fit_thresh", 50)
     final_score = _norm_score(score)
     return {
         "strategy": name,

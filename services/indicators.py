@@ -168,7 +168,7 @@ def compute_adx(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict
         else: score, trend = 10, "Strong Trend"
 
         return {
-            "adx": {"value": round(adx_val, 2), "raw": adx_val, "score": score, "desc": f"adx -> {adx_val:.2f}"},
+            "adx": {"value": round(adx_val, 2), 'length': length,  "raw": adx_val, "score": score, "desc": f"adx -> {adx_val:.2f}"},
             "adx_signal": {"value": trend, "score": score, "desc": f"adx_signal -> {trend}"},
             "di_plus": {"value": round(di_plus, 2) if di_plus else None, "score": 5, "desc": f"di_plus -> {di_plus:.1f}"},
             "di_minus": {"value": round(di_minus, 2) if di_minus else None, "score": 5, "desc": f"di_minus -> {di_minus:.1f}"},
@@ -210,8 +210,8 @@ def compute_stochastic(df: pd.DataFrame, horizon:str = "short_term") -> Dict[str
                 elif k_prev >= d_prev and k_val < d_val: cross_status, cross_score = "Bearish", 0
 
         return {
-            "stoch_k": {"value": round(k_val, 2), "score": score, "desc": f"Stoch({k_len})"},
-            "stoch_d": {"value": round(d_val, 2), "score": score},
+            "stoch_k": {"value": round(k_val, 2), 'length': k_len, "score": score, "desc": f"Stoch({k_len})"},
+            "stoch_d": {"value": round(d_val, 2), 'length': d_len, "score": score, "desc": f"Stoch({d_len})"},
             "stoch_cross": {"value": cross_status, "score": cross_score},
         }
     return _wrap_calc(_inner, "Stochastic")
@@ -1214,7 +1214,8 @@ def compute_indicators(
                 # 1. Detect Patterns
                 # This function internally calls 'detect' on all patterns 
                 # AND calls 'merge_pattern_into_indicators' to update the dict.
-                indicators.update(run_pattern_analysis(df_for_patterns, indicators, horizon=horizon))                
+                patterns = run_pattern_analysis(df_for_patterns, indicators, horizon=horizon)
+                indicators.update(patterns)
             except Exception as e:
                 logger.error(f"[{symbol}] Pattern detection failed for {horizon}: {e}")
 

@@ -73,13 +73,20 @@ class DoubleTopBottom(BasePattern):
                     result["score"] = self._normalize_score(80)
                     result["quality"] = 8.5
                     result["desc"] = "Double Top Breakdown"
-                    
                     height = price1 - neckline
                     target = neckline - height
+                    
+                    # ✅ FIX: Use p1 directly (it's a double top, so bearish)
+                    first_point_index = p1
+                    
                     result["meta"] = {
                         "type": "bearish",
                         "neckline": round(neckline, 2),
-                        "target": round(target, 2)
+                        "target": round(target, 2),
+                        # Age tracking
+                        "age_candles": 60 - first_point_index,
+                        "formation_timestamp": window.index[first_point_index].isoformat(),
+                        "pattern_duration_candles": abs(p2 - p1)  # ✅ FIX: Use p1, p2
                     }
                     return result
 
@@ -108,13 +115,20 @@ class DoubleTopBottom(BasePattern):
                     result["score"] = self._normalize_score(80)
                     result["quality"] = 8.5
                     result["desc"] = "Double Bottom Breakout"
-                    
                     height = neckline - price1
                     target = neckline + height
+                    
+                    # ✅ FIX: Use t1 directly (it's a double bottom, so bullish)
+                    first_point_index = t1
+                    
                     result["meta"] = {
-                        "type": "bullish",
+                        "type": "bullish",  # ✅ FIX: Should be "bullish"
                         "neckline": round(neckline, 2),
-                        "target": round(target, 2)
+                        "target": round(target, 2),
+                        # Age tracking
+                        "age_candles": 60 - first_point_index,
+                        "formation_timestamp": window.index[first_point_index].isoformat(),
+                        "pattern_duration_candles": abs(t2 - t1)  # ✅ FIX: Use t1, t2
                     }
                     return result
 

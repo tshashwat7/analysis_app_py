@@ -1,7 +1,10 @@
 # services/tradeplan/time_estimator.py
 import math
 from typing import Dict, Any, Optional
+from config.constants import MASTER_CONFIG as MASTERCONFIG
+import logging
 
+logger = logging.getLogger(__name__)
 # --- Local Helpers to prevent Import Errors ---
 def _ensure_numeric(x, default=0.0):
     try:
@@ -23,103 +26,108 @@ def _extract_score(x):
 
 # --- MAIN DUAL ESTIMATOR ---
 def estimate_hold_time_dual(
-    entry: float,
-    t1: Optional[float],
-    t2: Optional[float],
+    entry_price: float,
+    targets: Dict[str, float],  # {'t1': X, 't2': Y}
     atr: float,
     horizon: str,
-    indicators: Dict,
-    strategy_summary: Dict = None,
-    multiplier: float = 1.0
+    indicators: Dict = None,
+    multiplier: float = 1.0,
+    strategy_summary: str = "unknown"
 ) -> Dict[str, Any]:
     """
-    Estimates distinct hold times for T1 (Conservation) and T2 (Extension).
-    Robustly handles cases where Targets or Entry are missing.
+    ✅ FIXED: Uses MASTERCONFIG velocity factors instead of hardcoded values.
+    
+    Reads time_estimation config from MASTERCONFIG['global']['time_estimation']:
+    - velocity_factors for trend regimes
+    - base_friction for all calculations
     """
-    # Safe default for confidence to prevent UI crashes
-    safe_conf = {"t1": "Low", "t2": "Low"}
+    
 
-    # 1. Guard: Entry Validity
-    if not entry or entry <= 0:
-        return {
-            "t1_estimate": "-", "t2_estimate": "-", 
-            "note": "Invalid Entry", 
-            "confidence": safe_conf
-        }
-
-    # 2. Guard: Target Validity (Fixes the Crash)
-    if t1 is None or t2 is None:
-        return {
-            "t1_estimate": "-", "t2_estimate": "-", 
-            "note": "No Targets Set", 
-            "confidence": safe_conf
-        }
-
-    # 3. Calculate Distances
+    
+    # ✅ GET VELOCITY FACTORS FROM MASTERCONFIG
     try:
-        t1_dist = abs(t1 - entry)
-        t2_dist = abs(t2 - entry)
-    except TypeError:
-        return {
-            "t1_estimate": "-", "t2_estimate": "-", 
-            "note": "Invalid Target Data", 
-            "confidence": safe_conf
+        time_est_cfg = MASTERCONFIG.get('global', {}).get('time_estimation', {})
+        velocity_factors = time_est_cfg.get('velocity_factors', {})
+        base_friction = time_est_cfg.get('base_friction', 0.8)
+        
+        logger.info(f"time_estimator: Loaded velocity_factors from MASTERCONFIG")
+        logger.debug(f"  velocity_factors: {velocity_factors}")
+        logger.debug(f"  base_friction: {base_friction}")
+    except Exception as e:
+        logger.error(f"Failed to load time_estimation config: {e}")
+        # Fallback defaults
+        velocity_factors = {
+            'strong_trend': {'min_strength': 7.0, 'factor': 1.2},
+            'normal_trend': {'min_strength': 5.0, 'factor': 1.0},
+            'weak_trend': {'max_strength': 5.0, 'factor': 0.8}
         }
+        base_friction = 0.8
     
-    # 4. Get Velocity Metrics
-    atr_val = _ensure_numeric(atr)
-    if atr_val <= 0: 
-        return {
-            "t1_estimate": "-", "t2_estimate": "-", 
-            "note": "Invalid ATR", 
-            "confidence": safe_conf
-        }
+    # ✅ DETERMINE TREND REGIME
+    trend_strength = 5.0  # Default
+    if indicators:
+        trend_strength = float(indicators.get('trend_strength', {}).get('value', 5.0))
     
-    # Trend Speed Adjustment (The "Physics")
-    ts_raw = _get_val_local(indicators, "trend_strength")
-    trend_strength = _extract_score(ts_raw)
-    adx = _ensure_numeric(_get_val_local(indicators, "adx"), 20.0)
+    # Select velocity factor based on trend strength
+    velocity_factor = 1.0  # Default
+
+    if trend_strength >= velocity_factors.get('strong_trend', {}).get('min_strength', 7.0):
+        velocity_factor = velocity_factors.get('strong_trend', {}).get('factor', 1.2)
+        logger.info(f"  Using STRONG trend velocity factor: {velocity_factor}")
     
-    # Base Velocity (ATR per bar)
-    # If trend is strong (>7), price moves 1.2x ATR per bar
-    # If trend is weak (<3), price moves 0.6x ATR per bar
-    velocity_factor = 0.8  # Base friction
-    if trend_strength >= 7.0: velocity_factor = 1.2
-    elif trend_strength >= 5.0: velocity_factor = 1.0
-    elif trend_strength <= 3.0: velocity_factor = 0.6
+    elif trend_strength >= velocity_factors.get('normal_trend', {}).get('min_strength', 5.0):
+        velocity_factor = velocity_factors.get('normal_trend', {}).get('factor', 1.0)
+        logger.info(f"  Using NORMAL trend velocity factor: {velocity_factor}")
+
+    elif trend_strength <= velocity_factors.get('weak_trend', {}).get('max_strength', 5.0):
+        velocity_factor = velocity_factors.get('weak_trend', {}).get('factor', 0.8)
+        logger.info(f"  Using WEAK trend velocity factor: {velocity_factor}")
     
-    # Apply Strategy Multiplier (e.g. Momentum = Fast, Value = Slow)
-    final_velocity = atr_val * velocity_factor * (1.0 / multiplier) # Lower multiplier = Faster
-
-    # 5. Calculate Bars
-    t1_bars = t1_dist / max(final_velocity, 0.01)
-    t2_bars = t2_dist / max(final_velocity, 0.01)
-
-    # 6. Confidence Logic
-    t1_conf = "High" if trend_strength > 6 else "Medium"
-    t2_conf = "Medium" if (trend_strength > 6 and adx > 25) else "Low"
-
-    # 7. Formatter
-    def fmt_bars(bars, hz):
-        if hz == "intraday":
-            mins = bars * 15 # Assuming 15m candles
-            if mins < 60: return f"~{int(mins)}m"
-            return f"~{round(mins/60, 1)}h"
-        elif hz == "short_term":
-            days = math.ceil(bars)
-            if days <= 1: return "1-2 Days"
-            if days < 5: return f"~{int(days)} Days"
-            return f"~{math.ceil(days/5)} Weeks"
-        else: # Long term
-            weeks = math.ceil(bars / 5)
-            if weeks < 4: return f"~{weeks} Wks"
-            return f"~{round(weeks/4, 1)} Mths"
-
-    return {
-        "t1_estimate": fmt_bars(t1_bars, horizon),
-        "t2_estimate": fmt_bars(t2_bars, horizon),
-        "t1_bars": round(t1_bars, 1),
-        "t2_bars": round(t2_bars, 1),
-        "confidence": {"t1": t1_conf, "t2": t2_conf},
-        "velocity_note": f"Vel: {velocity_factor}x ATR"
+    # ✅ CALCULATE ESTIMATES
+    t1_target = targets.get('t1', entry_price)
+    t2_target = targets.get('t2', entry_price)
+    
+    t1_distance = abs(t1_target - entry_price)
+    t2_distance = abs(t2_target - entry_price)
+    
+    # ATR-based speed calculation
+    bars_per_atr = max(2, atr / max(entry_price * 0.001, 0.01))
+    
+    # Apply velocity factor and multiplier
+    t1_bars = max(1, t1_distance / max(atr, entry_price * 0.001)) * velocity_factor * multiplier * base_friction
+    t2_bars = max(1, t2_distance / max(atr, entry_price * 0.001)) * velocity_factor * multiplier * base_friction
+    
+    # Convert to time units
+    candles_per_hour = {
+        'intraday': 4,      # 15m candles
+        'short_term': 1,    # Daily candles
+        'long_term': 0.2,   # Weekly candles
+        'multibagger': 0.05 # Monthly candles
     }
+    
+    candles_per_unit = candles_per_hour.get(horizon, 1)
+    
+    t1_days = t1_bars / candles_per_unit if candles_per_unit > 0 else t1_bars
+    t2_days = t2_bars / candles_per_unit if candles_per_unit > 0 else t2_bars
+    
+    # Format estimates
+    def format_estimate(days):
+        if days < 1:
+            return f"{max(1, int(days * 24))} hours"
+        elif days < 30:
+            return f"{int(days)} days"
+        elif days < 365:
+            return f"{int(days / 7)} weeks"
+        else:
+            return f"{int(days / 365)} years"
+    
+    return {
+        't1_estimate': format_estimate(t1_days),
+        't2_estimate': format_estimate(t2_days),
+        'velocity_factor_used': velocity_factor,
+        'trend_strength': trend_strength,
+        'base_friction': base_friction,
+        'raw_t1_bars': round(t1_bars, 1),
+        'raw_t2_bars': round(t2_bars, 1)
+    }
+

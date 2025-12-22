@@ -70,9 +70,16 @@ class MinerviniVCPPattern(BasePattern):
             result["quality"] = min(qual, 10.0)
             result["score"] = self._normalize_score(qual * 10)
             result["desc"] = "Minervini VCP (Tight)"
+            # VCP contraction started approximately 15 bars ago (last tight period)
+            formation_index = len(df) - 15
+
             result["meta"] = {
                 "tightness": f"{range_recent*100:.1f}%",
-                "vol_dry": (vol_recent < vol_avg)
+                "vol_dry": (vol_recent < vol_avg),
+                # Age tracking
+                "age_candles": len(df) - formation_index,
+                "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
+                "contraction_pct": round(range_recent * 100, 2)
             }
             
         return result

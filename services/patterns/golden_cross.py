@@ -64,7 +64,16 @@ class GoldenDeathCross(BasePattern):
             result["score"] = self._normalize_score(90) # High impact event
             result["quality"] = 9.0
             result["desc"] = "Golden Cross (Bullish Trend Change)"
-            result["meta"] = {"type": "bullish", "ma50": ma50_curr, "ma200": ma200_curr}
+            # Cross happened on last candle (freshly detected)
+            result["meta"] = {
+                "type": "bullish",  # or "bearish"
+                "ma50": ma50_curr,
+                "ma200": ma200_curr,
+                # Age tracking
+                "age_candles": 1,  # Cross is fresh (just detected)
+                "formation_timestamp": df.index[-1].isoformat(),
+                "crossover_fresh": True
+            }
 
         # Death Cross: Prev 50 > Prev 200 AND Curr 50 < Curr 200
         elif ma50_prev > ma200_prev and ma50_curr < ma200_curr:
@@ -72,6 +81,15 @@ class GoldenDeathCross(BasePattern):
             result["score"] = self._normalize_score(90)
             result["quality"] = 9.0
             result["desc"] = "Death Cross (Bearish Trend Change)"
-            result["meta"] = {"type": "bearish", "ma50": ma50_curr, "ma200": ma200_curr}
+            # Cross happened on last candle (freshly detected)
+            result["meta"] = {
+                "type": "bullish",  # or "bearish"
+                "ma50": ma50_curr,
+                "ma200": ma200_curr,
+                # Age tracking
+                "age_candles": 1,  # Cross is fresh (just detected)
+                "formation_timestamp": df.index[-1].isoformat(),
+                "crossover_fresh": True
+            }
 
         return result

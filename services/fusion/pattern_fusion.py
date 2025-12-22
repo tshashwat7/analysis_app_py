@@ -14,7 +14,7 @@ def merge_pattern_into_indicators(indicators: Dict[str, Any], pattern_results: D
         key = f"{alias}_{horizon}" if horizon else alias
         
         # Map pattern output to UI-friendly structure
-        indicators[alias] = {
+        payload = {
             "value": result.get("quality", 0),  # Display value (0-10)
             "raw": result,                      # Full debug data
             "score": result.get("score", 0),    # For weighting
@@ -22,3 +22,6 @@ def merge_pattern_into_indicators(indicators: Dict[str, Any], pattern_results: D
             "alias": key,
             "source": "Pattern"
         }
+        indicators[alias] = payload
+        if horizon:
+            indicators[f"{alias}_{horizon}"] = payload

@@ -74,10 +74,20 @@ class FlagPennantPattern(BasePattern):
                 
             result["quality"] = min(qual, 10.0)
             result["score"] = self._normalize_score(qual * 10)
+            # ✅ ADD PATTERN AGE TRACKING
+            # Calculate formation index (pole started N bars ago)
+            formation_index = len(df) - self.pole_days
+
             result["meta"] = {
                 "pole_gain_pct": round(pole_return * 100, 1),
-                "flag_drift_pct": round(flag_return * 100, 1)
+                "flag_drift_pct": round(flag_return * 100, 1),
+                # 🆕 AGE TRACKING
+                "age_candles": len(df) - formation_index,
+                "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
+                "pole_length": self.pole_days,
+                "flag_length": self.flag_days
             }
+
             
         return result
 

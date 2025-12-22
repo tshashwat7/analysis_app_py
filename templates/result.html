@@ -406,12 +406,12 @@
 
               <div class="text-center border-end pe-3">
                 <div class="exec-label">Target 1</div>
-                <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t1 if tr.targets.t1 else '-' }}</div>
+                <div class="fw-bold text-success">{{ "₹" ~ tr.targets["t1"] if tr.targets.get("t1") else '-' }}</div>
               </div>
 
               <div class="text-center border-end pe-3">
                 <div class="exec-label">Target 2</div>
-                <div class="fw-bold text-success">{{ "₹" ~ tr.targets.t2 if tr.targets.t2 else '-' }}</div>
+                <div class="fw-bold text-success">{{ "₹" ~ tr.targets["t2"] if tr.targets.get("t2") else '-' }}</div>
               </div>
 
               <div class="stat-item">
@@ -494,7 +494,7 @@
       </div>
     </div>
 
-    <div class="card mb-3 p-3 mt-3 shadow-sm border-0">
+<div class="card mb-3 p-3 mt-3 shadow-sm border-0">
       <h5 class="section-title text-uppercase text-secondary small fw-bold border-bottom pb-2">
         <i class="bi bi-radar me-2"></i> Pattern Radar
       </h5>
@@ -526,7 +526,7 @@
           </div>
 
           {% if pat.meta %}
-          <div class="d-flex flex-wrap gap-1 mt-1">
+          <div class="d-flex flex-wrap gap-1 mt-1 mb-2">
             {% for k, v in pat.meta.items() %}
             {% if k not in ['signal', 'type'] %}
             <span class="badge bg-white text-secondary border fw-normal" style="font-size: 0.65rem;">
@@ -536,6 +536,14 @@
             {% endfor %}
           </div>
           {% endif %}
+
+          {% if summaries.pattern_details and key in summaries.pattern_details %}
+          <div class="small text-muted border-top pt-2 mt-1" style="font-size: 0.8rem; background: #fff; padding: 6px; border-radius: 4px;">
+             <div><strong class="text-secondary">What:</strong> {{ summaries.pattern_details[key].what }}</div>
+             <div class="mt-1"><strong class="text-primary">Implies:</strong> {{ summaries.pattern_details[key].implies }}</div>
+          </div>
+          {% endif %}
+          
         </div>
         {% endif %}
         {% endfor %}

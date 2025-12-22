@@ -183,16 +183,31 @@ def _to_float(v: Any, default=None) -> Optional[float]:
     except Exception: return default
 
 def safe_float(v, default=None):
-    if v is None: return default
     try:
-        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return default
+        if v is None or isinstance(v, bool): return default
+        # Handle numpy + python NaN / Inf
+        try:
+            f = float(v)
+            if not math.isfinite(f): return default
+        except Exception: pass
+
         if isinstance(v, (int, float)): return float(v)
-        s = str(v).replace("₹", "").replace(",", "").strip()
-        if s.lower() in ("", "n/a", "na", "none", "nan"): return default
-        if "%" in s: s = s.replace("%", "").strip()
-        if s.endswith("x"): return float(s[:-1])
+
+        s = str(v).replace("₹", "").replace(",", "").strip().lower()
+        if s in ("", "n/a", "na", "none", "nan"):
+            return default
+
+        if "%" in s:
+            return float(s.replace("%", "").strip())
+
+        if s.endswith("x"):
+            return float(s[:-1])
+
         return float(s)
-    except Exception: return default
+
+    except Exception:
+        return default
+
 
 def _safe_float(v): return safe_float(v, default=None)
 

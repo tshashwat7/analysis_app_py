@@ -8,11 +8,10 @@ import math
 import threading
 import concurrent.futures
 import pytz
-import traceback
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Form, Body, Query
+from fastapi import FastAPI, Request, Form, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -21,14 +20,11 @@ from config.logger_config import setup_logger
 logger = setup_logger()
 
 # --- Modular services ---
+from config.market_utils import is_market_open, get_current_ist, get_current_utc,ensure_utc
+from services.patterns.pattern_state_manager import cleanup_old_breakdown_states
+import threading
 from config.constants import ENABLE_CACHE_WARMER, ENABLE_JSON_ENRICHMENT, INDEX_TICKERS
-from services.data_fetch import (
-    safe_history,
-    save_stocks_list,
-    parse_index_csv,
-    get_price_history,
-    fetch_data,
-)
+from services.data_fetch import parse_index_csv
 from services.fundamentals import compute_fundamentals
 from services.indicators import compute_indicators
 from services.signal_engine import (
@@ -46,7 +42,7 @@ from services.signal_engine import (
 from services.corporate_actions import get_corporate_actions
 from services.summaries import build_all_summaries
 from services.metrics_ext import compute_extended_metrics_sync
-from services.flowchart_helper import build_flowchart_payload, df_hash
+from services.flowchart_helper import build_flowchart_payload
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, SignalCache, init_db
 from services.strategy_analyzer import analyze_strategies
@@ -93,6 +89,46 @@ _SHUTDOWN_LOCK = threading.Lock()
 ALL_STOCKS_LIST = None
 ALL_STOCKS_MAP = None
 
+# --- CLEANUP SCHEDULER ---
+# main.py
+
+def run_scheduled_cleanup():
+    """
+    Background thread to clean up stale breakdown states.
+    Runs every 24 hours with proper sleep loop.
+    """
+    # Wait 1 hour before first cleanup
+    time.sleep(3600)
+    
+    while True:
+        try:
+            # Check shutdown flag
+            if _SHUTDOWN_IN_PROGRESS:
+                logger.info("🛑 Cleanup scheduler stopping (shutdown)")
+                break
+            
+            # Run cleanup
+            count = cleanup_old_breakdown_states(days_old=7)
+            if count > 0:
+                logger.info(f"✅ Cleaned up {count} stale breakdown states")
+            else:
+                logger.debug("ℹ️  No stale breakdown states to clean")
+        
+        except Exception as e:
+            logger.error(f"❌ Cleanup job failed: {e}", exc_info=True)
+        
+        # Sleep for 24 hours (with shutdown checks every 5 minutes)
+        for _ in range(288):  # 24 hours = 288 * 5 minutes
+            if _SHUTDOWN_IN_PROGRESS:
+                break
+            time.sleep(300)  # 5 minutes
+
+# START CLEANUP THREAD
+cleanup_thread = threading.Thread(target=run_scheduled_cleanup, daemon=True, name="CleanupScheduler")
+cleanup_thread.start()
+logger.info("✅ Pattern state cleanup scheduler started (runs every 24h)")
+
+# --- EXECUTOR GETTERS WITH SHUTDOWN SAFETY ---
 def get_api_executor():
     if _SHUTDOWN_IN_PROGRESS:
         raise RuntimeError("Server is shutting down")
@@ -138,7 +174,6 @@ async def periodic_warmer():
     """
     # ... (Wait for startup)
     await asyncio.sleep(10)
-    
     # Ensure stocks loaded before warming
     _ensure_stocks_loaded()
     
@@ -147,15 +182,12 @@ async def periodic_warmer():
         if _SHUTDOWN_IN_PROGRESS:
             break
             
-        is_market_hours = False
         try:
-            now = datetime.datetime.now(IST)
-            is_weekend = now.weekday() >= 5
-            hour = now.hour
-            # Market hours (9:00 to 16:00 IST)
-            is_market_hours = (9 <= hour < 16) and (not is_weekend)
-            # Deep warm once a day (configurable hour)
-            is_deep_warm = (hour == WARMER_DEEP_HOUR) and (not is_weekend)
+            is_market_hours = is_market_open()
+            # ✅ For deep warm, check IST hour separately
+            ist_now = get_current_ist()
+            is_deep_warm = (ist_now.hour == WARMER_DEEP_HOUR) and (ist_now.weekday() < 5)
+            
             # Determine symbols to warm
             if is_market_hours:
                 logger.info("[WARMER] Market Open - Warming Top %d", WARMER_TOP_N_DURING_MARKET)
@@ -165,13 +197,12 @@ async def periodic_warmer():
                 if is_deep_warm:
                     logger.info("[WARMER] Deep Warm - All %d symbols", len(ALL_STOCKS_LIST))
                     symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST]
-                    batch_sleep = WARMER_BATCH_SLEEP_OFFPEAK
                 else:
-                    # Off-peak light warm: warm a subset per cycle to avoid constant full re-runs
-                    # We'll cycle through the universe across multiple cycles.
                     logger.info("[WARMER] Off-Peak Cycle")
                     symbols_to_warm = [s[0] for s in ALL_STOCKS_LIST]
-                    batch_sleep = WARMER_BATCH_SLEEP_OFFPEAK
+                
+                batch_sleep = WARMER_BATCH_SLEEP_OFFPEAK
+
             loop = asyncio.get_running_loop()
             # iterate over in batches
             for i in range(0, len(symbols_to_warm), WARMER_BATCH_SIZE):
@@ -467,17 +498,15 @@ def get_cached(symbol: str):
         entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
         if not entry: return None
 
-        # Timezone-Aware TTL Check
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        # ✅ Use utility function
+        now_utc = get_current_utc()
         
-        # Ensure entry.updated_at is aware, if naive assume UTC
-        entry_time = entry.updated_at
-        if entry_time.tzinfo is None:
-            entry_time = entry_time.replace(tzinfo=datetime.timezone.utc)
-            
+        # Ensure entry.updated_at is UTC-aware
+        entry_time = ensure_utc(entry.updated_at)
         age = (now_utc - entry_time).total_seconds()
         
         if age > CACHE_TTL:
+            logger.debug(f"[{symbol}] Cache expired ({age/60:.1f}m old)")
             return None
 
         # Reconstruct the 'Flat' dictionary for the Grid
@@ -541,7 +570,7 @@ def set_cached(symbol: str, value: Dict[str, Any]):
                     stop_loss=_f("stop_loss"),
                     horizon_scores=horizon_data,
                     # Auto-updated by DB default, but explicit doesn't hurt
-                    updated_at=datetime.datetime.now(datetime.timezone.utc),
+                    updated_at=get_current_utc(),
                 )
                 db.add(entry)
             else:
@@ -553,7 +582,7 @@ def set_cached(symbol: str, value: Dict[str, Any]):
                 entry.rr_ratio = _f("rr_ratio")
                 entry.entry_price = _f("entry_trigger")
                 entry.horizon_scores = horizon_data
-                entry.updated_at = datetime.datetime.now(datetime.timezone.utc)
+                entry.updated_at = get_current_utc()
             db.commit()
     except Exception as e:
         logger.error(f"DB Write Error {symbol}: {e}")
@@ -670,6 +699,12 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                     analysis_data["raw_indicators_by_horizon"]
                 )
                 analysis_data["full_report"] = full_report
+
+                # ✅ Log pure profile selection
+                logger.info(
+                    f"[{symbol}] Profile Selection: {full_report.get('best_fit')} "
+                    f"(Pure Score: {full_report.get('best_score'):.2f}/10)"
+                )
                 
                 # Meta scores (baseline: short_term)
                 short_inds = analysis_data["raw_indicators_by_horizon"].get("short_term", {})
@@ -736,28 +771,34 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                     best_horizon, {}
                 ).copy()
                 
-                # ✅ ENSURE COMPOSITES EXIST (Safety Net)
+                # Ensure composites exist
                 if "trend_strength" not in horizon_inds:
                     horizon_inds["trend_strength"] = compute_trend_strength(horizon_inds, best_horizon)
                     horizon_inds["momentum_strength"] = compute_momentum_strength(horizon_inds)
                     horizon_inds["volatility_quality"] = compute_volatility_quality(horizon_inds)
-                    
                     logger.info(f"[{symbol}] Added composites to {best_horizon}")
-                
+
+                # ✅ This now applies ALL execution validation (penalties/gates/enhancements)
                 trade_plan = generate_trade_plan(
                     best_profile_data, 
                     horizon_inds,
                     analysis_data.get("macro_trend_status", "N/A"),
                     horizon=best_horizon, 
                     strategy_report=analysis_data["strategy_report"],
-                    fundamentals=analysis_data["fundamentals"]
+                    fundamentals=analysis_data["fundamentals"],
                 )
                 analysis_data["trade_recommendation"] = trade_plan
+                
+                # ✅ Log trade decision
+                logger.info(
+                    f"[{symbol}] Trade Decision: {trade_plan.get('status')} | "
+                    f"Signal: {trade_plan.get('trade_signal')} | "
+                    f"Confidence Flow: {trade_plan.get('confidence_flow')}"
+                )
 
             except Exception as e:
                 logger.error(f"[{symbol}] Trade Plan Failed: {e}", exc_info=True)
                 analysis_data["error_details"].append(f"Trade Plan Failed: {e}")
-
         # =====================================================================
         # STEP 9: DATABASE PERSISTENCE
         # =====================================================================
@@ -819,7 +860,7 @@ def _save_analysis_to_db(db: Session, symbol: str, data: Dict[str, Any], index_n
         entry_row.entry_price = entry_val
         entry_row.stop_loss = sl_val
         entry_row.horizon_scores = horizon_data
-        entry_row.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        entry_row.updated_at = get_current_utc()
         db.commit()
     except Exception as e:
         logger.error(f"[{symbol}] DB Save Failed: {e}")
@@ -963,11 +1004,14 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50", 
         if not current_horizon_inds: current_horizon_inds = analysis_data.get("indicators", {})
 
         # ... (Prepare standard summaries/scores variables) ...
-        trade_plan = generate_trade_plan(
-            profile_report, current_horizon_inds, analysis_data.get("macro_trend_status", "N/A"),
-            horizon=selected_profile_name, strategy_report=analysis_data.get("strategy_report", {}),
-            fundamentals=analysis_data.get("fundamentals", {})
-        )
+        if analysis_data.get("trade_recommendation", {}) is not None:
+            trade_plan = analysis_data.get("trade_recommendation", {})
+        else:
+            trade_plan = generate_trade_plan(
+                profile_report, current_horizon_inds, analysis_data.get("macro_trend_status", "N/A"),
+                horizon=selected_profile_name, strategy_report=analysis_data.get("strategy_report", {}),
+                fundamentals=analysis_data.get("fundamentals", {}),
+            )
         final_score = profile_report.get("final_score", 0)
         meta_scores = analysis_data.get("meta_scores", {})
         summary_context = {
@@ -1086,7 +1130,69 @@ async def flowchart_payload(symbol: str, index: str = Query("NIFTY50")):
     except Exception as e:
         return {"error": str(e)}
 
+def validate_master_config():
+    """
+    Validates MASTER_CONFIG has required keys.
+    Logs warnings for missing/invalid config.
+    """
+    from config.constants import MASTER_CONFIG
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    errors = []
+    warnings = []
+    
+    # Check global config exists
+    if "global" not in MASTER_CONFIG:
+        errors.append("MASTER_CONFIG['global'] missing")
+        return False
+    
+    cfg_global = MASTER_CONFIG["global"]
+    
+    # Check pattern physics
+    if "pattern_physics" not in cfg_global or not cfg_global["pattern_physics"]:
+        errors.append("pattern_physics missing or empty")
+    else:
+        physics = cfg_global["pattern_physics"]
+        required_patterns = ["darvas_box", "cup_handle", "flag_pennant", "bollinger_squeeze"]
+        for p in required_patterns:
+            if p not in physics:
+                warnings.append(f"pattern_physics.{p} missing")
+    
+    # Check entry rules
+    if "pattern_entry_rules" not in cfg_global or not cfg_global["pattern_entry_rules"]:
+        warnings.append("pattern_entry_rules missing or empty")
+    
+    # Check invalidation rules
+    if "pattern_invalidation" not in cfg_global or not cfg_global["pattern_invalidation"]:
+        warnings.append("pattern_invalidation missing or empty")
+    
+    # Check horizons config
+    if "horizons" not in MASTER_CONFIG:
+        errors.append("MASTER_CONFIG['horizons'] missing")
+    else:
+        required_horizons = ["intraday", "short_term", "long_term"]
+        for h in required_horizons:
+            if h not in MASTER_CONFIG["horizons"]:
+                warnings.append(f"horizons.{h} missing")
+    
+    # Report results
+    if errors:
+        logger.error(f"❌ Config validation FAILED: {', '.join(errors)}")
+        return False
+    
+    if warnings:
+        logger.warning(f"⚠️ Config validation warnings: {', '.join(warnings)}")
+    else:
+        logger.info("✅ Config validation passed")
+    
+    return True
+
 if __name__ == "__main__":
     init_db()
+    if not validate_master_config():
+        print("❌ CRITICAL: Pattern Config validation failed. Check logs.")
+        exit(1)
+    run_scheduled_cleanup()
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)

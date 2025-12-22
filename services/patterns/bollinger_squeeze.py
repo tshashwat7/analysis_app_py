@@ -47,12 +47,30 @@ class BollingerSqueeze(BasePattern):
             result["found"] = True
             result["quality"] = 8.0
             raw_score = 75
-            result["meta"] = {"state": "SQUEEZE_ON", "width": bb_width}
+            estimated_age = 7  # Conservative estimate for squeeze duration
+
+            result["meta"] = {
+                "state": "SQUEEZE_ON",  # or "SQUEEZE_BREAKOUT"
+                "width": bb_width,
+                # Age tracking (estimate - can't determine exact start without history)
+                "age_candles": estimated_age,
+                "formation_timestamp": df.index[-estimated_age].isoformat() if len(df) > estimated_age else None,
+                "estimated_age": True  # Flag that this is an estimate
+            }
 
             if is_breakout:
                 result["quality"] = 10.0
                 raw_score = 95
-                result["meta"]["state"] = "SQUEEZE_BREAKOUT"
+                estimated_age = 7  # Conservative estimate for squeeze duration
+
+                result["meta"] = {
+                    "state": "SQUEEZE_ON",  # or "SQUEEZE_BREAKOUT"
+                    "width": bb_width,
+                    # Age tracking (estimate - can't determine exact start without history)
+                    "age_candles": estimated_age,
+                    "formation_timestamp": df.index[-estimated_age].isoformat() if len(df) > estimated_age else None,
+                    "estimated_age": True  # Flag that this is an estimate
+                }
                 result["desc"] = "Vol Squeeze + Breakout"
             else:
                 result["desc"] = "Volatility Squeeze (Waiting)"

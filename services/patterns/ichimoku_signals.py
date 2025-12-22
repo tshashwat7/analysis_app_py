@@ -117,12 +117,21 @@ class IchimokuSignals(BasePattern):
             if "CROSS" in signal_type: base_score += 10
             
             result["score"] = self._normalize_score(base_score)
+            # Signal is fresh if cross just happened, otherwise established
+            is_fresh_cross = tk_cross_bull or tk_cross_bear
+            signal_age = 1 if is_fresh_cross else 5  # Fresh cross = 1 bar old, established = 5 bars
+
             result["meta"] = {
-                "signal": signal_type,
-                "cloud_top": round(cloud_top, 2),
-                "fresh_cross": tk_cross_bull or tk_cross_bear,
-                "tenkan": round(float(t_curr), 2),
-                "kijun": round(float(k_curr), 2)
+            "signal": signal_type,
+            "cloud_top": round(cloud_top, 2),
+            "cloud_bottom": round(cloud_bottom, 2),
+            "fresh_cross": is_fresh_cross,
+            "tenkan": round(float(t_curr), 2),
+            "kijun": round(float(k_curr), 2),
+            # Age tracking
+            "age_candles": signal_age,
+            "formation_timestamp": df.index[-signal_age].isoformat() if len(df) > signal_age else None,
+            "signal_freshness": "fresh" if is_fresh_cross else "established"
             }
             
         return result

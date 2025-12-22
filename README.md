@@ -10,19 +10,29 @@ The system processes a stock from **Raw OHLCV → Actionable Trade Plan** using 
 
 ## 🚀 Key Differentiators
 
+### **1. Unified Configuration Architecture (MASTER_Config)**
+* **Single Source of Truth:** All horizon-specific parameters (ATR periods, MA windows, SL/TP multipliers) centralized in `constants.py`.
+* **Pattern-Config Injection:** Each pattern receives horizon-aware config (e.g., VCP lookback adapts from 50 days to 50 weeks).
+* **Zero Desync Risk:** Eliminates scattered magic numbers across modules.
+
+### **2. Pattern Lifecycle Management**
+* **Age Tracking:** Every pattern returns `age_candles` and `formation_timestamp` in metadata.
+* **Stateful Invalidation:** Database-backed breakdown tracking (e.g., Darvas box breakdown duration).
+* **Stale Pattern Detection:** Automatic expiry of old formations (prevents trading 30-day-old Cup & Handles).
+
 ### **3. Hybrid Data Architecture**
 * **Polymorphic Indicators:** Automatically switches math based on horizon (e.g., Intraday uses `ATR(10), EMA (20/50/200)`, Short-Term uses `ATR(14), EMA (20/50/200)`, Long-Term uses `ATR(20), WMA (10/40/50)` Multibagger uses `ATR(12)` | MMA (6/12/12)).
 * **3-Tier Caching:** RAM -> Parquet (Data Lake) -> Yahoo Finance.
 * **Zero-Cost Corp Actions:** Scrapes Equitymaster for upcoming dividends/splits to avoid API costs.
 
-### *2. Pattern Recognition Engine (The "Eyes")**
+### *4. Pattern Recognition Engine (The "Eyes")**
 The system includes a dedicated detection layer that identifies 9 specific institutional setups:
 * **Breakout:** Cup & Handle (O'Neil), Darvas Box, Bull Flag/Pennant.
 * **Volatility:** Minervini VCP (Volatility Contraction), Bollinger Squeeze.
 * **Trend:** Golden/Death Cross, Ichimoku Cloud/TK Cross.
 * **Reversal:** Double Top/Bottom, Three-Line Strike.
 
-### *3. Geometric Trade Planning**
+### *5. Geometric Trade Planning**
 It overrides generic ATR targets with **Pattern Geometry**:
 * **Smart Targets:** If a "Cup & Handle" is found, T1 is calculated based on `Rim + 0.618 × Depth`.
 * **Dynamic Stops:** Stops are auto-tuned based on Volatility Personality (Tight for stable stocks, Wide for volatile ones).
@@ -40,6 +50,9 @@ It overrides generic ATR targets with **Pattern Geometry**:
 | **Indicators** | `indicators.py` | Computes 30+ technicals (RSI, MACD, ADX, Supertrend, etc.) per horizon. |
 | **Orchestrator** | `main.py` | FastAPI app. Manages **Smart Index Mapping** and Separate Executors (API vs Compute). |
 | **Pattern Engine** | `services/patterns/` | **Modular Detectors**: `darvas.py`, `cup_handle.py`, `minervini_vcp.py`, etc. |
+| **Pattern State** | `pattern_state_manager.py` | **Lifecycle Tracker**: Monitors pattern age, breakdown states, invalidation logic. |
+| **Config Layer** | `constants.py` (MASTER_CONFIG) | **Centralized Config**: Single source of truth for all horizon-specific parameters. |
+| **Timezone Utils** | `market_utils.py` | **Modular Timezone**: Centralized IST handling, consistent datetime formatting. |
 | **Fusion Layer** | `pattern_fusion.py` | Merges pattern results into the main indicator stream. |
 | **Strategy Core** | `strategy_analyzer.py` | Checks fit for 9 strategies (Minervini, CANSLIM, Swing, Trend, etc.). |
 | **Planning** | `trade_enhancer.py` | **Geometric Logic**: Overrides targets/stops based on detected patterns. |
@@ -66,17 +79,18 @@ The engine processes every stock through this specific pipeline:
 
 ## 📚 Pattern Library (Supported Setups)
 
-| Pattern | Type | Timeframe | Speed Factor |
-|:---|:---|:---|:---|
-| **Minervini VCP** | Volatility Contraction | Swing | **1.8x** (Explosive) |
-| **Cup & Handle** | Accumulation | Long Term | **1.2x** (Measured) |
-| **Darvas Box** | Trend Continuation | Swing | **1.3x** (Fast) |
-| **Bollinger Squeeze** | Volatility Breakout | Intraday/Daily | **1.5x** (Fast) |
-| **Golden Cross** | Regime Change | Long Term | **0.8x** (Slow Grind) |
-| **Double Bottom** | Reversal | Swing | **0.9x** (Structural) |
-| **Three-Line Strike** | Reversal | Short Term | **2.5x** (Violent) |
-| **Flag/Pennant** | Continuation | Swing | **1.4x** (Fast) |
-| **Ichimoku Signal** | Trend Entry | All | **1.1x** (Steady) |
+| Pattern | Type | Timeframe | Speed Factor | Age Tracking |
+|:---|:---|:---|:---|:---|
+| **Minervini VCP** | Volatility Contraction | Swing | **1.8x** (Explosive) | ✅ Contraction start |
+| **Cup & Handle** | Accumulation | Long Term | **1.2x** (Measured) | ✅ Left rim formation |
+| **Darvas Box** | Trend Continuation | Swing | **1.3x** (Fast) | ✅ Box consolidation start |
+| **Bollinger Squeeze** | Volatility Breakout | Intraday/Daily | **1.5x** (Fast) | ⚠️ Estimated (7-day) |
+| **Golden Cross** | Regime Change | Long Term | **0.8x** (Slow Grind) | ✅ Crossover bar |
+| **Double Bottom** | Reversal | Swing | **0.9x** (Structural) | ✅ First trough |
+| **Three-Line Strike** | Reversal | Short Term | **2.5x** (Violent) | ✅ Always fresh (1 bar) |
+| **Flag/Pennant** | Continuation | Swing | **1.4x** (Fast) | ✅ Pole start |
+| **Ichimoku Signal** | Trend Entry | All | **1.1x** (Steady) | ✅ TK cross (fresh=1) |
+
 
 ## 🧬 Strategy Analyzer (The "Why")
 -Evaluates the stock against nine distinct trading styles to determine fit:
@@ -265,6 +279,151 @@ USER INPUT: Stock Symbol (e.g., "TCS.NS")
 USER SEES: Complete institutional-grade analysis
 ---
 
+---
+
+## 🔧 Configuration Architecture
+
+### **MASTER_Config (Centralized Parameters)**
+**Location:** `constants.py`
+
+All horizon-specific parameters are now centralized in a single configuration dictionary:
+MASTER_CONFIG = {
+"intraday": {
+"atr_period": 10,
+"ema_fast": 20,
+"ema_mid": 50,
+"ema_slow": 200,
+"sl_multiplier": 1.5,
+"tp_multiplier": 2.5,
+"min_confidence": 70,
+"pattern_config": {
+"minervini_vcp": {"lookback": 50},
+"darvas_box": {"lookback": 50, "box_length": 5},
+"flag_pennant": {"pole_back": 15, "flag_back": 5}
+}
+},
+"short_term": {...},
+"long_term": {...},
+"multibagger": {...}
+}
+
+
+**Benefits:**
+- ✅ Eliminates hardcoded magic numbers
+- ✅ Enables A/B testing via config swaps
+- ✅ Ensures consistency between indicators and patterns
+- ✅ Horizon-aware pattern detection (e.g., 50 daily bars = 50 weekly bars)
+
+### **Pattern Configuration Injection**
+Each pattern class receives horizon-specific config:
+Pattern initialization
+pattern = MinerviniVCPPattern(
+config=MASTER_CONFIG["short_term"]["pattern_config"]["minervini_vcp"]
+)
+
+Pattern uses config internally
+self.lookback = self.config.get("lookback", 50) # Default fallback
+
+### **Timezone Management (market_utils.py)**
+**Location:** `services/market_utils.py`
+
+Centralized timezone handling ensures consistency:
+
+from services.market_utils import get_current_market_time, format_market_time
+
+Always returns timezone-aware IST datetime
+now = get_current_market_time()
+
+Consistent ISO8601 formatting with timezone
+timestamp = format_market_time(now) # "2025-12-14T12:30:00+05:30"
+
+
+**Core Functions:**
+- `get_market_timezone()` - Returns pytz IST timezone object
+- `get_current_market_time()` - Returns timezone-aware datetime
+- `to_market_time(dt)` - Converts any datetime to IST
+- `format_market_time(dt)` - Formats as ISO8601 with timezone
+- `get_current_market_day()` - Returns weekday name
+
+**Integration Points:**
+- Pattern metadata (`formation_timestamp`)
+- Database models (`created_at`, `updated_at`)
+- Signal engine (market hours detection)
+- State manager (breakdown tracking)
+---
+
+## 🔄 Pattern Lifecycle Management
+
+### **Age Tracking (All Patterns)**
+Every pattern now returns age metadata:
+
+result["meta"] = {
+"age_candles": 15, # Bars since pattern formed
+"formation_timestamp": "2025-12-01T09:15:00+05:30", # ISO8601 with TZ
+"pattern_duration_candles": 10 # Pattern-specific metric
+}
+
+### **Pattern Invalidation (Trade Enhancer)**
+**Location:** `services/tradeplan/trade_enhancer.py` → `check_pattern_invalidation()`
+
+Monitors active patterns for breakdown/failure:
+
+| Pattern | Invalidation Trigger | Action |
+|---------|---------------------|--------|
+| **Darvas Box** | Price < `box_low` | EXIT_IMMEDIATELY |
+| **Cup & Handle** | Price < `handle_low × 0.95` | EXIT_ON_CLOSE |
+| **VCP/Stage 2** | Price < `pivot × 0.92` (8% stop) | EXIT_ON_CLOSE |
+| **Flag/Pennant** | Price < `flag_low` | EXIT_IMMEDIATELY |
+| **Golden Cross** | 50 EMA crosses below 200 EMA | EXIT_ON_CLOSE |
+
+### **Breakdown State Tracking**
+**Location:** `services/patterns/pattern_state_manager.py`
+
+Database-backed state management for pattern invalidation:
+
+**Schema:**
+CREATE TABLE pattern_breakdown_state (
+symbol TEXT,
+pattern_name TEXT,
+horizon TEXT,
+candle_count INTEGER, -- Days below threshold
+price_at_breakdown REAL,
+threshold_level REAL,
+condition TEXT,
+created_at TIMESTAMP,
+updated_at TIMESTAMP,
+PRIMARY KEY (symbol, pattern_name, horizon)
+);
+
+**Core Functions:**
+- `save_breakdown_state()` - Day 1: Pattern breaks key level
+- `update_breakdown_state()` - Day 2+: Increment candle count
+- `get_breakdown_state()` - Retrieve active breakdown tracking
+- `delete_breakdown_state()` - Pattern recovered or invalidated
+
+**Usage Example:**
+Day 1: Price breaks below Darvas box_low
+save_breakdown_state(
+symbol="RELIANCE",
+pattern_name="darvas_box",
+horizon="short_term",
+price=1195.00,
+threshold=1200.00
+)
+
+Day 2: Still below threshold
+new_count = update_breakdown_state("RELIANCE", "darvas_box", "short_term")
+
+If new_count >= 2: Invalidate pattern
+if new_count >= 2:
+delete_breakdown_state("RELIANCE", "darvas_box", "short_term")
+
+# Trigger EXIT signal
+
+### **Automatic Cleanup**
+Background scheduler runs every 24 hours to delete stale breakdown states (>30 days old).
+
+
 ## 💻 Dashboard Features
 
 ### **Index View (`index.html`)**
@@ -357,22 +516,6 @@ The engine processes every stock through this specific pipeline:
 
 ---
 
-## 📚 Pattern Library (Supported Setups)
-
-| Pattern | Logic / Physics | Speed Factor |
-|:---|:---|:---|
-| **Three-Line Strike** | Fast mean reversion spike | **2.5x** (Violent) |
-| **Minervini VCP** | Supply contraction + dry volume | **1.8x** (Explosive) |
-| **Bollinger Squeeze** | Band width compression | **1.5x** (Fast) |
-| **Flag/Pennant** | Target = `Entry + 0.5 × Pole` | **1.4x** (Fast) |
-| **Darvas Box** | Target = `Top + Box Height` | **1.3x** (Fast) |
-| **Cup & Handle** | Target = `Rim + 0.618 × Depth` | **1.2x** (Measured) |
-| **Ichimoku Signal** | Cloud Breakout + TK Cross | **1.1x** (Steady) |
-| **Double Bottom** | Target = `Neckline + Height` | **0.9x** (Structural) |
-| **Golden Cross** | 50 MA > 200 MA (Structural) | **0.8x** (Slow Grind) |
-
----
-
 ## 🖥️ Dashboard & Features
 
 ### **Index View (Discovery)**
@@ -416,6 +559,11 @@ The engine processes every stock through this specific pipeline:
 │
 ├── services/
 │   ├── patterns/              # The "Eyes" (Cup, VCP, Darvas...)
+│   │   ├── base.py            # Base pattern class
+│   │   ├── pattern_state_manager.py  # Breakdown tracking
+│   │   ├── darvas.py
+│   │   ├── cup_handle.py
+│   │   └── ...            
 │   ├── analyzers/             # The "Brain" (Strategy, Patterns)
 │   ├── tradeplan/             # The "Planner" (Enhancer, Estimator)
 │   ├── fusion/                # Merges Patterns into Indicators
@@ -429,7 +577,10 @@ The engine processes every stock through this specific pipeline:
 │   ├── summaries.py
 │   └── metrics_ext.py
 │
-├── constants.py
+├── config
+│   ├── constants.py        # master config
+│   ├── market_utils.py        # Timezone utilities 
+│   ├── logger_config.py        # modular logging  
 ├── main.py                     # FastAPI Orchestrator
 ├── templates/                  # Jinja2 Dashboards
 │   ├── index.html

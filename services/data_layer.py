@@ -5,6 +5,7 @@ import pandas as pd
 import polars as pl
 from pathlib import Path
 from datetime import datetime, timezone
+from config.market_utils import ensure_utc, get_current_utc
 
 logger = logging.getLogger(__name__)
 
@@ -66,13 +67,14 @@ class ParquetStore:
         
         if not path.exists(): 
             return None
-            
-        # 1. Stale Check
+
+        # 1. Stale Check ✅ Freshness check with explicit UTC
         if max_age_minutes:
             try:
                 mtime = path.stat().st_mtime
-                # Use UTC for freshness comparison
-                age_mins = (datetime.now(timezone.utc).timestamp() - mtime) / 60
+                mtime_utc = datetime.fromtimestamp(mtime, tz=timezone.utc)
+                age_mins = (get_current_utc() - mtime_utc).total_seconds() / 60
+                
                 if age_mins > max_age_minutes:
                     return None
             except FileNotFoundError:
@@ -98,12 +100,10 @@ class ParquetStore:
                 elif "Datetime" in pdf.columns: pdf.set_index("Datetime", inplace=True)
                 elif "index" in pdf.columns: pdf.set_index("index", inplace=True)
                 
-                # Improvement B: Enforce UTC Timezone on Index
+                # ✅ Force UTC awareness on index
                 if not isinstance(pdf.index, pd.DatetimeIndex):
-                    pdf.index = pd.to_datetime(pdf.index)
-                
-                # Standardize to UTC to match datetime.now(timezone.utc)
-                if pdf.index.tz is None:
+                    pdf.index = pd.to_datetime(pdf.index, utc=True)
+                elif pdf.index.tz is None:
                     pdf.index = pdf.index.tz_localize("UTC")
                 else:
                     pdf.index = pdf.index.tz_convert("UTC")

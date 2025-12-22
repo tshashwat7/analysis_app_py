@@ -122,12 +122,16 @@ class CupHandlePattern(BasePattern):
             result["meta"] = {
                 "depth_pct": round(cup_depth_pct * 100, 1),
                 "rim_level": round(rim_right_val, 2),
-                # Plotting Coordinates (Relative to provided DF window)
+                # Plotting Coordinates
                 "coords": {
                     "left_rim_idx": int(rim_left_idx),
                     "bottom_idx": int(cup_bottom_idx),
                     "right_rim_idx": int(rim_right_idx)
-                }
+                },
+                # Age tracking
+                "age_candles": 60 - rim_left_idx,  # ✅ This is correct (relative age)
+                "formation_timestamp": window.index[rim_left_idx].isoformat(),
+                "cup_duration_candles": rim_right_idx - rim_left_idx
             }
             
         return result

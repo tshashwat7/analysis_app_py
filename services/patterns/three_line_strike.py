@@ -47,7 +47,18 @@ class ThreeLineStrikePattern(BasePattern):
                 result["score"] = 90 # High prob pattern
                 result["quality"] = 9.0
                 result["desc"] = "Bullish 3-Line Strike"
-                result["meta"] = {"type": "Bullish"}
+                # ADD PATTERN AGE TRACKING
+                # Strike formed on last candle (index -1)
+                formation_index = len(df) - 1
+
+                result["meta"] = {
+                    "type": "Bullish",  # or "Bearish"
+                    # 🆕 AGE TRACKING
+                    "age_candles": 1,  # Strike is always 1 bar old (freshest pattern)
+                    "formation_timestamp": df.index[-1].isoformat(),
+                    "strike_candle_body_pct": abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1)
+                }
+
                 return result
 
         # CHECK BEARISH STRIKE
@@ -66,6 +77,15 @@ class ThreeLineStrikePattern(BasePattern):
                 result["score"] = 90
                 result["quality"] = 9.0
                 result["desc"] = "Bearish 3-Line Strike"
-                result["meta"] = {"type": "Bearish"}
+                
+                # ✅ ADD PATTERN AGE TRACKING
+                result["meta"] = {
+                    "type": "Bearish",
+                    # Strike formed on last candle
+                    "age_candles": 1,  # Always fresh (just formed)
+                    "formation_timestamp": df.index[-1].isoformat(),
+                    "strike_candle_body_pct": round(abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1), 3)
+                }
+                return result
         
         return result

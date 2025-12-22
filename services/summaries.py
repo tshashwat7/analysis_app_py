@@ -2,16 +2,65 @@
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+# ==========================================
+# 🧠 KNOWLEDGE BASE (Educational Content)
+# ==========================================
+
+PATTERN_LIBRARY = {
+    "cup_handle": {
+        "what": "A bullish continuation pattern resembling a tea cup.",
+        "implies": "The stock has consolidated gains and shaken out weak hands in the 'handle'. A breakout implies the prior uptrend is resuming with renewed energy."
+    },
+    "minervini_stage2": {
+        "what": "Volatility Contraction Pattern (VCP) defined by Mark Minervini.",
+        "implies": "Supply is drying up as institutions accumulate. Successive contractions in volatility indicate the stock is primed for an explosive breakout."
+    },
+    "darvas_box": {
+        "what": "A momentum strategy tracking stocks making new highs in a 'box' range.",
+        "implies": "The stock is in a strong uptrend, stepping up like a staircase. A breakout from the current box signals a new leg of momentum."
+    },
+    "bollinger_squeeze": {
+        "what": "A period of extremely low volatility where Bollinger Bands narrow.",
+        "implies": "The 'calm before the storm'. Energy is building up, and a violent expansion in price (breakout) is imminent."
+    },
+    "flag_pennant": {
+        "what": "A brief pause or consolidation in a strong vertical trend.",
+        "implies": "The market is taking a breath before continuing the sprint. A breakout confirms the next leg up."
+    },
+    "golden_cross": {
+        "what": "The 50-day Moving Average crosses above the 200-day Moving Average.",
+        "implies": "A major long-term trend shift from bearish to bullish. Often signals the start of a sustained bull market."
+    },
+    "three_line_strike": {
+        "what": "A sharp 4-candle reversal pattern.",
+        "implies": "Trapped traders are forced to cover positions, creating a powerful snap-back reversal in the opposite direction."
+    },
+    "double_top_bottom": {
+        "what": "Price tests a key level twice and reverses (W or M shape).",
+        "implies": "A strong rejection of a price level. Double Bottom (W) indicates a support floor; Double Top (M) indicates a resistance ceiling."
+    },
+    "ichimoku_signals": {
+        "what": "A comprehensive system showing support, resistance, and trend.",
+        "implies": "Price is interacting with the 'Cloud'. A breakout above the cloud signals clear skies (uptrend) ahead."
+    }
+}
+
+STRATEGY_LIBRARY = {
+    "swing": "Capitalizes on short-term price swings (3-10 days). We look for oversold dips in uptrends or mean-reversion setups.",
+    "day_trading": "Focuses on intraday volatility and liquidity. We look for explosive volume and range expansion for quick profits.",
+    "trend_following": "The 'Big Money' approach. We ignore small fluctuations and ride the major Moving Averages (50/200) for months.",
+    "momentum": "Buying strength. We look for stocks hitting new highs with high Relative Strength (RSI) and volume surges.",
+    "value": "Buying $1 for $0.50. We look for low P/E, P/B, and strong fundamentals that the market has undervalued.",
+    "position_trading": "Long-term wealth building. We combine strong fundamentals (EPS growth) with a bullish primary trend.",
+    "minervini": "Specific Growth + Momentum strategy. We look for VCP patterns in stocks with high earnings acceleration.",
+    "canslim": "William O'Neil's strategy. We combine Earnings (C,A), New Highs (N), and Market Leaders (L)."
+}
+
 def _fmt_money(v: Optional[float]) -> str:
     try:
         return f"₹{float(v):,.2f}"
     except Exception:
         return "None"
-
-# services/summaries.py
-from typing import Dict, Any, Optional
-
-
 
 def summarize_patterns(indicators: Dict[str, Any]) -> str:
     """
@@ -19,7 +68,6 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
     """
     active_patterns = []
     
-    # List of keys from your services/patterns/
     keys = ["cup_handle", "minervini_stage2", "darvas_box", "bollinger_squeeze", 
             "flag_pennant", "golden_cross", "three_line_strike"]
             
@@ -30,7 +78,6 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
             meta = p.get("meta", {})
             desc = f"**{name}**"
             
-            # Add context based on pattern type
             if k == "cup_handle":
                 desc += f" (Depth: {meta.get('depth_pct')}%)"
             elif k == "minervini_stage2":
@@ -45,11 +92,18 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
         
     return "🚀 **Chart Patterns:** " + ", ".join(active_patterns)
 
+def get_active_pattern_details(indicators: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Returns a dictionary of definition/implication for every ACTIVE pattern.
+    """
+    details = {}
+    for key, info in PATTERN_LIBRARY.items():
+        p = indicators.get(key)
+        if p and isinstance(p, dict) and p.get("found"):
+            details[key] = info
+    return details
 
 def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
-    """
-    Intelligent Signal Analysis: Explains WHY a trade is valid or blocked.
-    """
     if not tr: return "No analysis available."
     
     signal = tr.get("signal", "N/A")
@@ -207,6 +261,12 @@ def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
     indicators = result.get("indicators", {}) or {}
     tr = result.get("trade_recommendation", {}) or {}
     prof = result.get("profile_report", {}) or {}
+    strat_report = result.get("strategy_report", {}) or {}
+    
+    # Get Best Strategy Name safely
+    best_strat = "unknown"
+    if strat_report.get("summary"):
+        best_strat = strat_report["summary"].get("best_strategy", "unknown")
     
     return {
         "trade": summarize_trade_recommendation(tr),
@@ -215,7 +275,9 @@ def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
             result.get("meta_scores", {}),
             prof
         ),
-        "patterns": summarize_patterns(indicators), # New Summary Field
+        "patterns": summarize_patterns(indicators),
+        "pattern_details": get_active_pattern_details(indicators), # <--- NEW
+        "strategy_details": STRATEGY_LIBRARY.get(best_strat.lower(), "Standard strategy analysis."), # <--- NEW
         "market": f"Market Trend: {result.get('macro_trend_status', 'Neutral')}",
         "risk": f"Suggested Stop Loss: {_fmt_money(tr.get('stop_loss'))} ({tr.get('execution_hints', {}).get('risk_note', 'Standard Risk')})"
     }

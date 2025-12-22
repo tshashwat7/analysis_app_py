@@ -66,12 +66,18 @@ class DarvasBoxPattern(BasePattern):
             
             result["quality"] = min(qual, 10.0)
             result["score"] = self._normalize_score(qual * 10)
+            formation_index = len(df) - (self.box_length * 2)  # Box started 2x box_length ago
             result["meta"] = {
                 "box_high": round(box_high, 2),
                 "box_low": round(box_low, 2),
-                "breakout_vol": bool(has_volume)
+                "breakout_vol": bool(has_volume),
+                # Age tracking
+                "age_candles": len(df) - formation_index,
+                "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
+                "box_duration_candles": self.box_length * 2
             }
             result["desc"] = "Darvas Box Breakout"
+            return result
 
         return result
 

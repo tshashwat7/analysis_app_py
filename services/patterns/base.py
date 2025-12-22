@@ -18,8 +18,35 @@ class BasePattern(ABC):
         self.coerce_numeric = self.config.get("coerce_numeric", True)
         self.numeric_cols = self.config.get("numeric_cols", ["Open", "High", "Low", "Close", "Volume"])
 
+    def _is_horizon_supported(self, horizon: str) -> bool:
+        """
+        Guard to prevent patterns from running on unsupported horizons.
+        """
+        if not horizon:
+            return True
+        if not hasattr(self, "horizons_supported"):
+            return True
+        return horizon in self.horizons_supported
+
     @abstractmethod
     def detect(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
+        # --------------------------------------------------
+        # 🔒 HORIZON GUARD (NEW)
+        """
+            This ensures:
+            Intraday doesn’t accidentally pick long-term patterns
+            Multibagger patterns don’t pollute intraday scores
+            Strategy analyzer sees only valid pattern signals
+        """
+        # --------------------------------------------------
+        if not self._is_horizon_supported(horizon):
+            return {
+                "found": False,
+                "score": 0,
+                "quality": 0,
+                "meta": {},
+                "desc": f"{self.alias.replace('_', ' ').title()} not applicable for {horizon}"
+            }
         if getattr(self, "coerce_numeric", False) and df is not None:
             df = self.ensure_numeric_df(df)
         """

@@ -1,11 +1,15 @@
 # services/db.py
 
 import os
-import datetime
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, Text, JSON, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import text
+
+def utc_now():
+    """Returns timezone-aware UTC datetime."""
+    return datetime.now(timezone.utc)
 
 # 1. Setup SQLite
 DB_DIR = "data"
@@ -64,11 +68,18 @@ class SignalCache(Base):
     
     # Timezone-aware UTC timestamp
     updated_at = Column(
-        DateTime, 
-        server_default=text("CURRENT_TIMESTAMP"),
-        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+        DateTime,  # ✅ No timezone=True (SQLite doesn't support it)
+        default=utc_now,
+        onupdate=utc_now,
         index=True
     )
+
+# Force timezone awareness on READ
+@event.listens_for(SignalCache, 'load')
+def receive_load(target, context):
+    """Ensure all datetime fields are timezone-aware (UTC) after loading."""
+    if target.updated_at and target.updated_at.tzinfo is None:
+        target.updated_at = target.updated_at.replace(tzinfo=timezone.utc)
 
 class TradeLog(Base):
     __tablename__ = "trade_logs"
@@ -88,11 +99,42 @@ class FundamentalCache(Base):
     data = Column(JSON) 
     updated_at = Column(
         DateTime, 
-        server_default=text("CURRENT_TIMESTAMP"),
-        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+        default=utc_now,  # Use the helper function you defined
+        onupdate=utc_now,
         index=True
     )
+
+# services/db.py
+
+class PatternBreakdownState(Base):
+    """Tracks pattern breakdown progress for duration candle logic."""
+    __tablename__ = "pattern_breakdown_state"
     
+    symbol = Column(String, primary_key=True, index=True)
+    pattern_name = Column(String, primary_key=True, index=True)
+    horizon = Column(String, primary_key=True, index=True)
+    
+    # ✅ No timezone=True for SQLite
+    started_at = Column(DateTime, nullable=False)
+    last_updated = Column(DateTime, nullable=False)
+    candle_count = Column(Integer, default=1)
+    
+    price_at_breakdown = Column(Float, nullable=True)
+    threshold_level = Column(Float, nullable=True)
+    condition = Column(String, nullable=True)
+    meta = Column(JSON, nullable=True)
+
+# ✅ Add event listener for timezone enforcement
+@event.listens_for(PatternBreakdownState, 'load')
+def enforce_timezone_on_pattern_state(target, context):
+    """Ensure all datetime fields are timezone-aware (UTC) after loading."""
+    if target.started_at and target.started_at.tzinfo is None:
+        target.started_at = target.started_at.replace(tzinfo=timezone.utc)
+    
+    if target.last_updated and target.last_updated.tzinfo is None:
+        target.last_updated = target.last_updated.replace(tzinfo=timezone.utc)
+
+
 # 3. Create Tables
 def init_db():
     # [FIX] Use Base.metadata directly. No invalid import.

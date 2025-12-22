@@ -1,6 +1,6 @@
 # services/signal_engine.py
 """
-Signal Engine v11.8 (FINAL PRODUCTION RELEASE)
+Signal Engine v12.0 (FINAL PRODUCTION RELEASE)
 Complete Integration: v11.2 Features + v11.5 Hardening + v10.6 Compatibility
 
 VERSION HISTORY:
@@ -37,7 +37,7 @@ v11.5 Hardening (3):
 ✅ Hardening #2: Input validation & clamping
 ✅ Hardening #3: Indicator caching
 
-PATTERN INTEGRATION v11.8 (new)
+PATTERN INTEGRATION v12.0 (new)
 =========================
 system already detects 9+ patterns via services/patterns/
 This patch leverages those pre-computed patterns in setup classification using trade enhancer.
@@ -71,47 +71,28 @@ from services.data_fetch import _safe_float
 from config.constants import (
     HORIZON_PROFILE_MAP, VALUE_WEIGHTS, GROWTH_WEIGHTS, QUALITY_WEIGHTS,
     MOMENTUM_WEIGHTS, ENABLE_VOLATILITY_QUALITY, MACD_MOMENTUM_THRESH,
-    RSI_SLOPE_THRESH, TREND_THRESH, VOL_BANDS, ATR_MULTIPLIERS,
+    RSI_SLOPE_THRESH, TREND_THRESH, VOL_BANDS, ATR_MULTIPLIERS,RVOL_SURGE_THRESHOLD, RVOL_DROUGHT_THRESHOLD, VOLUME_CLIMAX_SPIKE, ATR_SL_MAX_PERCENT, 
+    ATR_SL_MIN_PERCENT, STRATEGY_TIME_MULTIPLIERS, TREND_WEIGHTS, RR_REGIME_ADJUSTMENTS
 )
 
 from services.strategy_analyzer import _get_ma_keys
 from services.tradeplan.time_estimator import estimate_hold_time_dual
 from services.tradeplan.trade_enhancer import enhance_plan_with_patterns
+from services.config_helpers import (
+    get_ma_keys_config,
+    apply_horizon_penalties,
+    apply_horizon_enhancements,
+    validate_horizon_entry_gates
+)
 
 logger = logging.getLogger(__name__)
 MISSING_KEYS = set()
 
-# CONSTANTS
-MIN_RR_RATIO = 1.5
-VOL_QUAL_MINS = {"MOMENTUM_BREAKOUT": 4.0, "MOMENTUM_BREAKDOWN": 4.0, "VOLATILITY_SQUEEZE": 7.5,
-                 "TREND_PULLBACK": 5.0, "TREND_FOLLOWING": 5.5, "QUALITY_ACCUMULATION": 5.5,
-                 "BEAR_PULLBACK": 5.0, "DEEP_PULLBACK": 4.5}
-
-STRATEGY_TIME_MULTIPLIERS = {'momentum': 0.7, 'day_trading': 0.5, 'swing': 1.0,
-                             'trend_following': 1.2, 'position_trading': 1.5, 'value': 1.5,
-                             'income': 2.0, 'unknown': 1.0}
-
-ATR_SL_MAX_PERCENT, ATR_SL_MIN_PERCENT = 0.03, 0.01
-RVOL_SURGE_THRESHOLD, RVOL_DROUGHT_THRESHOLD, VOLUME_CLIMAX_SPIKE = 3.0, 0.7, 2.0
-TREND_WEIGHTS = {'primary': 0.50, 'secondary': 0.30, 'acceleration': 0.20}
-RR_REGIME_ADJUSTMENTS = {'strong_trend': {'t1_mult': 2.0, 't2_mult': 4.0},
-                         'normal_trend': {'t1_mult': 1.5, 't2_mult': 3.0},
-                         'weak_trend': {'t1_mult': 1.2, 't2_mult': 2.5}}
 # -------------------------
 # Dynamic MA Configuration
 # -----------------------
-MA_KEYS_BY_HORIZON = {
-    "intraday": {"fast": "ema_20", "mid": "ema_50", "slow": "ema_200"},
-    "short_term": {"fast": "ema_20", "mid": "ema_50", "slow": "ema_200"},
-    "long_term": {"fast": "wma_10", "mid": "wma_40", "slow": "wma_50"},
-    "multibagger": {"fast": "mma_6", "mid": "mma_12", "slow": "mma_12"}
-}
-HORIZON_T2_CAPS = {
-    "intraday": 0.04,     # Max 4% expansion
-    "short_term": 0.10,   # Max 10% expansion
-    "long_term": 0.20,    # Max 20% expansion
-    "multibagger": 1.00   # Uncapped (100%)
-}
+
+
 # HELPERS
 def ensure_numeric(x, default=0.0):
     try:
@@ -1053,98 +1034,103 @@ def check_entry_permission(setup_type, setup_conf, indicators, horizon="short_te
     return (False, [f"Unknown setup: {setup_type}"])
 
 # SETUP CLASSIFICATION (v11.2 COMPLETE)
-def classify_setup(indicators: Dict, horizon: str = "short_term") -> str:
-    
-    # Pattern Priority Override: High-quality patterns get their own setup type
-    pattern_priority = [
-        ("darvas_box", "PATTERN_DARVAS_BREAKOUT", 85),
-        ("minervini_stage2", "PATTERN_VCP_BREAKOUT", 85),
-        ("cup_handle", "PATTERN_CUP_BREAKOUT", 80),
-        ("three_line_strike", "PATTERN_STRIKE_REVERSAL", 80),
-        ("golden_cross", "PATTERN_GOLDEN_CROSS", 75)
-    ]
-    
-    for pattern_key, setup_name, min_score in pattern_priority:
-        p = indicators.get(pattern_key)
-        if p and isinstance(p, dict) and p.get("found"):
-            score = p.get("score", 0)
-            if score >= min_score:
-                return setup_name
-            
-    trend_score, trend_dir = calculate_trend_score(indicators, horizon)
-    reversals = detect_reversal_setups(indicators, horizon)
-    ranges = detect_range_setups(indicators)
-    
-    close = ensure_numeric(_get_val(indicators, "price"))
-    ma_keys = _get_ma_keys(horizon)
-    ma_fast = ensure_numeric(_get_val(indicators, ma_keys["fast"]))
-    
-    bb_upper = ensure_numeric(_get_val(indicators, "bb_high"))
-    bb_lower = ensure_numeric(_get_val(indicators, "bb_low")) # Needed for Shorts
-    
-    rsi = ensure_numeric(_get_val(indicators, "rsi"))
-    rvol = ensure_numeric(_get_val(indicators, "rvol"))
-    vol_qual = ensure_numeric(_get_val(indicators, "volatility_quality"), 5.0)
-    wick_ratio = ensure_numeric(_get_val(indicators, "wick_rejection"), default=0.0)
-    
-    candidates = []
-    
-    # 1. LONG Breakouts (Wick Guard)
-    if bb_upper > 0 and close >= bb_upper * 0.98 and rsi > 60 and rvol > 1.5:
-        if wick_ratio < 2.5 and vol_qual >= VOL_QUAL_MINS["MOMENTUM_BREAKOUT"]:
-            candidates.append((100, "MOMENTUM_BREAKOUT"))
+def classify_setup(
+    indicators: Dict,
+    fundamentals: Dict,
+    horizon: str = "short_term",
+) -> str:
+    """
+    MASTER_CONFIG-aware setup classification.
+    Uses patterns, trend score, reversals, ranges, breakout/pullback/squeeze logic.
+    """
+    try:
+        # Pattern priority override
+        pattern_priority = [
+            ("darvas_box", "PATTERN_DARVAS_BREAKOUT", 85),
+            ("minervini_stage2", "PATTERN_VCP_BREAKOUT", 85),
+            ("cup_handle", "PATTERN_CUP_BREAKOUT", 80),
+            ("three_line_strike", "PATTERN_STRIKE_REVERSAL", 80),
+            ("golden_cross", "PATTERN_GOLDEN_CROSS", 75),
+        ]
+        for pattern_key, setup_name, min_score in pattern_priority:
+            p = indicators.get(pattern_key)
+            if p and isinstance(p, dict) and p.get("found"):
+                score = ensure_numeric(p.get("score"), 0.0)
+                if score >= min_score:
+                    return setup_name
 
-    # 2. SHORT Breakdowns (RESTORED)
-    if bb_lower > 0 and close <= bb_lower * 1.02 and rsi < 40 and rvol > 1.5:
-         if vol_qual >= VOL_QUAL_MINS["MOMENTUM_BREAKDOWN"]:
-             candidates.append((100, "MOMENTUM_BREAKDOWN"))
-    
-    # 3. Squeeze
-    if _is_squeeze_on(indicators) and vol_qual >= VOL_QUAL_MINS["VOLATILITY_SQUEEZE"]:
-        candidates.append((95, "VOLATILITY_SQUEEZE"))
-    
-    # 4. Pullbacks (Long AND Short)
-    if trend_dir == 'up' and ma_fast and abs(close - ma_fast)/ma_fast < 0.05 and rsi > 50:
-        candidates.append((75, "TREND_PULLBACK"))
-    
-    # Bear Pullback
-    if trend_dir == 'down' and ma_fast and abs(close - ma_fast)/ma_fast < 0.05 and rsi < 50:
-        candidates.append((75, "BEAR_PULLBACK"))
-        
-    # TREND FOLLOWING (With Strong Trend Drift Logic)
-    macd_hist = ensure_numeric(_get_val(indicators, "macd_histogram"))
-    ts_val = ensure_numeric(_get_val(indicators, "trend_strength"))
+        # Trend / reversals / ranges
+        trend_score, trend_dir = calculate_trend_score(indicators, horizon)
+        reversals = detect_reversal_setups(indicators, horizon)
+        ranges = detect_range_setups(indicators)
 
-    # === BULLISH TREND FOLLOWING ===
-    if trend_dir == 'up':
-        # Condition A: Classic Momentum Alignment (RSI + MACD)
-        if rsi >= 55 and macd_hist > 0:
-            candidates.append((40, "TREND_FOLLOWING"))
-        # Condition B: Strong Trend Drift (Trend Strength >= 7.0)
-        elif ts_val >= 7.0:
-            candidates.append((35, "TREND_FOLLOWING"))
-        # Condition C: Medium Trend with Partial Confirmation
-        elif ts_val >= 5.5 and (rsi >= 50 or macd_hist > 0):
-            candidates.append((30, "TREND_FOLLOWING"))
+        close = ensure_numeric(_get_val(indicators, "price"))
+        ma_keys = get_ma_keys_config(horizon)
+        ma_fast = ensure_numeric(_get_val(indicators, ma_keys["fast"]))
+        bb_upper = ensure_numeric(_get_val(indicators, "bb_high"))
+        bb_lower = ensure_numeric(_get_val(indicators, "bb_low"))
+        rsi = ensure_numeric(_get_val(indicators, "rsi"))
+        rvol = ensure_numeric(_get_val(indicators, "rvol"))
+        volqual = ensure_numeric(_get_val(indicators, "volatility_quality"), 5.0)
+        wickratio = ensure_numeric(_get_val(indicators, "wick_rejection"), 0.0)
 
-    # === BEARISH TREND FOLLOWING ===
-    if trend_dir == 'down':
-        # Condition A: Classic Bearish Momentum
-        if rsi <= 45 and macd_hist < 0:
-            candidates.append((40, "BEAR_TREND_FOLLOWING"))
-        # Condition B: Strong Bearish Drift
-        elif ts_val >= 7.0:
-            candidates.append((35, "BEAR_TREND_FOLLOWING"))
-            
-    # 5. Accumulation
-    if trend_dir == 'neutral' and is_consolidating(indicators) and 40 < rsi < 60:
-        candidates.append((85, "QUALITY_ACCUMULATION"))
-    
-    candidates.extend(reversals)
-    candidates.extend(ranges)
-    candidates.append((10, "NEUTRAL"))
-    candidates.sort(key=lambda x: (-x[0], x[1]))
-    return candidates[0][1]
+        candidates: List[Tuple[int, str]] = []
+
+        # Reversal patterns – highest priority
+        if reversals:
+            candidates.extend(reversals)
+
+        # Breakout / breakdown (BB% and wick guards)
+        bb_percent_b = ensure_numeric(_get_val(indicators, "bb_percent_b"))
+        if bb_percent_b is not None:
+            if bb_percent_b >= 0.98 and rsi >= 60:
+                if wickratio >= 2.5 and rvol >= 1.5:
+                    candidates.append((100, "MOMENTUM_BREAKOUT"))
+                else:
+                    candidates.append((85, "MOMENTUM_BREAKOUT"))
+            if bb_percent_b <= 0.02 and rsi <= 40:
+                if rvol >= 1.5:
+                    candidates.append((100, "MOMENTUM_BREAKDOWN"))
+                else:
+                    candidates.append((85, "MOMENTUM_BREAKDOWN"))
+
+        # Pullbacks (trend-following)
+        if trend_dir == "up" and ma_fast and abs(close - ma_fast) / ma_fast <= 0.05 and rsi >= 50:
+            candidates.append((75, "TREND_PULLBACK"))
+
+        # Trend following
+        if trend_score >= 0.35 and rsi >= 55:
+            macd_hist = ensure_numeric(_get_val(indicators, "macd_histogram"))
+            if macd_hist > 0:
+                candidates.append((70, "TREND_FOLLOWING"))
+
+        # Range logic
+        if ranges:
+            candidates.extend(ranges)
+
+        # Squeeze detection
+        if _is_squeeze_on(indicators):
+            if volqual >= 7.0:
+                candidates.append((90, "VOLATILITY_SQUEEZE"))
+            elif volqual >= 4.0:
+                candidates.append((75, "VOLATILITY_SQUEEZE"))
+
+        # Quality accumulation (fundamental filter + consolidation)
+        if is_consolidating(indicators):
+            roe = ensure_numeric(_get_val(fundamentals, "roe"))
+            roce = ensure_numeric(_get_val(fundamentals, "roce"))
+            deratio = ensure_numeric(_get_val(fundamentals, "de_ratio"))
+            if roe and roe >= 20 and roce and roce >= 25 and deratio and deratio <= 0.5:
+                candidates.append((65, "QUALITY_ACCUMULATION"))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            return candidates[0][1]
+
+        return "GENERIC"
+    except Exception as e:
+        logger.error(f"classify_setup failed: {e}", exc_info=True)
+        return "GENERIC"
 
 # CONFIDENCE CALCULATION
 def calculate_setup_confidence(indicators, trend_strength, macro_trend, setup_type, horizon):
@@ -1288,33 +1274,51 @@ def compute_profile_score(profile_name, fundamentals, indicators, profile_map=No
             "applied_penalties": applied_penalties, "thresholds": thresholds, 
             "notes": profile.get("notes", ""), "missing_keys": missing_metrics}
 
+# services/signal_engine.py - AFTER (Lines ~750-850)
+# ✅ FIXED: Pure investment profile scoring ONLY
 
 def compute_all_profiles(
     ticker: str, 
     fundamentals: Dict, 
-    indicators: Dict,  # ✅ NOW EXPECTS: {"intraday": {...}, "short_term": {...}}
+    indicators: Dict,  # {"intraday": {...}, "short_term": {...}}
     profile_map: Optional[Dict] = None
 ) -> Dict:
     """
-    Computes scores for all investment profiles (intraday, short_term, etc.).
+    ✅ AFTER: Pure profile scoring - NO trade execution logic
     
-    Args:
-        indicators: MUST be nested dict with horizon keys:
-                    {"intraday": {...}, "short_term": {...}, ...}
+    Purpose: Determine which investment horizon (intraday/short/long/multi) 
+             best fits the stock's current characteristics.
+    
+    Does NOT validate trade entry - that happens in generate_trade_plan().
+    
+    Returns:
+        {
+            "best_fit": str,  # Horizon with highest PURE profile score
+            "best_score": float,  # Pure investment attractiveness (0-10)
+            "profiles": {
+                "intraday": {
+                    "final_score": 8.5,  # NO penalties/enhancements applied
+                    "category": "BUY",
+                    "base_score": 8.2,
+                    "metric_details": {...},
+                    "applied_penalties": [...],  # Profile-level only (PE>50, etc)
+                    "thresholds": {...}
+                },
+                ...
+            }
+        }
     """
     fundamentals = (fundamentals or {}).copy()
     _reset_missing_keys()
     pm = profile_map or HORIZON_PROFILE_MAP
     
-    # ✅ VALIDATE INPUT STRUCTURE
+    # ✅ Validate nested structure
     if not isinstance(indicators, dict):
         raise ValueError("indicators must be a dict")
     
-    # Check if nested structure exists
     has_horizons = any(h in indicators for h in ["intraday", "short_term", "long_term", "multibagger"])
     
     if not has_horizons:
-        # Fallback: treat as flat dict and replicate for all horizons
         logger.warning(f"[{ticker}] Indicators not nested, replicating flat dict")
         indicators = {
             "intraday": indicators.copy(),
@@ -1323,7 +1327,7 @@ def compute_all_profiles(
             "multibagger": indicators.copy()
         }
     
-    # Compute ROE stability once (fundamental metric)
+    # ✅ Compute ROE stability once (fundamental metric)
     try:
         fundamentals["roe_stability"] = compute_roe_stability(fundamentals)
     except Exception as e:
@@ -1343,6 +1347,7 @@ def compute_all_profiles(
                 continue
             
             # ✅ COMPUTE COMPOSITES (if missing)
+            # These are technical metrics, NOT trade execution checks
             if "trend_strength" not in inds_for_profile:
                 inds_for_profile["trend_strength"] = compute_trend_strength(
                     inds_for_profile, horizon=pname
@@ -1357,11 +1362,28 @@ def compute_all_profiles(
                 inds_for_profile["volatility_quality"] = compute_volatility_quality(
                     inds_for_profile
                 )
-            
+                       
             # ✅ SCORE THIS PROFILE
+            # This applies PROFILE-LEVEL penalties only (PE>50, Debt>2.0, etc)
+            # Does NOT apply trade-execution penalties (volatility spikes, divergence)
             out = compute_profile_score(
                 pname, fundamentals, inds_for_profile, profile_map=pm
             )
+            
+            # ✅ CRITICAL: Store PURE score - no trade execution adjustments
+            # The final_score here reflects "how well does this stock fit this horizon"
+            # NOT "should we enter a trade right now"
+            
+            # Add metadata for debugging
+            out["scoring_method"] = "pure_profile"
+            out["note"] = "Score reflects investment fit, not trade timing"
+            
+            # ✅ Log pure score
+            logger.info(
+                f"[{ticker}] [{pname}] Pure Profile Score: {out['final_score']:.2f}/10 "
+                f"(Category: {out.get('category', 'N/A')})"
+            )
+            
             profiles_out[pname] = out
             
         except Exception as e:
@@ -1379,13 +1401,13 @@ def compute_all_profiles(
                 "missing_keys": []
             }
         
-        # Track best profile
+        # ✅ Track best profile using PURE scores
         fs = profiles_out[pname].get("final_score", 0.0)
         if fs is not None and float(fs) > float(best_score):
             best_score = float(fs)
             best_fit = pname
     
-    # Aggregate metrics
+    # ✅ Aggregate metrics
     avg_signal = round(
         sum(p.get("final_score", 0) for p in profiles_out.values()) / len(profiles_out), 
         2
@@ -1397,18 +1419,25 @@ def compute_all_profiles(
         if profiles_out[p].get("missing_keys")
     }
     
+    # ✅ Log best fit selection
+    logger.info(
+        f"[{ticker}] Best Fit Profile: {best_fit} "
+        f"(Pure Score: {best_score:.2f}/10)"
+    )
+    
     return {
         "ticker": ticker, 
-        "best_fit": best_fit, 
-        "best_score": best_score, 
+        "best_fit": best_fit,  # ✅ Selected using PURE investment scores
+        "best_score": best_score,  # ✅ Pure profile score (0-10 scale)
         "aggregate_signal": avg_signal,
-        "profiles": profiles_out, 
+        "profiles": profiles_out,  # ✅ All contain pure scores
         "missing_indicators": missing_map,
         "missing_count": {k: len(v) for k, v in missing_map.items()},
         "missing_unique": sorted({v for arr in missing_map.values() for v in arr}) 
-                          if missing_map else []
+                          if missing_map else [],
+        "note": "Scores reflect investment profile fit, not trade entry validation"
     }
-# 
+
 # ============================================================================
 # TRADE PLAN GENERATOR DEBUG INSTRUMENTATION (Add to signal_engine.py)
 # ============================================================================
@@ -1645,58 +1674,254 @@ def _calculate_execution_levels(setup_type: str, category: str, price_val: float
 
     return result
 
+# services/signal_engine.py - AFTER (Lines ~1200-1600)
+# ✅ FIXED: Complete trade execution validation pipeline
+
 def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A", 
-                        horizon="short_term", strategy_report=None, fundamentals=None):
+                        horizon="short_term", strategy_report=None, fundamentals=None) -> Dict[str, Any]:
+    """
+    ✅ AFTER: Complete trade execution validation pipeline
     
-    # ... [Initialization Section stays same] ...
+    Takes the BEST_FIT profile (from compute_all_profiles) and validates:
+    1. Setup classification
+    2. Base confidence calculation
+    3. Horizon-specific penalties (moved FROM compute_all_profiles)
+    4. Horizon-specific enhancements (moved FROM compute_all_profiles)
+    5. Entry gate validation (moved FROM compute_all_profiles)
+    6. Volatility regime check
+    7. Divergence detection
+    8. Volume signature
+    9. R:R ratio validation
+    10. Final approval/rejection
+    
+    Args:
+        profile_report: PURE profile score from compute_all_profiles()
+        indicators: Horizon-specific indicators
+        horizon: Best-fit horizon
+    
+    Returns:
+        Complete trade plan with approval status and all constraint checks
+    """
+    
+    def _record_confidence_adjustment(
+        plan: Dict, gate: str, old_conf: int, new_conf: int, 
+        reason: str, is_boost: bool = False, metadata: Dict = None
+    ):
+        """Unified tracking for all confidence changes."""
+        change = new_conf - old_conf
+        
+        record = {
+            "gate": gate,
+            "reason": reason,
+            "change": change,
+            "change_pct": f"{change:+d}%",
+            "old_confidence": old_conf,
+            "new_confidence": new_conf,
+            **(metadata or {})
+        }
+        
+        if is_boost:
+            plan["boost_reasons"].append(record)
+        else:
+            plan["penalties_applied"].append(record)
+        
+        plan["confidence_history"].append({
+            "stage": gate,
+            "value": new_conf,
+            "reason": reason,
+            "change": change
+        })
+        
+        return new_conf
+    
+    def _generate_confidence_flow(history: List[Dict]) -> str:
+        """Creates human-readable confidence journey."""
+        if not history:
+            return "N/A"
+        
+        parts = [f"{history[0]['value']}%"]
+        
+        for entry in history[1:]:
+            change = entry.get('change', 0)
+            stage = entry['stage']
+            value = entry['value']
+            parts.append(f"{stage}({change:+d}%→{value}%)")
+        
+        return " → ".join(parts)
+    
+    # =========================================================================
+    # STAGE 1: INITIALIZATION
+    # =========================================================================
+    
+    setup_type = classify_setup(indicators=indicators, fundamentals=fundamentals, horizon=horizon)
+    
     symbol = indicators.get("symbol", "").get("value", None)
     price_val = ensure_numeric(_get_val(indicators, "price"))
     atr_val = ensure_numeric(_get_val(indicators, "atr_dynamic"))
-    adx = ensure_numeric(_get_val(indicators, "adx"))  # Extract ADX early
+    adx = ensure_numeric(_get_val(indicators, "adx"))
     
-    dyn_floor = 0 
-    
+    # Initialize plan with comprehensive tracking
     plan = {
+        "symbol": symbol,
+        "horizon": horizon,
         "signal": "NA_CALC",
         "reason": "Initializing...",
-        "setup_type": "GENERIC",
+        "setup_type": setup_type,
         "setup_confidence": 0,
-        "entry": price_val,
+        "base_confidence": 0,           # From profile score
+        "confidence_before_gates": 0,   # Before execution validation
+        "adjusted_confidence": 0,       # After all adjustments
+        "boost_reasons": [],
+        "penalties_applied": [],
+        "entry": None,
         "stop_loss": None,
         "targets": {"t1": None, "t2": None},
         "rr_ratio": 0,
         "position_size": 0,
+        "est_time": None,
+        "est_time_str": "NA",
         "execution_hints": {},
         "debug": {},
-        "analytics": {"skipped_low_rr": False}
+        "analytics": {
+            "skipped_low_rr": False,
+            "min_rr_required": 0,
+            "gates_passed": []
+        },
+        "blocked_by": [],
+        "status": "PENDING",
+        "trade_signal": "HOLD",
+        "block_reason": None,
+        "block_gates": [],
+        "confidence_history": [],
+        "confidence_flow": "",
+        "profile_score": profile_report.get("final_score", 0.0),  # ✅ Store pure score
     }
-
+    
     if price_val <= 0 or atr_val <= 0:
         plan["signal"] = "NA_INVALID_INPUTS"
         plan["reason"] = f"Invalid data: Price={price_val}, ATR={atr_val}"
+        plan["status"] = "ERROR"
         return plan 
 
-    # --- CLASSIFICATION ---
-    setup_type = classify_setup(indicators, horizon)
-    ts_val = ensure_numeric(_get_val(indicators, "trend_strength"))
-    setup_conf = calculate_setup_confidence(indicators, ts_val, macro_trend_status, setup_type, horizon)
+    # =========================================================================
+    # STAGE 2: BASE CONFIDENCE (From Setup Classification)
+    # =========================================================================
     
-    # Fundamental Override
-    if setup_type in ["NEUTRAL", "TREND_PULLBACK", "TREND_FOLLOWING"] and fundamentals:
-         pe = ensure_numeric(_get_val(fundamentals, "pe_ratio"))
-         roe = ensure_numeric(_get_val(fundamentals, "roe"))
-         if 0 < pe < 25 and roe > 12:
-             bb_low = ensure_numeric(_get_val(indicators, "bb_low"))
-             if bb_low > 0 and price_val < bb_low * 1.15:
-                 setup_type = "QUALITY_ACCUMULATION"
-                 setup_conf = max(setup_conf, 60)
+    ts_val = ensure_numeric(_get_val(indicators, "trend_strength"))
+    setup_conf = calculate_setup_confidence( indicators, ts_val, macro_trend_status, setup_type, horizon)
 
-    plan["setup_type"] = setup_type
+    # ✅ Track initial confidence (based on setup, not profile score)
+    plan["base_confidence"] = setup_conf
+    plan["confidence_history"].append({
+        "stage": "setup_classification",
+        "value": setup_conf,
+        "reason": f"Setup: {setup_type}",
+        "change": 0
+    })
+    plan["confidence_before_gates"] = setup_conf
+    
+    logger.info(
+        f"[{symbol}] [{horizon}] Setup: {setup_type} | "
+        f"Base Confidence: {setup_conf}% | "
+        f"Pure Profile Score: {plan['profile_score']:.2f}/10"
+    )
+
+    # =========================================================================
+    # STAGE 3: APPLY HORIZON-SPECIFIC PENALTIES (Moved from compute_all_profiles)
+    # =========================================================================
+    
+    penalty_result = apply_horizon_penalties(
+        base_confidence=setup_conf,
+        horizon=horizon,
+        indicators=indicators,
+        setup_type=setup_type,
+        fundamentals=fundamentals
+    )
+    
+    logger.info(f"[{symbol}] [{horizon}] {penalty_result['log']}")
+    
+    # Update confidence
+    current_conf = penalty_result["adjusted_confidence"]
+    
+    # Record each penalty
+    for penalty_name, (amount, reason) in penalty_result["penalty_details"].items():
+        old_conf = setup_conf
+        setup_conf = current_conf
+        
+        _record_confidence_adjustment(
+            plan,
+            gate=penalty_name,
+            old_conf=old_conf,
+            new_conf=setup_conf,
+            reason=reason,
+            is_boost=False,
+            metadata={"penalty_amount": amount}
+        )
+    
     plan["setup_confidence"] = setup_conf
 
-    # --- GATING WATERFALL ---
+    # =========================================================================
+    # STAGE 4: APPLY HORIZON-SPECIFIC ENHANCEMENTS (Moved from compute_all_profiles)
+    # =========================================================================
+    
+    enhancement_result = apply_horizon_enhancements(
+        base_confidence=setup_conf,
+        horizon=horizon,
+        indicators=indicators,
+        setup_type=setup_type,
+        fundamentals=fundamentals
+    )
+    
+    logger.info(f"[{symbol}] [{horizon}] {enhancement_result['log']}")
+    
+    # Update confidence
+    current_conf = enhancement_result["adjusted_confidence"]
+    
+    # Record each enhancement
+    for enh_name, (amount, reason) in enhancement_result["enhancement_details"].items():
+        old_conf = setup_conf
+        setup_conf = current_conf
+        
+        _record_confidence_adjustment(
+            plan,
+            gate=enh_name,
+            old_conf=old_conf,
+            new_conf=setup_conf,
+            reason=reason,
+            is_boost=True,
+            metadata={"boost_amount": amount}
+        )
+    
+    plan["setup_confidence"] = setup_conf
+
+    # =========================================================================
+    # STAGE 5: VALIDATE ENTRY GATES (Moved from compute_all_profiles)
+    # =========================================================================
+    
+    gates_result = validate_horizon_entry_gates(
+        confidence=setup_conf,
+        horizon=horizon,
+        indicators=indicators,
+        fundamentals=fundamentals
+    )
+    
+    logger.info(f"[{symbol}] [{horizon}] {gates_result['log']}")
+    
+    # Store gate results
+    plan["entry_gates"] = gates_result["gates"]
+    plan["gates_passed"] = gates_result["passed"]
+    plan["adjusted_confidence"] = setup_conf  # After all adjustments
+
+    # =========================================================================
+    # STAGE 6: GATING WATERFALL (Existing Logic - Keep as is)
+    # =========================================================================
+    
     trade_valid = True
     blocked_by = []
+    # ✅ FIX: Define dyn_floor ONCE at the start (before all conditional gates)
+    di_p = ensure_numeric(_get_val(indicators, "di_plus"))
+    di_m = ensure_numeric(_get_val(indicators, "di_minus"))
+    dyn_floor = calculate_dynamic_confidence_floor(adx, di_p, di_m, setup_type, horizon)
     
     # A. Volatility Gate
     can_trade_vol, vol_reason = should_trade_current_volatility(indicators, setup_type)
@@ -1704,6 +1929,8 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
         trade_valid = False
         plan["signal"] = "NA_VOLATILITY_BLOCKED"
         plan["reason"] = vol_reason
+        plan["block_reason"] = vol_reason
+        plan["block_gates"].append("volatility")
         blocked_by.append("volatility")
 
     # B. Entry Permission
@@ -1713,55 +1940,95 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
             trade_valid = False
             plan["signal"] = "NA_ENTRY_PERMISSION_FAILED"
             plan["reason"] = str(entry_reasons)
+            plan["block_reason"] = str(entry_reasons)
+            plan["block_gates"].append("entry_permission")
             blocked_by.append("entry_permission")
 
     # C. Dynamic Confidence Floor
     if trade_valid:
-        di_p = ensure_numeric(_get_val(indicators, "di_plus"))
-        di_m = ensure_numeric(_get_val(indicators, "di_minus"))
-        dyn_floor = calculate_dynamic_confidence_floor(adx, di_p, di_m, setup_type, horizon)
+        # di_p = ensure_numeric(_get_val(indicators, "di_plus"))
+        # di_m = ensure_numeric(_get_val(indicators, "di_minus"))
+        # dyn_floor = calculate_dynamic_confidence_floor(adx, di_p, di_m, setup_type, horizon)
         
         if setup_conf < dyn_floor:
             trade_valid = False
             plan["signal"] = "NA_LOW_CONFIDENCE"
             plan["reason"] = f"Confidence {setup_conf}% < Floor {dyn_floor}%"
+            plan["block_reason"] = plan["reason"]
+            plan["block_gates"].append("confidence_floor")
             blocked_by.append("confidence_floor")
 
-    # D. Divergence Check (Required for Execution Logic now)
-    div_info = {'divergence_type': 'none'} # Default
+    # D. Divergence Check
+    div_info = {'divergence_type': 'none'}
     if trade_valid:
         div_info = detect_divergence_via_slopes(indicators, horizon)
         if div_info['divergence_type'] != 'none':
-            setup_conf = int(setup_conf * div_info['confidence_factor'])
+            old_conf = setup_conf
+            new_conf = int(setup_conf * div_info['confidence_factor'])
+            
+            setup_conf = _record_confidence_adjustment(
+                plan,
+                gate="divergence",
+                old_conf=old_conf,
+                new_conf=new_conf,
+                reason=div_info.get("warning", "Divergence detected"),
+                is_boost=False,
+                metadata={
+                    "divergence_type": div_info["divergence_type"],
+                    "severity": div_info.get("severity", "unknown"),
+                    "penalty_factor": div_info["confidence_factor"]
+                }
+            )
+            
             plan["setup_confidence"] = setup_conf
             plan["execution_hints"]["divergence"] = div_info
             
             if setup_conf < dyn_floor:
                 trade_valid = False
                 plan["signal"] = "NA_DIVERGENCE_DETECTED"
-                plan["reason"] = "Divergence dropped confidence below floor"
+                plan["reason"] = f"Post-divergence confidence {setup_conf}% < Floor {dyn_floor}%"
+                plan["block_reason"] = plan["reason"]
+                plan["block_gates"].append("divergence")
                 blocked_by.append("divergence")
-
+    
     # E. Volume Check
     if trade_valid:
         vol_sig = detect_volume_signature(indicators)
         if vol_sig['adjustment'] != 0:
-            setup_conf = int(setup_conf + vol_sig['adjustment'])
-            plan["setup_confidence"] = setup_conf
+            old_conf = setup_conf
+            new_conf = int(setup_conf + vol_sig['adjustment'])
             
+            setup_conf = _record_confidence_adjustment(
+                plan,
+                gate="volume",
+                old_conf=old_conf,
+                new_conf=new_conf,
+                reason=vol_sig['warning'],
+                is_boost=(vol_sig['adjustment'] > 0),
+                metadata={
+                    "volume_type": vol_sig.get("type", "unknown"),
+                    "adjustment": vol_sig['adjustment']
+                }
+            )
+            plan["setup_confidence"] = setup_conf
             if setup_conf < dyn_floor:
                 trade_valid = False
                 plan["signal"] = "NA_POOR_VOLUME"
-                plan["reason"] = vol_sig['warning']
+                plan["reason"] = f"Post-volume confidence {setup_conf}% < Floor {dyn_floor}%"
+                plan["block_reason"] = plan["reason"]
+                plan["block_gates"].append("volume")
                 blocked_by.append("volume")
 
-    # --- 5. EXECUTION CALCULATION (Updated) ---
+    # =========================================================================
+    # STAGE 7: EXECUTION CALCULATION
+    # =========================================================================
+    
     category = profile_report.get("category", "HOLD")
     
     exec_data = _calculate_execution_levels(
         setup_type, category, price_val, plan["stop_loss"], 
         atr_val, horizon, indicators, fundamentals, trade_valid,
-        div_info, adx  # <-- Passing new requirements
+        div_info, adx
     )
     
     plan.update({
@@ -1772,10 +2039,8 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
     if exec_data.get("execution_hints"):
         plan["execution_hints"].update(exec_data["execution_hints"])
 
-    # Update Signal ONLY if valid
     if trade_valid:
         plan["signal"] = exec_data["signal_hint"]
-        # If signal turned out to be WAIT_XXX from execution logic, invalidate trade
         if "WAIT" in plan["signal"]:
             trade_valid = False
             plan["reason"] = exec_data["execution_hints"].get("note", "Execution constraints not met")
@@ -1785,9 +2050,15 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
         plan["signal"] = "HOLD"
         plan["reason"] = "Valid setup but no directional bias"
 
-    # --- 6. FINAL GATES ---
-    try: plan = enhance_plan_with_patterns(plan, indicators)
-    except Exception: pass
+    # =========================================================================
+    # STAGE 8: FINAL GATES
+    # =========================================================================
+    
+    # Pattern enhancement
+    try:
+        plan = enhance_plan_with_patterns(plan, indicators)
+    except Exception:
+        pass
 
     # R:R Check
     if trade_valid and plan["stop_loss"] and plan["targets"]["t1"]:
@@ -1804,10 +2075,16 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
             if rr < dynamic_min_rr and "ACCUMULATE" not in plan["signal"]:
                 plan["signal"] = "WAIT_LOW_RR"
                 plan["reason"] = f"Poor R:R: {rr}:1 < {dynamic_min_rr}:1"
+                plan["block_reason"] = plan["reason"]
+                plan["block_gates"].append("low_rr")
                 plan["analytics"]["skipped_low_rr"] = True
                 blocked_by.append("low_rr")
 
-    # --- 7. EXTRAS ---
+    # =========================================================================
+    # STAGE 9: FINALIZATION
+    # =========================================================================
+    
+    # Time estimation
     try:
         topstrat = (strategy_report or {}).get('summary', {}).get('best_strategy', 'unknown').lower()
         strat_mult = STRATEGY_TIME_MULTIPLIERS.get(topstrat, 1.0) 
@@ -1821,16 +2098,46 @@ def generate_trade_plan(profile_report, indicators, macro_trend_status="N/A",
         plan["est_time"] = dual_est
         plan["est_time_str"] = f"T1: {dual_est['t1_estimate']} | T2: {dual_est['t2_estimate']}"
     except Exception as e:
-        logger.debug(f"block 7 generate trade plan failed {e}")
+        logger.debug(f"Time estimation failed: {e}")
         pass 
 
     plan["position_size"] = calculate_position_size(indicators, setup_conf, setup_type, horizon)
     
+    # Set final status
+    if trade_valid:
+        plan["status"] = "APPROVED"
+        plan["trade_signal"] = plan["signal"]
+        
+        if setup_conf >= 70:
+            plan["signal_strength"] = "STRONG"
+        elif setup_conf >= 50:
+            plan["signal_strength"] = "MODERATE"
+        else:
+            plan["signal_strength"] = "WEAK"
+    else:
+        plan["status"] = "BLOCKED"
+        plan["trade_signal"] = "HOLD"
+        
+        if not plan.get("block_reason"):
+            plan["block_reason"] = plan.get("reason", "Setup identified but gates rejected trade")
+    
+    # Generate confidence flow string
+    plan["confidence_flow"] = _generate_confidence_flow(plan["confidence_history"])
+    
+    # Debug info
     plan["debug"] = log_signal_decision(
         symbol, indicators, setup_type, setup_conf, 
         dyn_floor, True, True, plan["reason"], category, blocked_by
     )
-    logger.debug(f"generated plan for {symbol} is : {plan}")
+    
+    # ✅ Final comprehensive log
+    logger.info(
+        f"PLAN | {symbol} | {horizon.upper()} | "
+        f"Status={plan['status']} | Signal={plan['trade_signal']} | "
+        f"Pure Score={plan['profile_score']:.2f}/10 | "
+        f"Setup Conf={setup_conf}% | "
+        f"Flow={plan['confidence_flow']}"
+    )
 
     return plan
 
