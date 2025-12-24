@@ -10,9 +10,6 @@ MASTER_CONFIG = {
     # ============================================================================
     "global": {
         
-        # ========================================================================
-        # FUNDAMENTAL WEIGHTS (Universal - No Horizon Overrides)
-        # ========================================================================
         "fundamental_weights": {
             "value": {
                 "pe_ratio": {"weight": 0.05, "direction": "invert", "ideal_range": [10, 20], "penalty_threshold": 50},
@@ -62,10 +59,6 @@ MASTER_CONFIG = {
                 "yield_vs_avg": {"weight": 0.02, "direction": "normal"}
             }
         },
-        
-        # ========================================================================
-        # TECHNICAL WEIGHTS (Base Weights - Horizons Apply Multipliers)
-        # ========================================================================
         "technical_weights": {
             # Momentum Indicators
             "rsi": {"weight": 1.0, "category": "momentum", "speed": "fast"},
@@ -135,10 +128,6 @@ MASTER_CONFIG = {
             "gap_percent": {"weight": 0.5, "category": "price_action", "speed": "fast"},
             "reg_slope": {"weight": 0.8, "category": "price_action", "speed": "medium"}
         },
-        
-        # ========================================================================
-        # PATTERN PHYSICS (Universal Pattern Behavior)
-        # ========================================================================
         "pattern_physics": {
             "cup_handle": {
                 "target_ratio": 0.618,
@@ -194,10 +183,6 @@ MASTER_CONFIG = {
                 "max_stop_pct": 10.0
             }
         },
-        
-        # ========================================================================
-        # PATTERN ENTRY RULES (Global - Horizon-Specific in Nested Structure)
-        # ========================================================================
         "pattern_entry_rules": {
             "bollinger_squeeze": {
                 "horizons": {
@@ -328,10 +313,6 @@ MASTER_CONFIG = {
                 }
             }
         },
-
-        # ========================================================================
-        # PATTERN INVALIDATION (Global - Horizon-Specific Rules)
-        # ========================================================================
         "pattern_invalidation": {
             "bollinger_squeeze": {
                 "breakdown_threshold": {
@@ -482,10 +463,6 @@ MASTER_CONFIG = {
                 }
             }
         },
-        
-        # ========================================================================
-        # TIME ESTIMATION (Global Parameters)
-        # ========================================================================
         "time_estimation": {
             "candles_per_unit": 1,
             "base_friction": 0.8,
@@ -499,10 +476,6 @@ MASTER_CONFIG = {
                 "days_per_week": 5
             }
         },
-        
-        # ========================================================================
-        # ENTRY GATES (Global Baseline)
-        # ========================================================================
         "entry_gates": {
             "confidence_requirements": {
                 "breakout_base": 70,
@@ -528,10 +501,6 @@ MASTER_CONFIG = {
                 }
             }
         },
-        
-        # ========================================================================
-        # CALCULATION ENGINE (Global Rules & Logic)
-        # ========================================================================
         "calculation_engine": {
             "horizon_priority_overrides": {
                 "intraday": {
@@ -687,7 +656,6 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            
             # Setup Classification (SINGLE SOURCE - NOT in horizons)
             "setup_classification": {
                 "pattern_priority": [
@@ -730,6 +698,8 @@ MASTER_CONFIG = {
                         "trend_strength_min": 7.0
                     }
                 },
+                "VALUE_TURNAROUND": { "trend_strength_range": [3.0, 5.0], "rsi_min": 45 },
+                "DEEP_VALUE_PLAY": { "pe_ratio_max": 10.0, "fcf_yield_min": 5.0 },
                 "QUALITY_ACCUMULATION": {
                     "consolidation_required": True,
                     "rsi_range": [40, 60]
@@ -892,85 +862,35 @@ MASTER_CONFIG = {
             
             # Setup Confidence (REMOVED - Will only be in horizons)
         },
-        
-        # ========================================================================
-        # POSITION SIZING (Global Parameters)
-        # ========================================================================
         "position_sizing": {
             "base_risk_pct": 0.01,
             "global_setup_multipliers": {
-                "DEEP_PULLBACK": 1.5,
-                "VOLATILITY_SQUEEZE": 1.3,
-                "MOMENTUM_BREAKOUT": 0.8
+                "DEEP_VALUE_PLAY": 1.5,           # Deep value with strong fundamentals
+                "VALUE_TURNAROUND": 1.4,          # Turnaround story, high conviction
+                "QUALITY_ACCUMULATION": 1.3,      # Quality + consolidation
+                "VOLATILITY_SQUEEZE": 1.3,        # Coiled spring, expansion expected
+                "DEEP_PULLBACK": 1.5,             # Deep pullback in strong trend
+                "TREND_PULLBACK": 1.0,            # Standard trend following
+                "REVERSAL_MACD_CROSS_UP": 1.0,    # Early reversal signal
+                "REVERSAL_RSI_SWING_UP": 0.9,     # RSI reversal (needs confirmation)
+                "REVERSAL_ST_FLIP_UP": 1.1,       # Supertrend flip (reliable)
+                "QUALITY_ACCUMULATION_DOWNTREND": 0.9,  # Contrarian, lower conviction
+                "MOMENTUM_BREAKOUT": 0.8,         # Breakouts fail often
+                "MOMENTUM_BREAKDOWN": 0.7,        # Short setup (riskier)
+                "SELL_AT_RANGE_TOP": 0.7,         # Range-bound exit
+                "TAKE_PROFIT_AT_MID": 0.6,        # Partial exit
+                "GENERIC": 0.5                    # Unknown setup, minimal size
             },
             "volatility_adjustments": {
                 "high_quality": {"vol_qual_min": 7.0, "multiplier": 1.2},
                 "low_quality": {"vol_qual_max": 5.0, "multiplier": 0.9}
             }
         },
-        
-        # ========================================================================
-        # WEIGHTS (Various)
-        # ========================================================================
         "trend_weights": {
             "primary": 0.50,
             "secondary": 0.30,
             "acceleration": 0.20
         },
-        
-        # ========================================================================
-        # STRATEGY CONFIG
-        # ========================================================================
-        "strategy_classification": {
-            "swing": {"fit_thresh": 50},
-            "day_trading": {"fit_thresh": 60},
-            "trend_following": {"fit_thresh": 60},
-            "momentum": {"fit_thresh": 60},
-            "minervini": {"fit_thresh": 70},
-            "canslim": {"fit_thresh": 65},
-            "value": {"fit_thresh": 50}
-        },
-        "strategy_time_multipliers": {
-            "momentum": 0.7,
-            "day_trading": 0.5,
-            "swing": 1.0,
-            "trend_following": 1.2,
-            "position_trading": 1.5,
-            "value": 1.5,
-            "income": 2.0,
-            "unknown": 1.0
-        },
-        "strategy_weights": {
-            "swing": {
-                "momentum": 0.30,
-                "trend": 0.35,
-                "volatility": 0.35
-            },
-            "day_trading": {
-                "momentum": 0.40,
-                "trend": 0.30,
-                "volatility": 0.30
-            },
-            "trend_following": {
-                "momentum": 0.25,
-                "trend": 0.50,
-                "volatility": 0.25
-            },
-            "momentum": {
-                "momentum": 0.50,
-                "trend": 0.30,
-                "volatility": 0.20
-            },
-            "position_trading": {
-                "momentum": 0.20,
-                "trend": 0.50,
-                "volatility": 0.30
-            }
-        },
-        
-        # ========================================================================
-        # BOOSTS
-        # ========================================================================
         "boosts": {
             "pattern": {"single": 0.8, "confluence": 1.5},
             "momentum": {"score": 1.2, "trigger_rvol": 2.0},
@@ -985,10 +905,6 @@ MASTER_CONFIG = {
             "proximity": {"support": 0.6, "resistance": 0.8},
             "max_cap": 2.5
         },
-        
-        # ========================================================================
-        # SYSTEM/INFRASTRUCTURE
-        # ========================================================================
         "system": {
             "process_pool_workers": 4,
             "cache": {"ttl_seconds": 3600, "timezone": "Asia/Kolkata"},
@@ -1021,10 +937,6 @@ MASTER_CONFIG = {
                 "display_priority": ["Dividend", "Bonus", "Split", "Rights"]
             }
         },
-        
-        # ========================================================================
-        # DEFAULT CONFIGS (Used as fallback for all horizons)
-        # ========================================================================
         "moving_averages": {
             "type": "EMA",
             "fast": 20,
@@ -1033,7 +945,6 @@ MASTER_CONFIG = {
             "keys": ["ema_20", "ema_50", "ema_200"],
             "dip_buy_reference": "ema_50"
         },
-        
         "indicators": {
             "rsi_period": 14,
             "adx_period": 14,
@@ -1050,12 +961,10 @@ MASTER_CONFIG = {
                 "oversold": 20
             }
         },
-        
         "momentum_thresholds": {
             "rsi_slope": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
             "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
         },
-        
         "volatility": {
             "scoring_thresholds": {
                 "atr_pct": {"excellent": 2.5, "good": 3.0, "fair": 4.5, "poor": 5.5},
@@ -1066,7 +975,6 @@ MASTER_CONFIG = {
             "squeeze_quality_min": 7.0,
             "breakout_min_quality": 2.0
         },
-        
         "risk_management": {
             "max_position_pct": 0.02,
             "setup_size_multipliers": {"default": 1.0},
@@ -1079,7 +987,6 @@ MASTER_CONFIG = {
                 "weak_trend": {"adx_max": 20, "t1_mult": 1.2, "t2_mult": 2.5}
             }
         },
-        
         "execution": {
             "stop_loss_atr_mult": 2.0,
             "target_atr_mult": 3.0,
@@ -1102,9 +1009,7 @@ MASTER_CONFIG = {
                 "breakdown_tolerance": 0.999
             }
         },
-        
         "lookback": {"python_data": 600},
-        
         "scoring": {
             "metrics": {
                 "trend_strength": 0.20,
@@ -1121,7 +1026,339 @@ MASTER_CONFIG = {
             },
             "thresholds": {"buy": 6.0, "hold": 5.0, "sell": 4.0}
         },
+        # ========================================================================
+        # SETUP GATE SPECIFICATIONS (Universal Baseline)
+        # ========================================================================
+        "setup_gate_specifications": {
+            # Complete gate table - defines WHAT EACH SETUP IS BY NATURE
+            # Horizons override only volatility_quality_min and confidence_min
+            
+            "MOMENTUM_BREAKOUT": {
+                "nature": "Requires strong established trend with momentum confirmation",
+                "universal_gates": {
+                    "adx_min": 18,
+                    "min_trend_strength": 5.0
+                }
+                # volatility_quality_min and confidence_min: defined per horizon
+            },
+            
+            "VOLATILITY_SQUEEZE": {
+                "nature": "Pre-breakout compression setup, trend-agnostic",
+                "universal_gates": {
+                    "adx_min": None,  # Skip ADX - squeeze happens before trend
+                    "min_trend_strength": None
+                }
+            },
+            
+            "QUALITY_ACCUMULATION": {
+                "nature": "Consolidation-based accumulation, fundamentally driven",
+                "universal_gates": {
+                    "adx_min": None,  # Consolidation = low ADX by design
+                    "min_trend_strength": None
+                }
+            },
+            
+            "QUALITY_ACCUMULATION_DOWNTREND": {
+                "nature": "Accumulation during downtrend/sideways, quality-first",
+                "universal_gates": {
+                    "adx_min": None,
+                    "min_trend_strength": None
+                }
+            },
+            
+            "DEEP_VALUE_PLAY": {
+                "nature": "Deep value based on fundamentals, trend-neutral",
+                "universal_gates": {
+                    "adx_min": None,
+                    "min_trend_strength": None
+                }
+            },
+            
+            "VALUE_TURNAROUND": {
+                "nature": "Value stock showing early trend reversal signs",
+                "universal_gates": {
+                    "adx_min": 15,  # Universal minimum - needs turning momentum
+                    "min_trend_strength": 3.0  # Weak but present uptrend
+                }
+            },
+            
+            "TREND_PULLBACK": {
+                "nature": "Dip-buying in established uptrend",
+                "universal_gates": {
+                    "adx_min": 16,
+                    "min_trend_strength": 4.0
+                }
+            },
+            
+            "DEEP_PULLBACK": {
+                "nature": "Deeper retracement in trend, higher risk/reward",
+                "universal_gates": {
+                    "adx_min": 14,
+                    "min_trend_strength": 3.5
+                }
+            },
+            
+            "REVERSAL_MACD_CROSS_UP": {
+                "nature": "Early reversal signal via MACD momentum shift",
+                "universal_gates": {
+                    "adx_min": 10,  # Low ADX ok - trend just starting
+                    "min_trend_strength": None
+                }
+            },
+            
+            "REVERSAL_RSI_SWING_UP": {
+                "nature": "Oversold bounce reversal",
+                "universal_gates": {
+                    "adx_min": 12,
+                    "min_trend_strength": None
+                }
+            },
+            
+            "REVERSAL_ST_FLIP_UP": {
+                "nature": "Supertrend reversal confirmation",
+                "universal_gates": {
+                    "adx_min": 14,
+                    "min_trend_strength": 2.5
+                }
+            },
+            
+            "PATTERN_DARVAS_BREAKOUT": {
+                "nature": "Darvas box breakout pattern",
+                "universal_gates": {
+                    "adx_min": 16,
+                    "min_trend_strength": 4.0
+                }
+            },
+            
+            "PATTERN_VCP_BREAKOUT": {
+                "nature": "Minervini-style volatility contraction",
+                "universal_gates": {
+                    "adx_min": 15,
+                    "min_trend_strength": 4.5
+                }
+            },
+            
+            "PATTERN_CUP_BREAKOUT": {
+                "nature": "Cup and handle breakout",
+                "universal_gates": {
+                    "adx_min": 14,
+                    "min_trend_strength": 3.5
+                }
+            },
+            
+            "PATTERN_FLAG_BREAKOUT": {
+                "nature": "Flag/pennant continuation pattern",
+                "universal_gates": {
+                    "adx_min": 18,
+                    "min_trend_strength": 5.5
+                }
+            },
+            
+            "PATTERN_GOLDEN_CROSS": {
+                "nature": "Long-term MA crossover signal",
+                "universal_gates": {
+                    "adx_min": 15,
+                    "min_trend_strength": 3.0
+                }
+            },
+
+            "PATTERN_STRIKE_REVERSAL": {
+                "nature": "Three-line strike reversal pattern",
+                "universal_gates": {
+                    "adx_min": 12,
+                    "min_trend_strength": None  # Reversal can happen in weak trend
+                }
+            },
+
+            "MOMENTUM_BREAKDOWN": {
+                "nature": "Breakdown from support with strong bearish momentum",
+                "universal_gates": {
+                    "adx_min": 18,
+                    "min_trend_strength": 5.0  # Strong downtrend
+                }
+            },
+
+            "SELL_AT_RANGE_TOP": {
+                "nature": "Range-bound exit at resistance",
+                "universal_gates": {
+                    "adx_min": None,  # Range = low ADX
+                    "min_trend_strength": None
+                }
+            },
+
+            "TAKE_PROFIT_AT_MID": {
+                "nature": "Partial profit in range-bound consolidation",
+                "universal_gates": {
+                    "adx_min": None,
+                    "min_trend_strength": None
+                }
+            },
+
+            "TREND_FOLLOWING": {
+                "nature": "Classic trend-following entry in established trend",
+                "universal_gates": {
+                    "adx_min": 20,
+                    "min_trend_strength": 5.0
+                }
+            },
+
+            "BEAR_TREND_FOLLOWING": {
+                "nature": "Short/sell setup in strong downtrend",
+                "universal_gates": {
+                    "adx_min": 20,
+                    "min_trend_strength": 5.0  # Strong bearish trend
+                }
+            },           
+            "GENERIC": {
+                "nature": "Fallback for unclassified setups",
+                "universal_gates": {
+                    "adx_min": None,
+                    "min_trend_strength": None
+                }
+            }
+        },
         
+        # ========================================================================
+        # STRATEGY LAYER (Separated from Setup Detection)
+        # ========================================================================
+        "strategy_preferences": {
+        # This layer controls TRADING preferences per horizon
+        # Independent of objective setup classification
+        
+        "horizon_strategy_config": {
+            "intraday": {
+                "preferred_setups": [
+                    "MOMENTUM_BREAKOUT",
+                    "VOLATILITY_SQUEEZE", 
+                    "TREND_PULLBACK"
+                ],
+                "blocked_setups": [
+                    "QUALITY_ACCUMULATION",
+                    "DEEP_VALUE_PLAY",
+                    "VALUE_TURNAROUND"  # Too slow for intraday
+                ],
+                "sizing_multipliers": {
+                    "VOLATILITY_SQUEEZE": 1.3,
+                    "MOMENTUM_BREAKOUT": 0.8
+                },
+                "min_fundamental_score": None  # Ignore fundamentals for intraday
+            },
+            
+            "short_term": {
+                "preferred_setups": [
+                    "MOMENTUM_BREAKOUT",
+                    "TREND_PULLBACK",
+                    "VOLATILITY_SQUEEZE",
+                    "REVERSAL_MACD_CROSS_UP"
+                ],
+                "blocked_setups": [],  # Accept most setups
+                "sizing_multipliers": {
+                    "DEEP_PULLBACK": 1.5,
+                    "TREND_PULLBACK": 1.3,
+                    "MOMENTUM_BREAKOUT": 1.0
+                },
+                "min_fundamental_score": 3.0  # Some fundamental filter
+            },
+            
+            "long_term": {
+                "preferred_setups": [
+                    "VALUE_TURNAROUND",
+                    "DEEP_VALUE_PLAY",
+                    "QUALITY_ACCUMULATION",
+                    "TREND_PULLBACK"
+                ],
+                "blocked_setups": [
+                    "VOLATILITY_SQUEEZE",  # Too short-term
+                    "MOMENTUM_BREAKDOWN"
+                ],
+                "sizing_multipliers": {
+                    "VALUE_TURNAROUND": 1.5,
+                    "DEEP_VALUE_PLAY": 1.4,
+                    "QUALITY_ACCUMULATION": 1.3,
+                    "MOMENTUM_BREAKOUT": 0.8  # Lower conviction for momentum
+                },
+                "min_fundamental_score": 6.0,  # Strong fundamental requirement
+                "filters": {
+                    "require_low_debt": True,  # D/E < 0.5
+                    "min_roe": 15.0,
+                    "min_roce": 15.0,
+                    "max_de_ratio": 0.5 
+                }
+            },
+            
+            "multibagger": {
+                "preferred_setups": [
+                    "VALUE_TURNAROUND",
+                    "DEEP_VALUE_PLAY",
+                    "QUALITY_ACCUMULATION"
+                ],
+                "blocked_setups": [
+                    "MOMENTUM_BREAKOUT",
+                    "VOLATILITY_SQUEEZE",
+                    "REVERSAL_MACD_CROSS_UP"
+                ],
+                "sizing_multipliers": {
+                    "VALUE_TURNAROUND": 1.8,
+                    "DEEP_VALUE_PLAY": 1.6,
+                    "QUALITY_ACCUMULATION": 1.5
+                },
+                "min_fundamental_score": 8.0,  # Very high fundamental bar
+                "filters": {
+                    "require_low_debt": True,
+                    "min_roe": 20.0,
+                    "min_roce": 25.0,
+                    "min_piotroski_f": 7
+                }
+            }
+        }
+    },
+        # ========================================================================
+        # SETUP PRIORITY DESIGN INTENT (Documentation)
+        # ========================================================================
+        "setup_priority_design_philosophy": {
+            "long_term": {
+                "philosophy": "Value-first, quality-second, momentum-last",
+                "reasoning": "Long-term horizon prioritizes fundamental strength and value over technical momentum",
+                "conflict_resolution_rules": {
+                    "VALUE_TURNAROUND + QUALITY_ACCUMULATION": "VALUE_TURNAROUND wins (turning point is rarer opportunity)",
+                    "DEEP_VALUE_PLAY + QUALITY_ACCUMULATION": "DEEP_VALUE wins (cheaper entry with safety margin)",
+                    "TREND_PULLBACK + VALUE_TURNAROUND": "VALUE_TURNAROUND wins (fundamental catalyst > technical)"
+                },
+                "priority_order_rationale": [
+                    "90: VALUE_TURNAROUND - Highest conviction: value + improving momentum",
+                    "88: DEEP_VALUE_PLAY - Pure value with margin of safety",
+                    "85: QUALITY_ACCUMULATION - Quality + patient accumulation",
+                    "80: TREND_PULLBACK - Technical entry in established trend",
+                    "75: MOMENTUM_BREAKOUT - Pure momentum (lower for long-term)"
+                ]
+            },
+            
+            "short_term": {
+                "philosophy": "Momentum-first, trend-second, value-tertiary",
+                "reasoning": "Short-term trades capitalize on price momentum and technical patterns",
+                "conflict_resolution_rules": {
+                    "MOMENTUM_BREAKOUT + TREND_PULLBACK": "MOMENTUM_BREAKOUT wins (stronger signal)",
+                    "VOLATILITY_SQUEEZE + MOMENTUM_BREAKOUT": "VOLATILITY_SQUEEZE wins (earlier entry)",
+                    "VALUE_TURNAROUND + TREND_PULLBACK": "TREND_PULLBACK wins (faster payoff)"
+                }
+            },
+            
+            "intraday": {
+                "philosophy": "Momentum-only, fundamentals-never",
+                "reasoning": "Intraday scalping requires fast price action without fundamental considerations",
+                "conflict_resolution_rules": {
+                    "Any fundamental setup": "Block or heavily penalize - wrong timeframe"
+                }
+            },
+            
+            "multibagger": {
+                "philosophy": "Fundamentals-dominant, quality-obsessed, patience-required",
+                "reasoning": "Multi-year holds require exceptional business quality and value",
+                "conflict_resolution_rules": {
+                    "VALUE_TURNAROUND always wins": "Cheapness + improvement = perfect multibagger formula"
+                }
+            }
+        },
         "gates": {
             "min_trend_strength": 3.0,
             "allowed_supertrend_counter": False,
@@ -1131,31 +1368,7 @@ MASTER_CONFIG = {
                 "max": 12.0
             },
             "volatility_quality_mins": {"default": 3.0},
-            "default_setup_gate_overrides": {
-            # Universal overrides that apply to ALL horizons These define the NATURE of each setup type
-                "QUALITY_ACCUMULATION": { "adx_min": None, "min_trend_strength": None},              # Always skip - consolidation by nature      # Always skip - sideways by definition
-                "QUALITY_ACCUMULATION": { "adx_min": None, "min_trend_strength": None},
-                "QUALITY_ACCUMULATION_DOWNTREND": { "adx_min": None, "min_trend_strength": None},
-                "DEEP_VALUE_PLAY": { "adx_min": None, "min_trend_strength": None},
-                "VALUE_TURNAROUND": { "adx_min": 15, "min_trend_strength": 3.0 },              # Universal minimum (turning point) 
-                "REVERSAL_MACD_CROSS_UP": { "adx_min": 10, "min_trend_strength": None},
-                "REVERSAL_RSI_SWING_UP": { "adx_min": 12, "min_trend_strength": None},
-                "REVERSAL_ST_FLIP_UP": { "adx_min": 14, "min_trend_strength": 2.5},
-                "TREND_PULLBACK": { "adx_min": 16, "min_trend_strength": 4.0},
-                "DEEP_PULLBACK": { "adx_min": 14, "min_trend_strength": 3.5},
-                "VOLATILITY_SQUEEZE": { "adx_min": None, "min_trend_strength": None},             # Always skip - pre-trend by nature 
-                "MOMENTUM_BREAKOUT": { "adx_min": 18, "min_trend_strength": 5.0},
-                "PATTERN_DARVAS_BREAKOUT": { "adx_min": 16, "min_trend_strength": 4.0},
-                "PATTERN_VCP_BREAKOUT": { "adx_min": 15, "min_trend_strength": 4.5},
-                "PATTERN_CUP_BREAKOUT": { "adx_min": 14, "min_trend_strength": 3.5},
-                "PATTERN_FLAG_BREAKOUT": { "adx_min": 18, "min_trend_strength": 5.5},
-                "PATTERN_GOLDEN_CROSS": { "adx_min": 15, "min_trend_strength": 3.0},
-                "GENERIC": { "adx_min": None, "min_trend_strength": None                } 
-            }
-            # NOTE: Only ADX/trend overrides in global
-            # Horizon-specific values (confidence, volatility) go in horizons
         },
-        
         "confidence": {
             "horizon_discount": 5,
             "floors": {"buy": 55, "wait": 35},
@@ -1185,7 +1398,10 @@ MASTER_CONFIG = {
                 "REVERSAL_ST_FLIP_UP": 55,
                 "VALUE_TURNAROUND": 50,  # Starts lower as it's a turning point
                 "DEEP_VALUE_PLAY": 45,   # Low base floor, relies heavily on fundamental quality
-                "QUALITY_ACCUMULATION_DOWNTREND": 45  # Value play in a negative trend
+                "QUALITY_ACCUMULATION_DOWNTREND": 45,  # Value play in a negative trend
+                "SELL_AT_RANGE_TOP": 60,  # Higher confidence for range exit
+                "TAKE_PROFIT_AT_MID": 55,
+                "PATTERN_STRIKE_REVERSAL": 55,
             },
             "adx_normalization": {
                 "min": 10,
@@ -1193,7 +1409,6 @@ MASTER_CONFIG = {
                 "adjustment_factor": 12
             }
         },
-        
         "composites": {
             "trend_strength": {
                 "adx_thresholds": {"strong": 25, "moderate": 20, "weak": 15},
@@ -1222,7 +1437,6 @@ MASTER_CONFIG = {
                 "weights": {"atr": 0.25, "bb_width": 0.25, "true_range": 0.20, "hv": 0.15, "ratio": 0.15}
             }
         },
-        
         "targets": {
             "resistance_cushion": 0.96,
             "support_cushion": 1.005,
@@ -1230,9 +1444,7 @@ MASTER_CONFIG = {
             "support_buffer": 0.998,
             "cover_cushion": 1.005
         },
-        
         "enhancements": {},
-        
         "divergence": {
             "rsi_slope_deceleration_ceiling": -0.08,
             "bearish_penalty": 0.70,
@@ -1257,12 +1469,7 @@ MASTER_CONFIG = {
         }
     },
 
-
     "horizons": {
-        
-        # ========================================================================
-        # INTRADAY (15-minute candles, scalping & day trading)
-        # ========================================================================
         "intraday": {
             "volume_analysis": {
                 "rvol_surge_threshold": 3.0,
@@ -1330,7 +1537,9 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            
+            "position_sizing": {
+                "base_risk_pct": 0.005,  # ✅ Override: 0.5% for quick trades
+            },
             # Tighter risk management
             "risk_management": {
                 "max_position_pct": 0.01,
@@ -1445,28 +1654,47 @@ MASTER_CONFIG = {
             # },
             # Gates - more lenient
             "gates": {
-                # Base gates for intraday
-                "adx_min": 18,
+                # Base gates for intraday (generic baseline)
+                "adx_min": 18,  # Horizon-specific baseline (can be None if very lenient)
                 "min_trend_strength": 5.0,
                 "confidence_min": 65,
                 "volatility_quality_min": 5.0,
+                
+                # Volatility bands specific to intraday
                 "volatility_bands_atr_pct": {
                     "min": 0.3,
                     "ideal": 3.0,
                     "max": 5.0
                 },
                 "volatility_guards": {
-                    "extreme_vol_buffer": 2.0,      
+                    "extreme_vol_buffer": 2.0,
                     "min_quality_breakout": 2.5,
                     "min_quality_normal": 4.0
                 },
-                # Only override horizon-specific values
+                # Setup-specific overrides (ONLY volatility & confidence)
                 "setup_gate_overrides": {
-                    "QUALITY_ACCUMULATION": {"volatility_quality_min": 4.0,"confidence_min": 55},
-                    "DEEP_VALUE_PLAY": {"volatility_quality_min": 2.5,"confidence_min": 45},
-                    "VOLATILITY_SQUEEZE": {"volatility_quality_min": 7.0, "confidence_min": 60},  # Intraday = tighter squeeze
-                    "GENERIC": {"volatility_quality_min": 3.0,"confidence_min": 45}
-                    # Don't repeat adx_min/min_trend_strength - inherited from global
+                    "QUALITY_ACCUMULATION": {
+                        "volatility_quality_min": 4.0,
+                        "confidence_min": 55
+                        # NO adx_min or min_trend_strength - inherited from global
+                    },
+                    "DEEP_VALUE_PLAY": {
+                        "volatility_quality_min": 2.5,
+                        "confidence_min": 45
+                    },
+                    "VOLATILITY_SQUEEZE": {
+                        "volatility_quality_min": 7.0,  # Intraday needs tighter squeeze
+                        "confidence_min": 60
+                    },
+                    "VALUE_TURNAROUND": {
+                        "volatility_quality_min": 3.0,
+                        "confidence_min": 50
+                    },
+                    "GENERIC": {
+                        "volatility_quality_min": 3.0,
+                        "confidence_min": 45
+                    }
+                    # Don't repeat universal gates - they come from global.setup_gate_specifications
                 }
             },
             "trend_thresholds": {
@@ -1575,10 +1803,6 @@ MASTER_CONFIG = {
                 }
             }
         },
-        
-        # ========================================================================
-        # SHORT_TERM (Daily candles, swing trading)
-        # ========================================================================
         "short_term": {
             "volume_analysis": {
                 "rvol_surge_threshold": 2.5,
@@ -1589,10 +1813,9 @@ MASTER_CONFIG = {
             },
             "timeframe": "1d",
             "description": "Swing trading (Days to Weeks)",
-            
-            # Uses global MA settings (EMA 20/50/200)
-            
-            # Risk management
+            "position_sizing": {
+                "base_risk_pct": 0.01  # ✅ Override: 1.0% (or omit to use global)
+            },
             "risk_management": {
                 "max_position_pct": 0.02,
                 "setup_size_multipliers": {
@@ -1608,8 +1831,6 @@ MASTER_CONFIG = {
                     "weak_trend": {"adx_max": 20, "t1_mult": 1.2, "t2_mult": 2.5}
                 }
             },
-            
-            # Execution
             "execution": {
                 "stop_loss_atr_mult": 2.0,
                 "target_atr_mult": 3.0,
@@ -1623,10 +1844,7 @@ MASTER_CONFIG = {
                 },
                 "min_profit_pct": 0.5
             },
-            
             "lookback": {"python_data": 600},
-            
-            # Scoring - balanced tech/fund
             "scoring": {
                 "fundamental_weight": 0.3,
                 "metrics": {
@@ -1658,8 +1876,6 @@ MASTER_CONFIG = {
                     "volatility_quality": 0.05
                 }
             },
-            
-            # Technical weights - balanced
             "technical_weight_overrides": {
                 "momentum_strength": 1.1,
                 "trend_strength": 1.1,
@@ -1676,7 +1892,6 @@ MASTER_CONFIG = {
                 "gap_percent": 0.9,
                 "vwap_bias": 0.8
             },
-            
             # Gates
             # "gates": {
                 # "min_trend_strength": 2.0,
@@ -1725,32 +1940,46 @@ MASTER_CONFIG = {
                 "min_trend_strength": 4.0,
                 "confidence_min": 60,
                 "volatility_quality_min": 4.0,
+                "volatility_guards": {
+                    "extreme_vol_buffer": 2.0,
+                    "min_quality_breakout": 3.0,
+                    "min_quality_normal": 4.0
+                },
                 "volatility_bands_atr_pct": {
                     "min": 0.8,
                     "ideal": 2.5,
                     "max": 12.0
                 },
-                 "volatility_guards": {
-                    "extreme_vol_buffer": 2.0,      # Daily candles
-                    "min_quality_breakout": 3.0,
-                    "min_quality_normal": 4.0
-                },
+                
                 "setup_gate_overrides": {
-                    "QUALITY_ACCUMULATION": {"volatility_quality_min": 2.5, "confidence_min": 45},   # Swing more lenient
-                    "DEEP_VALUE_PLAY": {"volatility_quality_min": 2.0,"confidence_min": 40},
-                    "VOLATILITY_SQUEEZE": {"volatility_quality_min": 6.0,  "confidence_min": 55}, # Slightly looser than intraday
-                    "GENERIC": {"volatility_quality_min": 2.5,"confidence_min": 40                    }
+                    "QUALITY_ACCUMULATION": {
+                        "volatility_quality_min": 2.5,
+                        "confidence_min": 45
+                    },
+                    "DEEP_VALUE_PLAY": {
+                        "volatility_quality_min": 2.0,
+                        "confidence_min": 40
+                    },
+                    "VOLATILITY_SQUEEZE": {
+                        "volatility_quality_min": 6.0,  # Slightly looser than intraday
+                        "confidence_min": 55
+                    },
+                    "VALUE_TURNAROUND": {
+                        "volatility_quality_min": None,  # No vol requirement
+                        "confidence_min": 50
+                    },
+                    "GENERIC": {
+                        "volatility_quality_min": 2.5,
+                        "confidence_min": 40
+                    }
                 }
             },
-            
             "trend_thresholds": {
                 "slope": {
                     "strong": 10.0,
                     "moderate": 3.0
                 }
             },
-            
-            # Confidence
             "confidence": {
                 "horizon_discount": 5,
                 "floors": {"buy": 55, "wait": 30},
@@ -1765,15 +1994,16 @@ MASTER_CONFIG = {
                     "BEAR_TREND_FOLLOWING": 50,
                     "REVERSAL_MACD_CROSS_UP": 50,
                     "REVERSAL_RSI_SWING_UP": 50,
-                    "REVERSAL_ST_FLIP_UP": 55
+                    "REVERSAL_ST_FLIP_UP": 55,
+                    "SELL_AT_RANGE_TOP": 60,
+                    "TAKE_PROFIT_AT_MID": 55,
+                    "PATTERN_STRIKE_REVERSAL": 55
                 },
                 "volume_penalty": {
                     "rvol_drought_penalty": -20,
                     "ignore_for_squeeze": True
                 }
             },
-            
-            # Setup Confidence
             "setup_confidence": {
                 "confidence_clamp": [35, 95],
                 "penalties": {
@@ -1826,8 +2056,6 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            
-            # Enhancements
             "enhancements": {
                 "pattern_confluence": {
                     "condition": "pattern_count >= 2",
@@ -1850,9 +2078,6 @@ MASTER_CONFIG = {
             }
         },
         
-        # ========================================================================
-        # LONG_TERM (Weekly candles, trend following & investing)
-        # ========================================================================
         "long_term": {
             "trend_thresholds": {
                 "slope": {
@@ -1869,8 +2094,6 @@ MASTER_CONFIG = {
             },
             "timeframe": "1wk",
             "description": "Trend Following & Investing",
-            
-            # Override to WMA
             "moving_averages": {
                 "type": "WMA",
                 "fast": 10,
@@ -1879,8 +2102,6 @@ MASTER_CONFIG = {
                 "keys": ["wma_10", "wma_40", "wma_50"],
                 "dip_buy_reference": "wma_40"
             },
-            
-            # Momentum thresholds
             "momentum_thresholds": {
                 "rsi_slope": {
                     "acceleration_floor": 0.03,
@@ -1891,8 +2112,6 @@ MASTER_CONFIG = {
                     "deceleration_ceiling": -0.5
                 }
             },
-            
-            # Volatility scoring - wider bands
             "volatility": {
                 "scoring_thresholds": {
                     "atr_pct": {
@@ -1908,8 +2127,9 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            
-            # Risk management
+            "position_sizing": {
+                "base_risk_pct": 0.015  # ✅ Override: 1.5% for conviction
+            },
             "risk_management": {
                 "max_position_pct": 0.03,
                 "setup_size_multipliers": {"default": 1.0},
@@ -1922,8 +2142,6 @@ MASTER_CONFIG = {
                     "weak_trend": {"adx_max": 20, "t1_mult": 1.5, "t2_mult": 3.0}
                 }
             },
-            
-            # Execution
             "execution": {
                 "stop_loss_atr_mult": 2.5,
                 "target_atr_mult": 5.0,
@@ -1937,10 +2155,7 @@ MASTER_CONFIG = {
                 },
                 "min_profit_pct": 1.0
             },
-            
             "lookback": {"python_data": 800},
-            
-            # Scoring - 50/50 tech/fund
             "scoring": {
                 "fundamental_weight": 0.5,
                 "metrics": {
@@ -1982,7 +2197,6 @@ MASTER_CONFIG = {
                 }
             },
             
-            # Technical weights - boost slow indicators
             "technical_weight_overrides": {
                 "trend_strength": 1.4,
                 "adx": 1.3,
@@ -2009,7 +2223,6 @@ MASTER_CONFIG = {
                 "momentum_strength": 0.9,
                 "volatility_quality": 1.1
             },
-            
             # Gates # RR ratio is validated during trade plan construction, not gate phase
             # "gates": {
             #     "min_trend_strength": 3.0,
@@ -2058,32 +2271,47 @@ MASTER_CONFIG = {
             #     },
             # },
             "gates": {
-                "adx_min": None,                          # Already relaxed
+                "adx_min": None,  # Very relaxed for long-term
                 "min_trend_strength": 3.0,
                 "confidence_min": 55,
-                "volatility_quality_min": None,           # Already skipped
+                "volatility_quality_min": None,  # Skip volatility checks
+                "volatility_guards": {
+                        "extreme_vol_buffer": 3.0,
+                        "min_quality_breakout": 4.0,
+                        "min_quality_normal": 5.0
+                    },
                 "volatility_bands_atr_pct": {
                     "min": 1.0,
                     "ideal": 5.5,
                     "max": 15.0
                 },
-                 "volatility_guards": {
-                    "extreme_vol_buffer": 3.0,      # Weekly candles = very tolerant
-                    "min_quality_breakout": 4.0,     # Still want quality for breakouts
-                    "min_quality_normal": 5.0        # Higher bar for long-term
-                },
+                
                 "setup_gate_overrides": {
-                    # Minimal overrides - base gates already relaxed
-                    "VALUE_TURNAROUND": { "adx_min": 8, "min_trend_strength": 3.0},  # ← Lower for value (was 15)   # Already good
-                    "DEEP_VALUE_PLAY": { "adx_min": None,"min_trend_strength": None },  # ← No ADX requirement for deep value  # No trend requirement
-                    "QUALITY_ACCUMULATION": {"confidence_min": 40},              # Position building over time
-                    "DEEP_VALUE_PLAY": {"confidence_min": 35},              # Long-term = very patient
-                    "MOMENTUM_BREAKOUT": { "min_trend_strength": 4.5},                           # Relax for long-term
-                    "GENERIC": {"confidence_min": 35 }
-                    # ADX/trend/vol already relaxed at horizon level, no overrides needed
-                },
+                    "QUALITY_ACCUMULATION": {
+                        "volatility_quality_min": None,
+                        "confidence_min": 40  # Position building over time
+                    },
+                    "DEEP_VALUE_PLAY": {
+                        "volatility_quality_min": None,
+                        "confidence_min": 35  # Very patient
+                    },
+                    "VALUE_TURNAROUND": {
+                        "adx_min": 8,  # Override universal 15 - lower for value
+                        # min_trend_strength: inherits 3.0 from global - no override needed
+                        "volatility_quality_min": None,
+                        "confidence_min": 45
+                    },
+                    "MOMENTUM_BREAKOUT": {
+                        "min_trend_strength": 4.5,  # Relax from universal 5.0
+                        "volatility_quality_min": None,
+                        "confidence_min": 50
+                    },
+                    "GENERIC": {
+                        "volatility_quality_min": None,
+                        "confidence_min": 35
+                    }
+                }
             },
-            # Confidence
             "confidence": {
                 "horizon_discount": 0,
                 "floors": {"buy": 60, "wait": 40},
@@ -2105,8 +2333,6 @@ MASTER_CONFIG = {
                     "ignore_for_squeeze": True
                 }
             },
-            
-            # Setup Confidence
             "setup_confidence": {
                 "confidence_clamp": [40, 98],
                 "penalties": {
@@ -2154,8 +2380,6 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            
-            # Enhancements
             "enhancements": {
                 "quality_fundamentals": {
                     "condition": "roe >= 20 and roce >= 25",
@@ -2178,9 +2402,6 @@ MASTER_CONFIG = {
             }
         },
         
-        # ========================================================================
-        # MULTIBAGGER (Monthly candles, deep value & compounders)
-        # ========================================================================
         "multibagger": {
             "trend_thresholds": {
                 "slope": {
@@ -2197,8 +2418,6 @@ MASTER_CONFIG = {
             },
             "timeframe": "1mo",
             "description": "Deep Value & Compounders",
-            
-            # Override to MMA
             "moving_averages": {
                 "type": "MMA",
                 "fast": 6,
@@ -2207,8 +2426,6 @@ MASTER_CONFIG = {
                 "keys": ["mma_6", "mma_12", "mma_12"],
                 "dip_buy_reference": "mma_12"
             },
-            
-            # Indicators
             "indicators": {
                 "rsi_period": 14,
                 "adx_period": 14,
@@ -2225,8 +2442,6 @@ MASTER_CONFIG = {
                     "oversold": 15
                 }
             },
-            
-            # Momentum thresholds
             "momentum_thresholds": {
                 "rsi_slope": {
                     "acceleration_floor": 0.02,
@@ -2237,8 +2452,6 @@ MASTER_CONFIG = {
                     "deceleration_ceiling": -0.5
                 }
             },
-            
-            # Volatility scoring - very wide bands
             "volatility": {
                 "scoring_thresholds": {
                     "atr_pct": {
@@ -2254,8 +2467,9 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            
-            # Risk management
+            "position_sizing": {
+                "base_risk_pct": 0.02  # ✅ Override: 2.0% for moonshots
+            },
             "risk_management": {
                 "max_position_pct": 0.05,
                 "setup_size_multipliers": {"QUALITY_ACCUMULATION": 1.5},
@@ -2268,8 +2482,6 @@ MASTER_CONFIG = {
                     "weak_trend": {"adx_max": 20, "t1_mult": 2.0, "t2_mult": 6.0}
                 }
             },
-            
-            # Execution
             "execution": {
                 "stop_loss_atr_mult": 3.0,
                 "target_atr_mult": 10.0,
@@ -2283,10 +2495,7 @@ MASTER_CONFIG = {
                 },
                 "min_profit_pct": 2.0
             },
-            
             "lookback": {"python_data": 3000},
-            
-            # Technical weights - heavily favor slow indicators
             "technical_weight_overrides": {
                 "trend_strength": 1.5,
                 "adx": 1.5,
@@ -2316,50 +2525,50 @@ MASTER_CONFIG = {
                 "momentum_strength": 0.7,
                 "volatility_quality": 1.2
             },
-            
-            # Scoring - 70% fundamental
             "scoring": {
-                "fundamental_weight": 0.7,
-                "metrics": {
-                    "eps_growth_5y": 0.10,
-                    "revenue_growth_5y": 0.10,
-                    "quarterly_growth": 0.05,
-                    "market_cap_cagr": 0.08,
+                "metric_weights": {
+                    # Quality metrics (highest weight)
+                    "roe": 0.12,
+                    "roce": 0.12,
                     "roic": 0.10,
-                    "roe": 0.08,
-                    "peg_ratio": 0.08,
-                    "r_d_intensity": 0.05,
-                    "ocf_vs_profit": 0.06,
-                    "rel_strength_nifty": 0.05,
-                    "institutional_ownership": 0.03,
-                    "promoter_holding": 0.05
+                    
+                    # Debt & efficiency
+                    "de_ratio": 0.05,
+                    "interest_coverage": 0.05,
+                    
+                    # Growth metrics
+                    "eps_growth_5y": 0.12,
+                    "revenue_growth_5y": 0.10,
+                    "market_cap_cagr": 0.08,
+                    "fcf_growth_3y": 0.05,
+                    
+                    # Stability & consistency
+                    "earnings_stability": 0.06,
+                    
+                    # Ownership & quality signals
+                    "promoter_holding": 0.05,
+                    "institutional_ownership": 0.05,
+                    "ocf_vs_profit": 0.05,
+                    
+                    # Trend (technical component - 30% total)
+                    "trend_strength": 0.04,
+                    "ma_trend_signal": 0.04,
+                    "price_vs_200dma_pct": 0.04,
+                    "rel_strength_nifty": 0.03
                 },
                 "penalties": {
-                    "peg_ratio": {"op": ">", "val": 3.0, "pen": 0.3},
-                    "market_cap": {"op": ">", "val": 1000000000000, "pen": 0.5},
-                    "de_ratio": {"op": ">", "val": 1.0, "pen": 0.2},
-                    "roe": {"op": "<", "val": 12, "pen": 0.2},
-                    "institutional_ownership": {"op": ">", "val": 85, "pen": 0.3},
-                    "promoter_pledge": {"op": ">", "val": 10.0, "pen": 0.4}
+                    "price_vs_primary_trend_pct": {"op": "<", "val": 0, "pen": 0.5},
+                    "roe": {"op": "<", "val": 10, "pen": 0.3},
+                    "fcf_yield": {"op": "<", "val": 2, "pen": 0.3},
+                    "promoter_pledge": {"op": ">", "val": 15.0, "pen": 0.2},
+                    "ocf_vs_profit": {"op": "<", "val": 0.6, "pen": 0.5}
                 },
-                "thresholds": {"buy": 8.0, "hold": 6.5, "sell": 4.5},
-                "metric_weights": {
-                    "eps_growth_5y": 0.15,
-                    "revenue_growth_5y": 0.15,
-                    "market_cap_cagr": 0.10,
-                    "quarterly_growth": 0.05,
-                    "roic": 0.10,
-                    "roe": 0.10,
-                    "roce": 0.08,
-                    "de_ratio": 0.05,
-                    "ocf_vs_profit": 0.05,
-                    "earnings_stability": 0.05,
-                    "promoter_holding": 0.04,
-                    "institutional_ownership": 0.04,
-                    "r_d_intensity": 0.04
+                "thresholds": {
+                    "buy": 7.5,
+                    "hold": 6.0,
+                    "sell": 4.0
                 }
-            },
-            
+            },    
             # Gates - focus on quality
             # "gates": {
             #     "min_trend_strength": None,
@@ -2398,37 +2607,36 @@ MASTER_CONFIG = {
             #     },
             # },
             "gates": {
-                "adx_min": None,                    # ❌ ADX is meaningless early for multibaggers
-                "min_trend_strength": 3.0,          # Weak trend is acceptable
-                "confidence_min": 65,               # High conviction required
-                "volatility_quality_min": None,     # ❌ Volatility not a blocker for investing
-                "volatility_bands_atr_pct": {
-                    "min": 1.5,
-                    "ideal": 8.0,
-                    "max": 25.0
-                },
+                "adx_min": None,
+                "min_trend_strength": 3.0,
+                "confidence_min": 60,  # Higher for multi-year commitment
+                "volatility_quality_min": None,
                 "volatility_guards": {
-                    "extreme_vol_buffer": 4.0,      # Monthly candles = maximum tolerance
+                    "extreme_vol_buffer": 4.0,
                     "min_quality_breakout": 5.0,
                     "min_quality_normal": 6.0
                 },
+                "volatility_bands_atr_pct": {
+                    "min": 1.0,
+                    "ideal": 6.0,
+                    "max": 20.0
+                },
+                
                 "setup_gate_overrides": {
-                    "QUALITY_ACCUMULATION": {"confidence_min": 60},
-                    "QUALITY_ACCUMULATION_DOWNTREND": {"confidence_min": 55},
-                    "DEEP_VALUE_PLAY": {"confidence_min": 50},
-                    "VALUE_TURNAROUND": {"min_trend_strength": 2.5, "confidence_min": 55}, #  # Allow very early turn
-                    "TREND_PULLBACK": {"min_trend_strength": 4.0,"confidence_min": 65},
-                    "TREND_FOLLOWING": {"min_trend_strength": 4.5,"confidence_min": 68},
-                    "MOMENTUM_BREAKOUT": {"min_trend_strength": 4.0,"confidence_min": 70},
-                    "PATTERN_CUP_BREAKOUT": {"min_trend_strength": 3.5,"confidence_min": 65},
-                    "PATTERN_GOLDEN_CROSS": {"min_trend_strength": 4.0,"confidence_min": 68},
-                    "REVERSAL_MACD_CROSS_UP": {"min_trend_strength": 3.0,"confidence_min": 60},
-                    "REVERSAL_RSI_SWING_UP": {"min_trend_strength": 3.0,"confidence_min": 60},
-                    "GENERIC": {"confidence_min": 55 }
+                    "QUALITY_ACCUMULATION": {
+                        "confidence_min": 60  # Higher conviction needed
+                    },
+                    "DEEP_VALUE_PLAY": {
+                        "confidence_min": 55
+                    },
+                    "VALUE_TURNAROUND": {
+                        "confidence_min": 65  # Highest conviction
+                    },
+                    "GENERIC": {
+                        "confidence_min": 40
+                    }
                 }
             },
-
-            # Confidence
             "confidence": {
                 "horizon_discount": 0,
                 "floors": {"buy": 65, "wait": 50},
@@ -2450,8 +2658,6 @@ MASTER_CONFIG = {
                     "ignore_for_squeeze": True
                 }
             },
-            
-            # Setup Confidence
             "setup_confidence": {
                 "confidence_clamp": [45, 99],
                 "penalties": {
@@ -2504,8 +2710,6 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            
-            # Enhancements
             "enhancements": {
                 "quality_technical_setup": {
                     "condition": "setup_type == 'QUALITY_ACCUMULATION' and trend_strength >= 4.0",

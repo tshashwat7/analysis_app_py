@@ -100,7 +100,8 @@ from config.config_helpers import (
     apply_horizon_enhancements,
     validate_horizon_entry_gates,
     classify_setup as classify_setup_config_driven,
-    _evaluate_condition_enhanced
+    _evaluate_condition_enhanced,
+    validate_strategy_and_fundamentals
 )
 # -------------------------
 # Dynamic MA Configuration
@@ -3700,7 +3701,7 @@ def generate_trade_plan(
     # =========================================================================
     # STAGE 1: INITIALIZATION (UNCHANGED)
     # =========================================================================
-    
+    config = get_config(horizon,indicators=indicators, fundamentals=fundamentals)
     symbol = indicators.get("symbol", {}).get("value", "UNKNOWN")
     price_val = _get_val(indicators, "price")
     atr_val = _get_val(indicators, "atr_dynamic")
@@ -3765,7 +3766,35 @@ def generate_trade_plan(
     
     #  Log setup classification
     logger.info(f"[{symbol}] [{horizon}] Setup classified: {setup_type} (priority: {setup_priority})")
-    
+
+    # ========== STRATEGY & FUNDAMENTAL FILTER CHECK ==========
+    strat_pass, strat_reason, strat_meta = validate_strategy_and_fundamentals(
+        horizon, setup_type, fundamentals
+    )
+
+    # Store metadata
+    plan["metadata"]["strategy_filter"] = strat_meta
+
+    # Early exit if blocked by strategy or fundamentals
+    if not strat_pass:
+        plan["status"] = "BLOCKED"
+        plan["tradesignal"] = "HOLD"
+        plan["blockreason"] = strat_reason
+        plan["signal"] = "NA_STRATEGY_BLOCKED"
+        plan["reason"] = strat_reason
+        
+        # Add to block gates for UI tracking
+        if not strat_meta["strategy_allowed"]:
+            plan["block_gates"].append("strategy_blocked")
+        elif not strat_meta["fundamental_filter"]["passed"]:
+            plan["block_gates"].append("fundamental_filter")
+        
+        logger.warning(f"{symbol} ({horizon}): STRATEGY/FUNDAMENTAL BLOCKED → {strat_reason}")
+        return plan
+
+    logger.info(f"{symbol} ({horizon}): Strategy & fundamental checks PASSED ✓")
+    # ========== END STRATEGY & FUNDAMENTAL FILTER CHECK ==========
+
     # =========================================================================
     # STAGE 3: BASE CONFIDENCE
     # =========================================================================
@@ -3860,6 +3889,35 @@ def generate_trade_plan(
         f"[{symbol}] [{horizon}] FINAL confidence (after vol/div): {vol_div_conf}%"
     )
     
+    # ✨ NEW: Apply Fundamental Filters (long_term/multibagger only)
+    if fundamentals and horizon in ["long_term", "multibagger"]:
+        fund_passes, fund_failures = config.apply_fundamental_filters(fundamentals)
+        
+        if not fund_passes:
+            plan["status"] = "BLOCKED"
+            plan["trade_signal"] = "HOLD"
+            plan["block_reason"] = f"Failed fundamental filters: {', '.join(fund_failures)}"
+            plan["signal"] = "NA_FUNDAMENTALS_WEAK"
+            plan["reason"] = f"Fundamentals below {horizon} requirements"
+            plan["metadata"]["fundamental_filters"] = {
+                "passed": False,
+                "failures": fund_failures
+            }
+            
+            logger.warning(
+                f"{symbol}/{horizon}: FUNDAMENTAL FILTERS FAILED - {', '.join(fund_failures)}"
+            )
+            return plan
+        
+        # Log successful fundamental filter pass
+        plan["metadata"]["fundamental_filters"] = {
+            "passed": True,
+            "min_score": config.get_strategy_preferences().get("min_fundamental_score")
+        }
+        
+        logger.info(
+            f"{symbol}/{horizon}: Fundamental filters PASSED for {horizon}"
+        )
     # =========================================================================
     # STAGE 6: GATE VALIDATION ⭐ CRITICAL
     # =========================================================================
@@ -5158,17 +5216,24 @@ def validate_all_entry_gates(
         result["passed"] = False
         result["failed_gates"].extend(hard_gates["failures"])
     
-    # Gate 2: Volatility Regime
+    # Gate 2: Volatility Regime (ENHANCED)
     config = get_config(horizon)
-    can_trade_vol, vol_reason = config.should_trade_volatility(indicators, setup_type)
+
+    # Use the new validate_volatility_regime method
+    can_trade_vol, vol_reason = config.validate_volatility_regime(indicators, setup_type)
     result["volatility_check"] = {
-        "passed": can_trade_vol,
-        "reason": vol_reason
+        "passed": can_trade_vol, 
+        "reason": vol_reason,
+        "method": "validate_volatility_regime"  # Track which method used
     }
-    
+
     if not can_trade_vol:
         result["passed"] = False
         result["failed_gates"].append(f"volatility: {vol_reason}")
+        logger.warning(f"{horizon}: Volatility gate FAILED → {vol_reason}")
+    else:
+        logger.debug(f"{horizon}: Volatility gate PASSED ✓ ({vol_reason})")
+
     
     # Gate 3: Entry Permission (from your existing check_entry_permission)
     # from services.signal_engine import check_entry_permission  # Your existing method
@@ -5434,7 +5499,7 @@ def calculate_trade_position_size(
     ✅ REFACTORED: Config-driven position sizing
     
     Old Behavior: Hardcoded in signal_engine (~line 750)
-    New Behavior: Delegates to config_helpers.calculate_position_size
+    New Behavior: Delegates to config_helpers.calculate position size
     
     Formula:
         base_risk × confidence_factor × setup_mult × volatility_mult
@@ -5455,29 +5520,57 @@ def calculate_trade_position_size(
         ... )
         >>> # Returns: (0.015, {"base_risk": 0.01, "conf_factor": 0.75, ...})
     """
-    # ✅ NEW: Delegate to config_helpers
-    position_size = calculate_position_size(
+    # # ✅ NEW: Delegate to config_helpers
+    # position_size = calculate_position_size(
+    #     horizon=horizon,
+    #     indicators=indicators,
+    #     confidence=confidence,
+    #     setup_type=setup_type
+    # )
+    # Position sizing (base calculation)
+    base_position_size = calculate_position_size(
         horizon=horizon,
         indicators=indicators,
         confidence=confidence,
         setup_type=setup_type
     )
     
-    # Build metadata
-    config = get_config(horizon)
+    # ✨ NEW: Apply strategy-specific sizing multiplier
+    config = get_config(horizon=horizon)
+    # Build metadata (strategy_mult for tracking only, NOT re-application)
+    strategy_mult = config.get_strategy_sizing_multiplier(setup_type)
+    
+    # Final position size
+    position_size = base_position_size
+    
+    # Cap at max position
+    max_pos = config.get("risk_management.max_position_pct", 0.02)
+    position_size = min(position_size, max_pos)
     base_risk = config.get("global.position_sizing.base_risk_pct", 0.01)
     
+    logger.info(
+        f"{horizon}: Position {position_size:.4f} "
+        f"(base {base_position_size:.4f} × strategy {strategy_mult:.2f})"
+    )
+    # Build metadata
+    
     metadata = {
-        "position_size": position_size,
+        "position_size": round(position_size, 4),
+        "base_size": round(base_position_size, 4),
+        "strategy_multiplier": strategy_mult,
+        "final_size": round(position_size, 4),
+        "max_cap": max_pos,
         "base_risk_pct": base_risk,
         "confidence_factor": confidence / 100.0,
         "setup_type": setup_type,
-        "horizon": horizon
+        "horizon": horizon,
+        "note": "strategy_mult already applied in calculate_position_size()"
     }
     
     logger.info(
-        f"[{horizon}] Position Size: {position_size:.4f} "
-        f"({position_size * 100:.2f}% of capital)"
+        f"{horizon}: Position Size {position_size:.4f} "
+        f"({position_size*100:.2f}% of capital, "
+        f"strategy_mult={strategy_mult:.2f} already applied)"
     )
     
     return position_size, metadata
@@ -5514,7 +5607,7 @@ def calculate_execution_plan(
     }
     
     try:
-        # ✅ FIX 1: Calculate SL, unpack tuple properly
+        # ✅  Calculate SL, unpack tuple properly
         sl_result = calculate_stop_loss(
             entry, atr, indicators, fundamentals, setup_type, horizon
         )
@@ -5551,13 +5644,15 @@ def calculate_execution_plan(
         risk = abs(entry - sl_val)
         if risk > 0 and t1 and t1 > entry:
             plan["rr_ratio"] = round((t1 - entry) / risk, 2)
-        
-        # Position sizing
+
+        # Get base position size
         position_size, size_meta = calculate_trade_position_size(
             confidence, indicators, setup_type, horizon
         )
+
         plan["position_size"] = position_size
         plan["metadata"]["position_size"] = size_meta
+
         
         return plan
         

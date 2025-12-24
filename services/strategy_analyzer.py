@@ -11,7 +11,79 @@ Features:
 - Centralized Threshold Configuration
 - Robust Type Handling
 """
+# strategy_analyzer.py (AFTER - SEPARATE CONCERNS)
 
+STRATEGY_DEFINITIONS = {
+    "swing_trading": {
+        "description": "Captures multi-day price swings",
+        "fit_indicators": {
+            "trend_strength": {"min": 4.0, "weight": 0.3},
+            "volatility_quality": {"min": 5.0, "weight": 0.3},
+            "adx": {"min": 20, "weight": 0.2}
+        },
+        "fit_threshold": 60,
+        "preferred_setups": [
+            "TREND_PULLBACK",
+            "DEEP_PULLBACK",
+            "PATTERN_FLAG_BREAKOUT"
+        ],
+        "avoid_setups": ["VOLATILITY_SQUEEZE"],  # Too unpredictable for swing
+        "notes": "Best for 3-10 day holds with clear trend structure"
+    },
+    
+    "day_trading": {
+        "description": "Intraday entries and exits",
+        "fit_indicators": {
+            "momentum_strength": {"min": 6.0, "weight": 0.4},
+            "rvol": {"min": 2.0, "weight": 0.3},
+            "volatility_quality": {"min": 6.0, "weight": 0.3}
+        },
+        "fit_threshold": 65,
+        "preferred_setups": [
+            "MOMENTUM_BREAKOUT",
+            "VOLATILITY_SQUEEZE",
+            "PATTERN_DARVAS_BREAKOUT"
+        ],
+        "avoid_setups": ["QUALITY_ACCUMULATION"],  # Too slow
+        "notes": "Requires high volume and fast momentum"
+    },
+    
+    "minervini_growth": {
+        "description": "Mark Minervini's growth stock method",
+        "fit_indicators": {
+            "eps_growth_5y": {"min": 25, "weight": 0.3},
+            "rel_strength_nifty": {"min": 1.2, "weight": 0.3},
+            "trend_strength": {"min": 6.0, "weight": 0.2},
+            "volatility_quality": {"min": 5.0, "weight": 0.2}
+        },
+        "fit_threshold": 70,
+        "preferred_setups": [
+            "PATTERN_VCP_BREAKOUT",
+            "PATTERN_CUP_BREAKOUT",
+            "TREND_PULLBACK"
+        ],
+        "required_patterns": ["minervini_stage2"],
+        "notes": "Requires Stage 2 confirmation + growth fundamentals"
+    },
+    
+    "value_investing": {
+        "description": "Long-term value accumulation",
+        "fit_indicators": {
+            "pe_ratio": {"max": 15, "weight": 0.3, "direction": "invert"},
+            "roe": {"min": 15, "weight": 0.3},
+            "de_ratio": {"max": 0.5, "weight": 0.2, "direction": "invert"},
+            "fcf_yield": {"min": 5.0, "weight": 0.2}
+        },
+        "fit_threshold": 65,
+        "preferred_setups": [
+            "QUALITY_ACCUMULATION",
+            "DEEP_VALUE_PLAY",
+            "VALUE_TURNAROUND"
+        ],
+        "avoid_setups": ["MOMENTUM_BREAKOUT"],  # Too speculative
+        "notes": "Patient capital, months-to-years hold time"
+    }
+}
 from typing import Dict, Any, List, Optional
 import math
 from config.master_config import MASTER_CONFIG as MASTERCONFIG

@@ -11,7 +11,7 @@ import ast
 import operator
 import re
 
-from services.data_fetch import _safe_get_raw_float
+from services.data_fetch import _get_val, _safe_get_raw_float
 logger = logging.getLogger(__name__)
 
 from config.master_config import MASTER_CONFIG
@@ -148,7 +148,6 @@ class ConfigResolver:
             )
         
         return rules
-
     
     def get_pattern_priority(self) -> List[Tuple[str, str, int]]:
         """
@@ -296,10 +295,6 @@ class ConfigResolver:
         score = min(10, round(raw, 2))
         
         return {"raw": raw, "value": score, "score": int(score), "desc": "Vol Quality"}
-    
-    
-    
-
     
     def _normalize_volatility_bands(self) -> Dict[str, float]:
         """
@@ -886,18 +881,43 @@ class ConfigResolver:
         
         return {'type': 'normal', 'adjustment': 0, 'warning': None}
     
-    def get_confidence_floor(self, setup_type: str = None) -> int:
-        """
-        Get confidence floor for setup type (horizon-specific).
-        Used by: calculate_setup_confidence()
-        """
-        if setup_type:
-            base_floors = self.get("confidence.base_floors", {})
-            return base_floors.get(setup_type, 55)
+    # def get_confidence_floor(self, setup_type: str = None) -> int:
+    #     """
+    #     Get confidence floor for setup type (horizon-specific).
         
-        # Fallback to buy floor
-        floors = self.get("confidence.floors", {})
-        return floors.get("buy", 55)
+    #     Resolution order:
+    #     1. Horizon-specific base_floors
+    #     2. Global base_floors
+    #     3. Default 55
+    #     """
+    #     if setup_type:
+    #         # Try horizon first
+    #         base_floors = self.get("confidence.base_floors", {})
+    #         floor = base_floors.get(setup_type)
+            
+    #         if floor is not None:
+    #             return floor
+            
+    #         # Fallback to global if not in horizon
+    #         global_floors = self.global_config.get("confidence", {}).get("base_floors", {})
+    #         floor = global_floors.get(setup_type)
+            
+    #         if floor is not None:
+    #             logger.debug(
+    #                 f"{self.horizon}: Using global base_floor for {setup_type}: {floor}"
+    #             )
+    #             return floor
+            
+    #         # Ultimate fallback
+    #         logger.warning(
+    #             f"{self.horizon}: No base_floor found for {setup_type}, using 55"
+    #         )
+    #         return 55
+        
+    #     # If no setup_type provided, return buy floor
+    #     floors = self.get("confidence.floors", {})
+    #     return floors.get("buy", 55)
+
     
     def get_spread_adjustment(self, market_cap: float) -> float:
         """
@@ -916,7 +936,7 @@ class ConfigResolver:
             return mid.get("spread_pct", 0.002)
         else:
             return small.get("spread_pct", 0.005)
-    
+
     # ============================================================
     # HELPER UTILITIES (Category B - Should Have)
     # ============================================================
@@ -1002,18 +1022,92 @@ class ConfigResolver:
     # CONVENIENCE WRAPPERS (Category C - Optional but Useful)
     # ============================================================
     
+    def get_setup_multiplier(self, setup_type: str) -> float:
+        """
+        Get position size multiplier for setup type (global).
+        Path: global.positionsizing.globalsetupmultipliers.{setup_type}
+        Args:
+            setup_type: Setup classification (e.g., "VALUE_TURNAROUND")
+        Returns:
+            Setup multiplier (default 1.0 if not found)
+        Example:
+            >>> config.get_setup_multiplier("VALUE_TURNAROUND")
+            1.4
+        """
+        # ✅ FIXED - Use correct path with smart inheritance
+        multipliers = self.get("global.positionsizing.globalsetupmultipliers", {})
+        mult = multipliers.get(setup_type, 1.0)
+        
+        logger.debug( f"[{self.horizon}] Setup multiplier for {setup_type}: {mult:.2f}" )
+        return mult
+
+
     def get_position_sizing_config(self) -> Dict:
         """
-        Get position sizing parameters.
-        Convenience wrapper for all position sizing config.
+        Get complete position sizing configuration for this horizon.
+        
+        Uses smart inheritance:
+        - base_risk_pct: Horizon-specific with global fallback
+        - max_position_pct: Horizon-specific with global fallback  
+        - setup_multipliers: Global only
+        - volatility_adjustments: Global only
+        
+        Returns:
+            Dictionary with all position sizing parameters
+        
+        Example:
+            >>> config = get_config("long_term")
+            >>> ps = config.get_position_sizing_config()
+            >>> print(ps["base_risk_pct"])  # 0.015 (long_term override)
+            >>> print(ps["setup_multipliers"]["VALUE_TURNAROUND"])  # 1.4 (global)
         """
+        # ✅ FIXED - Use correct paths with smart inheritance
         return {
-            "base_risk_pct": self.get("position_sizing.base_risk_pct", 0.01),
-            "setup_multipliers": self.get("position_sizing.global_setup_multipliers", {}),
-            "volatility_adjustments": self.get("position_sizing.volatility_adjustments", {}),
-            "max_position_pct": self.get("risk_management.max_position_pct", 0.02)
+            # Horizon-specific with global fallback
+            "base_risk_pct": self.get("global.positionsizing.baseriskpct", 0.01),
+            
+            # Global only (not horizon-specific)
+            "setup_multipliers": self.get("global.positionsizing.globalsetupmultipliers", {}),
+            "volatility_adjustments": self.get("global.positionsizing.volatilityadjustments", {}),
+            
+            # Horizon-specific with global fallback
+            "max_position_pct": self.get("riskmanagement.maxpositionpct", 0.02)
         }
-    
+
+    def get_volatility_multiplier(self, vol_quality: float) -> float:
+        """
+        Get position size multiplier based on volatility quality.
+        Path: global.positionsizing.volatilityadjustments
+        Args:
+            vol_quality: Volatility quality score (0-10)
+        Returns:
+            Volatility multiplier (1.2 for high, 1.0 for medium, 0.9 for low)
+        Example:
+            >>> config.get_volatility_multiplier(7.5)
+            1.2  # High quality
+        """
+        adjustments = self.get("global.positionsizing.volatilityadjustments", {})
+        
+        # Check high quality first
+        high_cfg = adjustments.get("high_quality", {})
+        if "vol_qual_min" in high_cfg and vol_quality >= high_cfg["vol_qual_min"]:
+            mult = high_cfg.get("multiplier", 1.2)
+            logger.debug(f"[{self.horizon}] Vol regime: HIGH (qual={vol_quality:.1f}, mult={mult:.2f})")
+            return mult
+        
+        # Check low quality
+        low_cfg = adjustments.get("low_quality", {})
+        if "vol_qual_max" in low_cfg and vol_quality <= low_cfg["vol_qual_max"]:
+            mult = low_cfg.get("multiplier", 0.9)
+            logger.debug(f"[{self.horizon}] Vol regime: LOW (qual={vol_quality:.1f}, mult={mult:.2f})")
+            return mult
+        
+        # Default to medium
+        medium_cfg = adjustments.get("medium_quality", {})
+        mult = medium_cfg.get("multiplier", 1.0)
+        logger.debug(f"[{self.horizon}] Vol regime: MEDIUM (qual={vol_quality:.1f}, mult={mult:.2f})")
+        return mult
+
     def get_proximity_rejection(self) -> Dict[str, float]:
         """
         Get S/R proximity rejection multipliers.
@@ -1023,13 +1117,6 @@ class ConfigResolver:
             "resistance_mult": 1.005,
             "support_mult": 0.995
         })
-    
-    def get_setup_multiplier(self, setup_type: str) -> float:
-        """
-        Get position size multiplier for setup type (global).
-        """
-        multipliers = self.get("position_sizing.global_setup_multipliers", {})
-        return multipliers.get(setup_type, 1.0)
     
     def get_technical_weight(self, indicator: str) -> float:
         """
@@ -1080,40 +1167,329 @@ class ConfigResolver:
     # ============================================================
     # FIXED: Gates Validation
     # ============================================================
-    
+    # ========== NEW METHODS - Add to ConfigResolver class ==========
+
+    def get_strategy_preferences(self) -> Dict[str, Any]:
+        """
+        Get strategy preferences for current horizon.
+        
+        Path: global.strategy_preferences.horizon_strategy_config.{horizon}
+        
+        Returns:
+            Dict with:
+            - preferred_setups: List[str]
+            - blocked_setups: List[str]
+            - sizing_multipliers: Dict[str, float]
+            - min_fundamental_score: Optional[float]
+            - filters: Dict (long_term/multibagger only)
+        
+        Example:
+            >>> config = get_config("intraday")
+            >>> prefs = config.get_strategy_preferences()
+            >>> prefs["blocked_setups"]
+            ['DEEP_VALUE_PLAY', 'QUALITY_ACCUMULATION']
+        """
+        strategy_config = self.get(
+            f"strategy_preferences.horizon_strategy_config.{self.horizon}",
+            {}
+        )     
+        return {
+            "preferred_setups": strategy_config.get("preferred_setups", []),
+            "blocked_setups": strategy_config.get("blocked_setups", []),
+            "sizing_multipliers": strategy_config.get("sizing_multipliers", {}),
+            "min_fundamental_score": strategy_config.get("min_fundamental_score"),
+            "filters": strategy_config.get("filters", {})
+        }
+
+
+    def is_setup_allowed(self, setup_type: str) -> bool:
+        """
+        Check if setup is allowed for current horizon strategy.
+        
+        Args:
+            setup_type: Setup classification (e.g., "MOMENTUM_BREAKOUT")
+        
+        Returns:
+            True if setup is not in blocked list
+        
+        Example:
+            >>> config = get_config("intraday")
+            >>> config.is_setup_allowed("DEEP_VALUE_PLAY")
+            False  # Blocked for intraday
+            >>> config.is_setup_allowed("MOMENTUM_BREAKOUT")
+            True   # Allowed for intraday
+        """
+        prefs = self.get_strategy_preferences()
+        blocked = prefs.get("blocked_setups", [])
+        
+        if setup_type in blocked:
+            logger.info(f"{self.horizon}: Setup {setup_type} BLOCKED by strategy preferences")
+            return False
+        
+        return True
+
+
+    def get_strategy_sizing_multiplier(self, setup_type: str) -> float:
+        """
+        Get strategy-specific sizing multiplier.
+        
+        These are SEPARATE from setup multipliers - they represent
+        horizon strategy preferences (e.g., 'we prefer accumulation for long-term').
+        
+        Args:
+            setup_type: Setup classification
+        
+        Returns:
+            Multiplier from strategy preferences, or 1.0 if not specified
+        
+        Example:
+            >>> config = get_config("multibagger")
+            >>> config.get_strategy_sizing_multiplier("VALUE_TURNAROUND")
+            1.8  # Multibagger prefers value setups
+            >>> config.get_strategy_sizing_multiplier("MOMENTUM_BREAKOUT")
+            0.5  # Multibagger reduces momentum exposure
+        """
+        prefs = self.get_strategy_preferences()
+        multiplier = prefs.get("sizing_multipliers", {}).get(setup_type, 1.0)
+        
+        if multiplier != 1.0:
+            logger.debug(
+                f"{self.horizon}: Strategy sizing multiplier for {setup_type}: {multiplier:.2f}"
+            )
+        
+        return multiplier
+
+
+    def apply_fundamental_filters(
+        self, 
+        fundamentals: Dict[str, Any]
+    ) -> Tuple[bool, List[str]]:
+        """
+        Apply horizon-specific fundamental filters.
+        Path: global.strategy_preferences.horizon_strategy_config.{horizon}.filters
+        Only applies to horizons with min_fundamental_score > 0.        
+        Args:
+            fundamentals: Fundamental data dict
+        Returns:
+            (passes: bool, failures: List[str])
+        Example:
+            >>> config = get_config("multibagger")
+            >>> fundamentals = {"roe": 10, "roce": 12, "de_ratio": 0.3}
+            >>> passes, failures = config.apply_fundamental_filters(fundamentals)
+            >>> passes
+            False
+            >>> failures
+            ['ROE 10.0% < 20%', 'ROCE 12.0% < 25%']
+        """
+        prefs = self.get_strategy_preferences()
+        
+        min_score = prefs.get("min_fundamental_score")
+        if min_score is None or min_score == 0:
+            return (True, [])  # No fundamental requirements for this horizon
+        
+        filters = prefs.get("filters", {})
+        if not filters:
+            return (True, [])  # No filters defined
+        
+        failures = []
+        
+        # Check require_low_debt
+        if filters.get("require_low_debt"):
+            max_de = filters.get("max_de_ratio", 0.5)
+            de_ratio = _get_val(fundamentals, "de_ratio", 0)
+            if de_ratio > max_de:
+                failures.append(f"DE ratio {de_ratio:.2f} > {max_de}")
+        
+        # Check min_roe
+        if "min_roe" in filters:
+            min_roe = filters["min_roe"]
+            roe = _get_val(fundamentals, "roe", 0)
+            if roe < min_roe:
+                failures.append(f"ROE {roe:.1f}% < {min_roe}%")
+        
+        # Check min_roce
+        if "min_roce" in filters:
+            min_roce = filters["min_roce"]
+            roce = _get_val(fundamentals, "roce", 0)
+            if roce < min_roce:
+                failures.append(f"ROCE {roce:.1f}% < {min_roce}%")
+        
+        # Check min_piotroski_f (multibagger only)
+        if "min_piotroski_f" in filters:
+            min_f = filters["min_piotroski_f"]
+            f_score = _get_val(fundamentals, "piotroski_f", 0)
+            if f_score < min_f:
+                failures.append(f"Piotroski F-Score {f_score} < {min_f}")
+        
+        # Check max_pe_ratio
+        if "max_pe_ratio" in filters:
+            max_pe = filters["max_pe_ratio"]
+            pe_ratio = _get_val(fundamentals, "pe_ratio", 999)
+            if pe_ratio > max_pe:
+                failures.append(f"P/E ratio {pe_ratio:.1f} > {max_pe}")
+        
+        passes = len(failures) == 0
+        
+        if not passes:
+            logger.info(
+                f"{self.horizon}: Fundamental filters FAILED: {', '.join(failures)}"
+            )
+        else:
+            logger.info(f"{self.horizon}: Fundamental filters PASSED ✓")
+        
+        return (passes, failures)
+
+
+    def validate_volatility_regime(
+        self, 
+        indicators: Dict, 
+        setup_type: str
+    ) -> Tuple[bool, str]:
+        """
+        Enhanced volatility regime validation using guards.
+        
+        Now supports setup-specific quality requirements from gates.
+        
+        Args:
+            indicators: Technical indicators
+            setup_type: Setup classification
+        
+        Returns:
+            (should_trade: bool, reason: str)
+        
+        Example:
+            >>> config = get_config("intraday")
+            >>> can_trade, reason = config.validate_volatility_regime(
+            ...     indicators={"volatility_quality": 3.0, "atr_pct": 2.5},
+            ...     setup_type="MOMENTUM_BREAKOUT"
+            ... )
+            >>> can_trade
+            True
+            >>> reason
+            "Volatility expansion allowed for breakout"
+        """
+        vol_qual = _get_val(indicators, "volatility_quality")
+        atr_pct = _get_val(indicators, "atr_pct")
+        
+        if vol_qual is None or atr_pct is None:
+            return (True, "Missing vol data, proceed cautiously")
+        
+        # Get guards from horizon gates
+        guards = self.get_volatility_guards()
+        bands = self._normalize_volatility_bands()
+        
+        # 1. Extreme volatility check
+        extreme_buffer = guards.get("extreme_vol_buffer", 2.0)
+        max_band = bands.get("max", 12.0)
+        extreme_threshold = max_band * extreme_buffer
+        
+        if atr_pct > extreme_threshold:
+            return (False, f"Extreme volatility {atr_pct:.1f}%, avoid all entries")
+        
+        # 2. Setup-specific quality check
+        if "BREAKOUT" in setup_type or "BREAKDOWN" in setup_type:
+            min_qual = guards.get("min_quality_breakout", 2.0)
+            if vol_qual < min_qual:
+                return (False, f"Vol quality {vol_qual:.1f} < {min_qual} for breakout")
+            return (True, "Volatility expansion allowed for breakout")
+        
+        # 3. Normal setup quality check
+        min_qual = guards.get("min_quality_normal", 4.0)
+        if vol_qual < min_qual:
+            return (False, f"Low vol quality {vol_qual:.1f}, potential chop")
+        
+        return (True, "Volatility regime favorable")
+
+
+    def get_confidence_floor(self, setup_type: str = None) -> int:
+        """
+        Get confidence floor for setup type (horizon-specific).
+        
+        ENHANCED version with better fallback for new setups.
+        
+        Resolution order:
+        1. Horizon-specific base_floors
+        2. Global base_floors
+        3. Default 55
+        
+        Args:
+            setup_type: Setup classification (optional)
+        
+        Returns:
+            Confidence floor (35-75)
+        
+        Example:
+            >>> config = get_config("short_term")
+            >>> config.get_confidence_floor("MOMENTUM_BREAKOUT")
+            55
+            >>> config.get_confidence_floor("PATTERN_STRIKE_REVERSAL")
+            50  # Falls back to global if not in short_term
+        """
+        if setup_type:
+            # Try horizon first
+            base_floors = self.get("confidence.base_floors", {})
+            floor = base_floors.get(setup_type)
+            
+            if floor is not None:
+                return floor
+            
+            # Fallback to global if not in horizon
+            global_floors = self._global_config.get("confidence", {}).get("base_floors", {})
+            floor = global_floors.get(setup_type)
+            
+            if floor is not None:
+                logger.debug(
+                    f"{self.horizon}: Using global base_floor for {setup_type}: {floor}"
+                )
+                return floor
+            
+            # Ultimate fallback
+            logger.warning(
+                f"{self.horizon}: No base_floor found for {setup_type}, using 55"
+            )
+            return 55
+        
+        # If no setup_type provided, return buy floor
+        floors = self.get("confidence.floors", {})
+        return floors.get("buy", 55)
+
+
+# ========== END NEW METHODS ==========
+
+
     def get_gate_checks(self) -> Dict[str, Any]:
         """
-        ✅ ENHANCED: Merges global + horizon setup gate overrides
+        ✅ UPDATED: Support for the new 'setup_gate_specifications' structure.
         """
-        # Get base gates
         gates = self.get_section("gates", merge_global=True)
         
-        # 1. Get global default overrides
-        global_defaults = self._global_config.get("gates", {}).get("default_setup_gate_overrides", {})
+        # 1. Fetch Universal Gates (The "Nature" of the setup)
+        # This is the new path from your patch!
+        universal_specs = self._global_config.get("setup_gate_specifications", {})
         
-        # 2. Get horizon-specific overrides
+        # 2. Fetch Horizon Overrides (Confidence and Volatility)
         horizon_overrides = self._horizon_config.get("gates", {}).get("setup_gate_overrides", {})
         
-        # 3. Merge: horizon values override global
+        # 3. Smart Merge Logic
         final_overrides = {}
-        all_setups = set(global_defaults.keys()) | set(horizon_overrides.keys())
+        all_setup_names = set(universal_specs.keys()) | set(horizon_overrides.keys())
         
-        for setup_type in all_setups:
-            global_vals = global_defaults.get(setup_type, {})
-            horizon_vals = horizon_overrides.get(setup_type, {})
+        for setup in all_setup_names:
+            # Get nature/universal gates first
+            spec = universal_specs.get(setup, {}).get("universal_gates", {})
+            # Get horizon specific overrides (vol/conf)
+            h_ovr = horizon_overrides.get(setup, {})
             
-            # Merge: horizon wins for conflicts
-            final_overrides[setup_type] = {**global_vals, **horizon_vals}
+            # Horizon overrides ALWAYS win (e.g., your adx_min: 8 for long-term)
+            final_overrides[setup] = {**spec, **h_ovr}
         
         gates["setup_gate_overrides"] = final_overrides
-        
         logger.debug(f"[{self.horizon}] Gate resolution:")
-        logger.debug(f"  Global defaults: {len(global_defaults)} setups")
+        logger.debug(f"  Global defaults: {len(universal_specs)} setups")
         logger.debug(f"  Horizon overrides: {len(horizon_overrides)} setups")
         logger.debug(f"  Final merged: {len(final_overrides)} setups")
-        
         return gates
- 
+    
     def get_trend_threshold(self, metric: str) -> float:
         """
         Get trend slope thresholds (horizon-specific).
@@ -1176,14 +1552,26 @@ class ConfigResolver:
     
     def get_volatility_guards(self) -> Dict[str, float]:
         """
-        Get volatility guard thresholds.
-        Part of gates config.
+        Get volatility guard thresholds - horizon-specific.
+        
+        Path: horizons.{horizon}.gates.volatility_guards
+        Fallback: global defaults
+        
+        Returns:
+            Dict with:
+            - extreme_vol_buffer: float (how much above max triggers extreme)
+            - min_quality_breakout: float (min vol quality for breakout setups)
+            - min_quality_normal: float (min vol quality for normal setups)
         """
-        return self.get("gates.volatility_guards", {
-            "extreme_vol_buffer": 2.0,
-            "min_quality_breakout": 3.0,
-            "min_quality_normal": 4.0
-        })
+        guards = self.get("gates.volatility_guards", {})
+        
+        # Ensure all required keys exist with proper defaults
+        return {
+            "extreme_vol_buffer": guards.get("extreme_vol_buffer", 2.0),
+            "min_quality_breakout": guards.get("min_quality_breakout", 3.0),
+            "min_quality_normal": guards.get("min_quality_normal", 4.0)
+        }
+
     
     def get_volume_threshold(self, metric: str) -> float:
         """

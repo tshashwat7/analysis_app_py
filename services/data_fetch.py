@@ -226,6 +226,15 @@ def _get_val(data: Dict, key: str, default: float = 0.0) -> float:
     if not data or key not in data:
         logger.debug(f"_get_val: missing key '{key}'")
         return default
+    
+    # Explicit handling for known direct numeric fields
+    if key in {"52w_high", "52_week_high", "52w_low", "52_week_low"}:
+        val = _safe_float(data.get(key))
+        if val is None:
+            logger.debug(f"_get_val: key '{key}' has no numeric value")
+            return default
+        return val
+    
     val = _safe_get_raw_float(data.get(key))
     if val is None:
         logger.debug(f"_get_val: key '{key}' has no numeric value")
