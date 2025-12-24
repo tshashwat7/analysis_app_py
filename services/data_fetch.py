@@ -221,6 +221,17 @@ def _safe_get_raw_float(metric_entry: Any) -> Optional[float]:
                 if f is not None: return f
     return _safe_float(metric_entry)
 
+def _get_val(data: Dict, key: str, default: float = 0.0) -> float:
+    """Safe float extraction from diverse indicator formats."""
+    if not data or key not in data:
+        logger.debug(f"_get_val: missing key '{key}'")
+        return default
+    val = _safe_get_raw_float(data.get(key))
+    if val is None:
+        logger.debug(f"_get_val: key '{key}' has no numeric value")
+        return default
+    return val
+
 def normalize_ratio(v):
     v = safe_float(v)
     if v is None or (isinstance(v, float) and math.isnan(v)): return None

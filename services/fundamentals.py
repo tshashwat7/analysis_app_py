@@ -688,7 +688,7 @@ def calc_earnings_stability(t, unifier: DataUnifier = None):
     vals = ser.dropna().astype(float)
     mean = vals.mean()
     if mean == 0: return None
-    cv = abs(vals.std(ddof=0) / mean)
+    cv = safe_float(abs(vals.std(ddof=0) / mean))
     score = 10 if cv < 0.2 else 6 if cv < 0.5 else 2
     return {"raw": cv, "value": round(cv, 2), "score": score, "desc": f"Earnings CV {cv:.2f}"}
 

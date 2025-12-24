@@ -27,6 +27,7 @@ from config.constants import ENABLE_CACHE_WARMER, ENABLE_JSON_ENRICHMENT, INDEX_
 from services.data_fetch import parse_index_csv
 from services.fundamentals import compute_fundamentals
 from services.indicators import compute_indicators
+from config.config_resolver import get_config
 from services.signal_engine import (
     compute_all_profiles,
     compute_momentum_strength,
@@ -650,6 +651,7 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                 )
                 analysis_data["raw_indicators_by_horizon"][h] = h_indicators
                 logger.info(f"[{symbol}] Computed {len(h_indicators)} indicators for {h}")
+                get_config(horizon=h, indicators=analysis_data['raw_indicators_by_horizon'][h], fundamentals=analysis_data['fundamentals'])
             except Exception as e:
                 analysis_data["partial_error"] = True
                 analysis_data["error_details"].append(f"Indicators/{h}: {e}")
@@ -664,11 +666,17 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
                     analysis_data["fundamentals"], 
                     analysis_data["raw_indicators_by_horizon"]
                 )
-                
+                # SORT ENRICH_FUNDS BY Key
+                enriched_fund = dict(sorted(enriched_fund.items()))
+                enriched_inds = {k: dict(sorted(v.items())) for k, v in enriched_inds.items()}
                 # Update nested structure
                 analysis_data["fundamentals"] = enriched_fund
                 analysis_data["raw_indicators_by_horizon"] = enriched_inds
-                
+                fundamentals = analysis_data['fundamentals']
+                for horizon in horizons:
+                    get_config(horizon, indicators=analysis_data['raw_indicators_by_horizon'][horizon], 
+                            fundamentals=fundamentals)
+                    logger.info(f"✅ PRIMED {horizon} cache: {len(analysis_data['raw_indicators_by_horizon'][horizon])} keys")
             except Exception as e:
                 logger.warning(f"[{symbol}] Hybrid enrichment failed: {e}")
                 analysis_data["error_details"].append(f"Hybrid Failed: {e}")
@@ -1004,14 +1012,20 @@ async def analyze_common(request: Request, symbol: str, index: str = "nifty50", 
         if not current_horizon_inds: current_horizon_inds = analysis_data.get("indicators", {})
 
         # ... (Prepare standard summaries/scores variables) ...
-        if analysis_data.get("trade_recommendation", {}) is not None:
-            trade_plan = analysis_data.get("trade_recommendation", {})
-        else:
+        best_fit = full_report.get("best_fit", "short_term")
+
+        if selected_profile_name != best_fit:
             trade_plan = generate_trade_plan(
-                profile_report, current_horizon_inds, analysis_data.get("macro_trend_status", "N/A"),
-                horizon=selected_profile_name, strategy_report=analysis_data.get("strategy_report", {}),
+                profile_report,
+                current_horizon_inds,
+                analysis_data.get("macro_trend_status", "N/A"),
+                horizon=selected_profile_name,
+                strategy_report=analysis_data.get("strategy_report", {}),
                 fundamentals=analysis_data.get("fundamentals", {}),
             )
+        else:
+            trade_plan = analysis_data.get("trade_recommendation", {})
+
         final_score = profile_report.get("final_score", 0)
         meta_scores = analysis_data.get("meta_scores", {})
         summary_context = {
@@ -1130,67 +1144,46 @@ async def flowchart_payload(symbol: str, index: str = Query("NIFTY50")):
     except Exception as e:
         return {"error": str(e)}
 
-def validate_master_config():
+def startup_config_validation():
     """
-    Validates MASTER_CONFIG has required keys.
-    Logs warnings for missing/invalid config.
+    Validates MASTER_CONFIG at startup using ConfigValidator.
+    Critical: Catches structural errors before any analysis runs.
     """
-    from config.constants import MASTER_CONFIG
-    import logging
+    from config.config_validators import ConfigValidator
+    from config.master_config import MASTER_CONFIG
+    import sys
     
-    logger = logging.getLogger(__name__)
-    errors = []
-    warnings = []
+    logger.info("="*70)
+    logger.info("VALIDATING MASTER_CONFIG v2.0...")
+    logger.info("="*70)
     
-    # Check global config exists
-    if "global" not in MASTER_CONFIG:
-        errors.append("MASTER_CONFIG['global'] missing")
-        return False
+    validator = ConfigValidator(MASTER_CONFIG)
+    report = validator.validate_all()
     
-    cfg_global = MASTER_CONFIG["global"]
+    if not report.is_valid:
+        logger.error("❌ CRITICAL: Config validation FAILED!")
+        report.print_report()
+        
+        # Block startup if errors exist
+        logger.error("Fix config errors in master_config.py before starting.")
+        sys.exit(1)
     
-    # Check pattern physics
-    if "pattern_physics" not in cfg_global or not cfg_global["pattern_physics"]:
-        errors.append("pattern_physics missing or empty")
-    else:
-        physics = cfg_global["pattern_physics"]
-        required_patterns = ["darvas_box", "cup_handle", "flag_pennant", "bollinger_squeeze"]
-        for p in required_patterns:
-            if p not in physics:
-                warnings.append(f"pattern_physics.{p} missing")
+    # Show warnings but don't block
+    if report.warnings:
+        logger.warning(f"⚠️  Config has {len(report.warnings)} warnings:")
+        for warning in report.warnings[:5]:  # Show first 5
+            logger.warning(f"  - {warning.path}: {warning.message}")
     
-    # Check entry rules
-    if "pattern_entry_rules" not in cfg_global or not cfg_global["pattern_entry_rules"]:
-        warnings.append("pattern_entry_rules missing or empty")
-    
-    # Check invalidation rules
-    if "pattern_invalidation" not in cfg_global or not cfg_global["pattern_invalidation"]:
-        warnings.append("pattern_invalidation missing or empty")
-    
-    # Check horizons config
-    if "horizons" not in MASTER_CONFIG:
-        errors.append("MASTER_CONFIG['horizons'] missing")
-    else:
-        required_horizons = ["intraday", "short_term", "long_term"]
-        for h in required_horizons:
-            if h not in MASTER_CONFIG["horizons"]:
-                warnings.append(f"horizons.{h} missing")
-    
-    # Report results
-    if errors:
-        logger.error(f"❌ Config validation FAILED: {', '.join(errors)}")
-        return False
-    
-    if warnings:
-        logger.warning(f"⚠️ Config validation warnings: {', '.join(warnings)}")
-    else:
-        logger.info("✅ Config validation passed")
+    logger.info("✅ Config validation passed!")
+    logger.info(f"   Profiles: {len(MASTER_CONFIG.get('horizons', {}))}")
+    logger.info(f"   Patterns: {len(MASTER_CONFIG.get('global', {}).get('pattern_entry_rules', {}))}")
+    logger.info("="*70)
     
     return True
 
 if __name__ == "__main__":
     init_db()
-    if not validate_master_config():
+    if not startup_config_validation():
         print("❌ CRITICAL: Pattern Config validation failed. Check logs.")
         exit(1)
     run_scheduled_cleanup()

@@ -14,7 +14,7 @@ Features:
 
 from typing import Dict, Any, List, Optional
 import math
-from config.constants import MASTER_CONFIG as MASTERCONFIG
+from config.master_config import MASTER_CONFIG as MASTERCONFIG
 import logging
 
 logger = logging.getLogger(__name__)

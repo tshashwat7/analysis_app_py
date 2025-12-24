@@ -45,9 +45,10 @@ def get_breakdown_state(
     """
     try:
         db = SessionLocal()
+        symbol_str = symbol.get('value') or ""
         
         state = db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.symbol == symbol,
+            PatternBreakdownState.symbol == symbol_str,
             PatternBreakdownState.pattern_name == pattern_name,
             PatternBreakdownState.horizon == horizon
         ).first()

@@ -1,7 +1,7 @@
 # services/tradeplan/time_estimator.py
 import math
 from typing import Dict, Any, Optional
-from config.constants import MASTER_CONFIG as MASTERCONFIG
+from config.master_config import MASTER_CONFIG as MASTERCONFIG
 import logging
 
 logger = logging.getLogger(__name__)

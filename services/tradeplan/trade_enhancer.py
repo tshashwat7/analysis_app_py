@@ -29,7 +29,7 @@ import copy
 import logging
 from typing import Dict, Any, Optional, Tuple, List
 
-from config.constants import MASTER_CONFIG
+from config.master_config import MASTER_CONFIG
 from services.data_fetch import _safe_float
 from services.patterns.pattern_state_manager import (
     get_breakdown_state,
