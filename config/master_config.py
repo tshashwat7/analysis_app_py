@@ -504,8 +504,14 @@ MASTER_CONFIG = {
         "calculation_engine": {
             "horizon_priority_overrides": {
                 "intraday": {
-                    "MOMENTUM_BREAKOUT": 95,
-                    "VOLATILITY_SQUEEZE": 90,
+                    # Patterns ALWAYS win (95+)
+                    "PATTERN_DARVAS_BREAKOUT": 98,
+                    "PATTERN_VCP_BREAKOUT": 97,
+                    "PATTERN_CUP_BREAKOUT": 96,
+                    "PATTERN_FLAG_BREAKOUT": 96,
+                    "PATTERN_STRIKE_REVERSAL": 95,
+                    "MOMENTUM_BREAKOUT": 90,
+                    "VOLATILITY_SQUEEZE": 85,
                     "REVERSAL_MACD_CROSS_UP": 85,
                     "TREND_PULLBACK": 88,
                     "VALUE_TURNAROUND": 50,
@@ -526,9 +532,9 @@ MASTER_CONFIG = {
                     "DEEP_VALUE_PLAY": 88,
                     "QUALITY_ACCUMULATION": 85,
                     "TREND_PULLBACK": 80,
-                    "MOMENTUM_BREAKOUT": 75,      # Lowered to avoid "Priority Trap"
                     "REVERSAL_MACD_CROSS_UP": 70,
-                    "VOLATILITY_SQUEEZE": 65
+                    "VOLATILITY_SQUEEZE": 65,
+                    "MOMENTUM_BREAKOUT": 60,      # Lowered to avoid "Priority Trap"
                 },
                 "multibagger": {
                     "VALUE_TURNAROUND": 95,       # Absolute priority for multi-year holds
@@ -2288,8 +2294,10 @@ MASTER_CONFIG = {
                 
                 "setup_gate_overrides": {
                     "QUALITY_ACCUMULATION": {
+                        "adx_min": None,
+                        "min_trend_strength": None,
                         "volatility_quality_min": None,
-                        "confidence_min": 40  # Position building over time
+                        "confidence_min": None  # ✅ Skip all gates
                     },
                     "DEEP_VALUE_PLAY": {
                         "volatility_quality_min": None,

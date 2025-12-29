@@ -16,14 +16,13 @@ logger = logging.getLogger(__name__)
 
 from config.master_config import MASTER_CONFIG
 
-
 class ConfigResolver:
     """Smart configuration resolver with horizon-aware inheritance."""
     
     def __init__(self, horizon: str = "short_term", master_config: Dict = None, indicators: Dict = None, fundamentals: Dict = None):
         self.horizon = horizon
-        self.indicators = indicators
-        self.fundamentals = fundamentals
+        self.indicators = indicators or {}
+        self.fundamentals = fundamentals or {}
         self.config = master_config or MASTER_CONFIG
         self._cache = {}
         
@@ -160,21 +159,53 @@ class ConfigResolver:
     def evaluate_setup_condition(self, setup_type: str, indicators: Dict, fundamentals: Dict = None) -> bool:
         """
         Evaluates setup conditions from calculation engine rules.
+        
+        Args:
+            setup_type: Setup name (e.g., "MOMENTUM_BREAKOUT")
+            indicators: Technical indicators
+            fundamentals: Fundamental data (optional)
+        
+        Returns:
+            True if ALL conditions pass
         """
         rules = self.get_setup_rules()
         setup_rule = rules.get(setup_type)
         
         if not setup_rule:
+            logger.warning(f"[{self.horizon}] No rule found for setup: {setup_type}")
             return False
         
         conditions = setup_rule.get("conditions", [])
         
+        # handle empty conditions correctly
+        if not conditions:
+            # Empty conditions = always match (e.g., GENERIC setup)
+            logger.debug(f"[{self.horizon}] Setup {setup_type} has no conditions (auto-pass)")
+            return True  # ✅ Changed from False to True
+        
+        # ✅ OPTIMIZATION: Build context once, reuse for all conditions
+        eval_context = self._build_eval_context(indicators, fundamentals)
+        
+        # Evaluate all conditions (ALL must pass)
         for cond in conditions:
-            if not self._evaluate_condition_string(cond, indicators, fundamentals):
+            if not self._evaluate_condition_string(
+                cond, 
+                indicators, 
+                fundamentals,
+                context=eval_context  # ✅ Pass pre-built context
+            ):
+                logger.debug(f"[{self.horizon}] Setup {setup_type} failed: '{cond}'")
                 return False
+        
+        logger.debug(f"[{self.horizon}] Setup {setup_type} passed all {len(conditions)} conditions")
         return True
+
+    def get_blocked_setups(self) -> List[str]:
+        """Get list of setups blocked by strategy preferences."""
+        path = f"strategy_preferences.horizon_strategy_config.{self.horizon}.blocked_setups"
+        return self.get(path, [])    
     
-# ============================================================
+    # ============================================================
     # FIXED: Dynamic Confidence Floor
     # ============================================================
     
@@ -216,11 +247,11 @@ class ConfigResolver:
         """
         weights_cfg = self.get(f"calculation_engine.composite_weights.{composite_name}", {})
         
-        if composite_name == "trend_strength":
+        if composite_name == "trendstrength":
             return self._compute_trend_strength(indicators, weights_cfg)
-        elif composite_name == "momentum_strength":
+        elif composite_name == "momentumstrength":
             return self._compute_momentum_strength(indicators, weights_cfg)
-        elif composite_name == "volatility_quality":
+        elif composite_name == "volatilityquality":
             return self._compute_volatility_quality(indicators, weights_cfg)
         
         return {"raw": 0, "value": 0, "score": 0, "desc": "Unknown Composite"}
@@ -256,20 +287,20 @@ class ConfigResolver:
     def _compute_momentum_strength(self, indicators: Dict, cfg: Dict) -> Dict:
         """Momentum Strength composite calculation."""
         rsi = self._get_val(indicators, "rsi")
-        slope = self._get_val(indicators, "rsi_slope")
-        macd = self._get_val(indicators, "macd_histogram")
+        slope = self._get_val(indicators, "rsislope")
+        macd = self._get_val(indicators, "macdhistogram")
         
         rsi_t = cfg.get("rsi_value", {}).get("thresholds", {})
         rsi_s = 8 if rsi >= rsi_t.get("strong", 60) else 5 if rsi >= rsi_t.get("neutral", 50) else 2
         
-        slope_t = cfg.get("rsi_slope", {}).get("thresholds", {})
+        slope_t = cfg.get("rsislope", {}).get("thresholds", {})
         slope_s = 8 if slope >= slope_t.get("strong", 1.0) else 4
         
         macd_t = cfg.get("macd_hist", {}).get("thresholds", {})
         macd_s = 8 if macd >= macd_t.get("strong", 0.5) else 5 if macd > 0 else 2
         
         w_rsi = cfg.get("rsi_value", {}).get("weight", 0.25)
-        w_slope = cfg.get("rsi_slope", {}).get("weight", 0.25)
+        w_slope = cfg.get("rsislope", {}).get("weight", 0.25)
         w_macd = cfg.get("macd_hist", {}).get("weight", 0.30)
         
         raw = (rsi_s * w_rsi) + (slope_s * w_slope) + (macd_s * w_macd)
@@ -280,16 +311,16 @@ class ConfigResolver:
     def _compute_volatility_quality(self, indicators: Dict, cfg: Dict) -> Dict:
         """Volatility Quality composite calculation."""
         atr_pct = self._get_val(indicators, "atr_pct")
-        bb_width = self._get_val(indicators, "bb_width")
+        bbwidth = self._get_val(indicators, "bbwidth")
         
         atr_t = cfg.get("atr_pct", {}).get("thresholds", {})
         atr_s = 10 if atr_pct <= atr_t.get("low", 1.5) else 6 if atr_pct <= atr_t.get("high", 5.0) else 2
         
-        bb_t = cfg.get("bb_width", {}).get("thresholds", {})
-        bb_s = 10 if bb_width <= bb_t.get("tight", 0.01) else 6
+        bb_t = cfg.get("bbwidth", {}).get("thresholds", {})
+        bb_s = 10 if bbwidth <= bb_t.get("tight", 0.01) else 6
         
         w_atr = cfg.get("atr_pct", {}).get("weight", 0.3)
-        w_bb = cfg.get("bb_width", {}).get("weight", 0.25)
+        w_bb = cfg.get("bbwidth", {}).get("weight", 0.25)
         
         raw = (atr_s * w_atr) + (bb_s * w_bb) + 3.0
         score = min(10, round(raw, 2))
@@ -374,9 +405,9 @@ class ConfigResolver:
             
             # Composite Weights (global calculation engine)
             "composite_weights": {
-                "trend_strength": self.get("calculation_engine.composite_weights.trend_strength", {}),
-                "momentum_strength": self.get("calculation_engine.composite_weights.momentum_strength", {}),
-                "volatility_quality": self.get("calculation_engine.composite_weights.volatility_quality", {})
+                "trendstrength": self.get("calculation_engine.composite_weights.trendstrength", {}),
+                "momentumstrength": self.get("calculation_engine.composite_weights.momentumstrength", {}),
+                "volatilityquality": self.get("calculation_engine.composite_weights.volatilityquality", {})
             },
             
             # Thresholds (horizon-specific with global fallback)
@@ -512,65 +543,194 @@ class ConfigResolver:
     
     def _build_eval_context(self, indicators: Dict, fundamentals: Dict = None) -> Dict:
         """
-        Builds a complete numeric context for the AST evaluator.
-        Pre-processes special semantic booleans and flattens indicator/fundamental dicts.
+        Context builder with blacklist approach + _get_val reuse.
         """
         ctx = {}
         
-        # 1. Flatten Indicators
+        # ====================================================================
+        # STAGE 1: Flatten Raw Indicators
+        # ====================================================================
         for k in indicators.keys():
             ctx[k] = self._get_val(indicators, k, 0)
-            
-        # 2. Flatten Fundamentals (Overwrites indicators if key collision occurs)
-        if fundamentals:
-            for k in fundamentals.keys():
-                ctx[k] = self._get_val(fundamentals, k, ctx.get(k, 0))
+        
+        # ====================================================================
+        # STAGE 2: Pattern Counting
+        # ====================================================================
+        pattern_keys = [
+            "bollinger_squeeze", "cup_handle", "darvas_box", "flag_pennant", 
+            "minervini_stage2", "golden_cross", "double_top_bottom", 
+            "three_line_strike", "ichimoku_signals"
+        ]
+        
+        pattern_count = sum(
+            1 for k in pattern_keys 
+            if isinstance(indicators.get(k), dict) and indicators[k].get("found")
+        )
+        ctx["pattern_count"] = pattern_count
+
+        for k in pattern_keys:
+            pattern_data = indicators.get(k, {})
+            if isinstance(pattern_data, dict):
+                # Remove underscores from key names
+                clean_name = k.replace('_', '')
                 
-        # 3. Inject Semantic Constants
-        bb_width = ctx.get("bb_width", 999)
-        vol_qual = ctx.get("volatility_quality", 0)
+                # Add flattened keys
+                ctx[f'{clean_name}found'] = pattern_data.get('found', False)
+                ctx[f'{clean_name}quality'] = pattern_data.get('quality', 0)
+                ctx[f'{clean_name}score'] = pattern_data.get('score', 0)
+                
+                # Flatten meta
+                if 'meta' in pattern_data:
+                    for meta_key, meta_val in pattern_data['meta'].items():
+                        ctx[f'{clean_name}{meta_key}'] = meta_val
         
-        # Standardize semantic keys used in master_config.py
-        ctx["is_consolidating"] = bb_width < 0.06 and vol_qual > 4.0
-        ctx["is_squeeze"] = bool(ctx.get("ttm_squeeze", False))
+        # ====================================================================
+        # STAGE 3: Semantic Booleans + Safety Guards
+        # ====================================================================
+        ctx["price"] = ctx.get("price") or ctx.get("close") or 0.0
+        price = ctx["price"]
         
-        trend_sig = ctx.get("ma_trend_signal", 0)
+        # Division-safe MA fallbacks (ONLY generic keys)
+        ctx["ma_fast"] = ctx.get("ma_fast") or price
+        ctx["ma_mid"] = ctx.get("ma_mid") or price
+        ctx["ma_slow"] = ctx.get("ma_slow") or price
+        
+        # Consolidation detection
+        bbwidth = ctx.get("bbwidth", 999)
+        vol_qual = ctx.get("volatilityquality", 0)
+        
+        ctx["bb_width_pct"] = (bbwidth / price * 100) if price > 0 else 999
+        
+        consolidation_threshold = self.get("gates.consolidation_bb_width_threshold", 0.06)
+        ctx["is_consolidating"] = bbwidth < consolidation_threshold and vol_qual > 4.0
+        
+        # Squeeze detection
+        ttm_squeeze = ctx.get("ttm_squeeze", "")
+        ctx["is_squeeze"] = "on" in str(ttm_squeeze).lower() or bool(ttm_squeeze)
+        
+        # Trend direction (generic key)
+        trend_sig = ctx.get("ma_trend_signal") or 0
         ctx["trend_dir"] = "up" if trend_sig > 0 else "down" if trend_sig < 0 else "neutral"
         
-        # Add setup classification variables
-        ctx["setup_type"] = "UNKNOWN" # Placeholder
+        # Market conditions
+        adx = ctx.get("adx", 0)
+        rsi = ctx.get("rsi", 50)
+        atr_pct = ctx.get("atr_pct", 0)
+        
+        ctx["is_trending"] = adx > 20
+        ctx["is_volatile"] = atr_pct > 5.0
+        ctx["is_oversold"] = rsi < 30
+        ctx["is_overbought"] = rsi > 70
+        
+        # Supertrend
+        st_val = ctx.get("supertrendsignal")
+        if isinstance(st_val, dict):
+            st_val = st_val.get("value", "")
+        ctx["is_bullish_st"] = "bull" in str(st_val).lower() if st_val else False
+        
+        # ====================================================================
+        # STAGE 4: Flatten Fundamentals (Blacklist + _get_val)
+        # ====================================================================
+        if fundamentals:
+            # ✅ Blacklist: metadata and duplicates
+            excluded_keys = {'symbol', 'name', 'website', '_meta','current_price', 'base_score', 'market_penalty', 'final_score','days_to_earnings', 'analyst_rating', 'roe_5y', 'roe_history'}
+            # Log excluded keys (debug)
+            excluded_found = [k for k in fundamentals.keys() if k in excluded_keys]
+            if excluded_found:
+                logger.debug(f"[{self.horizon}] Excluding: {excluded_found}")
+            
+            # ✅ Flatten ALL fundamentals (numeric conversion via _get_val)
+            flattened_count = 0
+            for key in fundamentals.keys():
+                if key not in excluded_keys:
+                    ctx[key] = _get_val(fundamentals, key)
+                    flattened_count += 1            
+            logger.info(
+                f"[{self.horizon}] Flattened {flattened_count} fundamentals "
+                f"({len(excluded_keys)} excluded)"
+            )
+        
+        # ====================================================================
+        # STAGE 5: Strategy Metrics from Indicators
+        # ====================================================================
+        # ✅ Relative Strength is in indicators (not fundamentals)
+        ctx['rel_strength_nifty'] = _get_val(indicators, 'rel_strength_nifty')
+        
+        # ====================================================================
+        # STAGE 6: Support/Resistance Levels
+        # ====================================================================
+        ctx["resistance_1"] = indicators.get("resistance_1", price * 1.05)
+        ctx["resistance_2"] = indicators.get("resistance_2", price * 1.10)
+        ctx["support_1"] = indicators.get("support_1", price * 0.95)
+        ctx["pivot_point"] = indicators.get("pivot_point", price)
+        
+        # ====================================================================
+        # STAGE 7: Metadata
+        # ====================================================================
+        ctx["setup_type"] = "UNKNOWN"
         ctx["horizon"] = self.horizon
         
+        logger.debug(
+            f"[{self.horizon}] Context: {len(ctx)} keys "
+            f"(patterns={pattern_count}, price={price:.2f}, ma_fast={ctx['ma_fast']:.2f})"
+        )
+        logger.debug(f"{self.horizon} Full context keys: {sorted(ctx.keys())}")
+
         return ctx
 
-    def _evaluate_condition_string(self, condition: str, indicators: Dict, fundamentals: Dict = None, context:dict = None) -> bool:
+    def _evaluate_condition_string(
+    self, 
+    condition: str, 
+    indicators: Dict, 
+    fundamentals: Dict = None, 
+    context: Dict = None
+    ) -> bool:
         """
         Safe condition evaluator with robust whitespace and string handling.
+        
+        ARCHITECTURE:
+        - Stage 0: Extract quoted strings
+        - Stage 1: Build evaluation context (if not provided)
+        - Stage 2: Fast path for simple comparisons (e.g., "rsi >= 60")
+        - Stage 3: Complex path using AST parser (e.g., "(price - ma) / ma <= 0.05")
+        
+        Args:
+            condition: Condition string to evaluate
+            indicators: Technical indicators
+            fundamentals: Fundamental data (optional)
+            context: Pre-built context (optional, for performance)
+        
+        Returns:
+            True if condition evaluates to truthy value
         """
         try:
-            # ====================================================================
+            # ================================================================
             # STAGE 0: Pre-process quoted strings
-            # ====================================================================
-            # Extract quoted strings to avoid splitting them
+            # ================================================================
             clean_condition, extracted_strings = self._extract_quoted_strings(condition)
             
-            # ====================================================================
-            # STAGE 1: Build Evaluation Context
-            # ====================================================================
-            eval_context = context if context is not None else self._build_eval_context(indicators, fundamentals)
+            # ================================================================
+            # STAGE 1: Build Evaluation Context (if not provided)
+            # ================================================================
+            if context is not None:
+                eval_context = context  # ✅ Reuse provided context
+            else:
+                eval_context = self._build_eval_context(indicators, fundamentals)
             
-            # Inject semantic booleans
-            bb_width = eval_context.get("bb_width", 999)
-            vol_qual = eval_context.get("volatility_quality", 0)
-            eval_context["is_consolidating"] = bb_width < 0.06 and vol_qual > 4.0
+            # Semantic booleans already in _build_eval_context
+            """
+            bbwidth = eval_context.get("bbwidth", 999)
+            vol_qual = eval_context.get("volatilityquality", 0)
+            eval_context["is_consolidating"] = bbwidth < 0.06 and vol_qual > 4.0
             eval_context["is_squeeze"] = bool(eval_context.get("ttm_squeeze", False))
             
             trend_sig = eval_context.get("ma_trend_signal", 0)
             eval_context["trend_dir"] = "up" if trend_sig > 0 else "down" if trend_sig < 0 else "neutral"
+            """
             
-            # ====================================================================
+            # ================================================================
             # STAGE 2: FAST PATH - Simple Comparisons
-            # ====================================================================
+            # ================================================================
             
             # ✅ Use regex split for robust whitespace handling
             parts = re.split(r'\s+', clean_condition.strip())
@@ -601,7 +761,7 @@ class ConfigResolver:
                             "!=": operator.ne
                         }
                         result = ops_map.get(op, lambda a, b: False)(v_f, t_f)
-                        logger.debug(f"[{self.horizon}] '{condition}' = {result}")
+                        logger.debug(f"[{self.horizon}] Simple: '{condition}' = {result}")
                         return result
                     
                     except (ValueError, TypeError):
@@ -610,25 +770,27 @@ class ConfigResolver:
                             bool_val = bool(val) if not isinstance(val, str) else val.lower() == "true"
                             target_bool = target_str == "true"
                             result = bool_val == target_bool if op == "==" else bool_val != target_bool
-                            logger.debug(f"[{self.horizon}] '{condition}' (bool) = {result}")
+                            logger.debug(f"[{self.horizon}] Boolean: '{condition}' = {result}")
                             return result
                         
                         # String comparison
                         if op == "==":
                             result = str(val).lower() == target_str
-                            logger.debug(f"[{self.horizon}] '{condition}' (string) = {result}")
+                            logger.debug(f"[{self.horizon}] String: '{condition}' = {result}")
                             return result
                         
                         if op == "!=":
                             result = str(val).lower() != target_str
-                            logger.debug(f"[{self.horizon}] '{condition}' (string) = {result}")
+                            logger.debug(f"[{self.horizon}] String: '{condition}' = {result}")
                             return result
             
-            # ====================================================================
-            # STAGE 3: SAFE COMPLEX PATH
-            # ====================================================================
+            # ================================================================
+            # STAGE 3: SAFE COMPLEX PATH (AST-based evaluation)
+            # ================================================================
             
-            return self._safe_eval_math_expression(condition, eval_context)
+            result = self._safe_eval_math_expression(clean_condition, eval_context)
+            logger.debug(f"[{self.horizon}] Complex: '{condition}' = {result}")
+            return result
         
         except Exception as e:
             logger.debug(f"[{self.horizon}] Condition '{condition}' failed: {e}")
@@ -685,27 +847,62 @@ class ConfigResolver:
             logger.debug(f"[{self.horizon}] Complex eval failed: {e}")
             return False
 
-
     def _eval_ast_node(self, node, context: Dict):
         """
-        Recursively evaluates AST nodes with security whitelist.
+        Hardened AST evaluator with:
+        - dict.get() method call support
+        - Zero division guards
+        - Dict literal support ({})
+        - Python 3.8+ ast.Constant support
         """
-        # Numbers
-        if isinstance(node, ast.Num):
+        
+        # ========================================================================
+        # 1. CONSTANT VALUES (Numbers, Strings, Booleans)
+        # ========================================================================
+        
+        if isinstance(node, ast.Constant):  # Python 3.8+
+            return node.value
+        
+        elif isinstance(node, ast.Num):  # Legacy
             return node.n
         
-        # Strings
-        if isinstance(node, ast.Str):
+        elif isinstance(node, ast.Str):  # Legacy
             return node.s
         
-        # Variables (lookup in context)
-        if isinstance(node, ast.Name):
-            return context.get(node.id, 0)
+        # ========================================================================
+        # 2. VARIABLES (Context Lookup)
+        # ========================================================================
         
-        # Binary operations (+, -, *, /, etc.)
+        if isinstance(node, ast.Name):
+            return context.get(node.id, 0.0)
+        
+        # ========================================================================
+        # 3. DICT LITERALS ({}, {'key': 'value'})
+        # ========================================================================
+        
+        # ✅ CRITICAL: Allows {} as default value in .get() calls
+        if isinstance(node, ast.Dict):
+            # Recursively evaluate keys and values
+            return {
+                self._eval_ast_node(k, context): self._eval_ast_node(v, context)
+                for k, v in zip(node.keys, node.values)
+            }
+        
+        # ========================================================================
+        # 4. BINARY OPERATIONS (+, -, *, /, //, %, **)
+        # ========================================================================
+        
         if isinstance(node, ast.BinOp):
             left = self._eval_ast_node(node.left, context)
             right = self._eval_ast_node(node.right, context)
+            
+            # Zero division guard
+            if isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
+                if right == 0:
+                    logger.debug(
+                        f"[{self.horizon}] AST: Zero division prevented. Returning 0.0"
+                    )
+                    return 0.0
             
             ops_map = {
                 ast.Add: operator.add,
@@ -723,7 +920,10 @@ class ConfigResolver:
             
             raise ValueError(f"Unsupported binary operator: {type(node.op)}")
         
-        # Unary operations (-, +, not)
+        # ========================================================================
+        # 5. UNARY OPERATIONS (-, +, not)
+        # ========================================================================
+        
         if isinstance(node, ast.UnaryOp):
             operand = self._eval_ast_node(node.operand, context)
             
@@ -736,7 +936,10 @@ class ConfigResolver:
             
             raise ValueError(f"Unsupported unary operator: {type(node.op)}")
         
-        # Comparisons (<, >, <=, >=, ==, !=)
+        # ========================================================================
+        # 6. COMPARISONS (<, >, <=, >=, ==, !=)
+        # ========================================================================
+        
         if isinstance(node, ast.Compare):
             left = self._eval_ast_node(node.left, context)
             
@@ -746,10 +949,11 @@ class ConfigResolver:
                 ast.Gt: operator.gt,
                 ast.GtE: operator.ge,
                 ast.Eq: operator.eq,
-                ast.NotEq: operator.ne
+                ast.NotEq: operator.ne,
+                ast.Is: operator.is_,    
+                ast.IsNot: operator.is_not
             }
             
-            # Handle chained comparisons (a < b < c)
             for op, comparator in zip(node.ops, node.comparators):
                 right = self._eval_ast_node(comparator, context)
                 op_func = ops_map.get(type(op))
@@ -760,41 +964,86 @@ class ConfigResolver:
                 if not op_func(left, right):
                     return False
                 
-                left = right  # Chain the comparison
+                left = right
             
             return True
         
-        # Boolean operations (and, or)
+        # ========================================================================
+        # 7. BOOLEAN OPERATIONS (and, or)
+        # ========================================================================
+        
         if isinstance(node, ast.BoolOp):
             if isinstance(node.op, ast.And):
                 return all(self._eval_ast_node(val, context) for val in node.values)
             if isinstance(node.op, ast.Or):
                 return any(self._eval_ast_node(val, context) for val in node.values)
         
-        # Function calls (whitelist only)
-        if isinstance(node, ast.Call):
-            func_name = node.func.id if isinstance(node.func, ast.Name) else None
-            
-            # Whitelist of allowed functions
-            allowed_funcs = {
-                "abs": abs,
-                "min": min,
-                "max": max,
-                "round": round,
-                "int": int,
-                "float": float
-            }
-            
-            if func_name not in allowed_funcs:
-                raise ValueError(f"Function '{func_name}' not allowed")
-            
-            # Evaluate arguments
-            args = [self._eval_ast_node(arg, context) for arg in node.args]
-            
-            # Call whitelisted function
-            return allowed_funcs[func_name](*args)
+        # ========================================================================
+        # 8. FUNCTION & METHOD CALLS
+        # ========================================================================
         
-        raise ValueError(f"Unsupported AST node: {type(node)}")
+        if isinstance(node, ast.Call):
+            # A. Direct function calls: abs(x), min(a, b)
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id
+                
+                allowed_funcs = {
+                    "abs": abs,
+                    "min": min,
+                    "max": max,
+                    "round": round,
+                    "int": int,
+                    "float": float,
+                    "len": len,
+                    "bool": bool,
+                    "str": str
+                }
+                
+                if func_name not in allowed_funcs:
+                    raise ValueError(f"Function '{func_name}' not allowed")
+                
+                args = [self._eval_ast_node(arg, context) for arg in node.args]
+                return allowed_funcs[func_name](*args)
+            
+            # B. Method calls: dict.get('key', default)
+            elif isinstance(node.func, ast.Attribute):
+                obj = self._eval_ast_node(node.func.value, context)
+                method_name = node.func.attr
+                
+                if method_name == "get" and isinstance(obj, dict):
+                    args = [self._eval_ast_node(arg, context) for arg in node.args]
+                    return obj.get(*args)
+                
+                raise ValueError(f"Method '{method_name}' not allowed on {type(obj)}")
+            
+            raise ValueError(f"Unsupported call type: {type(node.func)}")
+        
+        # ========================================================================
+        # 9. SUBSCRIPT ACCESS (dict['key'], list[0])
+        # ========================================================================
+        
+        if isinstance(node, ast.Subscript):
+            obj = self._eval_ast_node(node.value, context)
+            
+            # Handle different Python versions
+            if isinstance(node.slice, ast.Index):  # Python 3.8 and below
+                key = self._eval_ast_node(node.slice.value, context)
+            else:  # Python 3.9+
+                key = self._eval_ast_node(node.slice, context)
+            
+            if isinstance(obj, (dict, list, tuple)):
+                try:
+                    return obj[key]
+                except (KeyError, IndexError, TypeError):
+                    return None
+            
+            raise ValueError(f"Subscript access not allowed on {type(obj)}")
+        
+        # ========================================================================
+        # UNSUPPORTED NODE
+        # ========================================================================
+        
+        raise ValueError(f"Unsupported AST node: {type(node).__name__}")
     
     def clear_cache(self):
         """Clear the resolution cache."""
@@ -824,22 +1073,22 @@ class ConfigResolver:
         Config-driven divergence detection.
         Used by: detect_divergence_via_slopes()
         """
-        rsi_slope = self._get_val(indicators, "rsi_slope")
+        rsislope = self._get_val(indicators, "rsislope")
         price = self._get_val(indicators, "price")
         prev_price = self._get_val(indicators, "prev_close", price)
         
         # Get thresholds from momentum config (horizon-specific with global fallback)
-        thresh = self.get("momentum_thresholds.rsi_slope.deceleration_ceiling", -0.05)
+        thresh = self.get("momentum_thresholds.rsislope.deceleration_ceiling", -0.05)
         
         # Get penalty from calculation engine (global)
         penalty = self.get("calculation_engine.divergence_detection.confidence_penalties.bearish_divergence", 0.70)
         
         # Bearish divergence: Price rising but RSI falling
-        if price > prev_price and rsi_slope < thresh:
+        if price > prev_price and rsislope < thresh:
             return {
                 'divergence_type': 'bearish',
                 'confidence_factor': penalty,
-                'warning': f"Bearish Divergence: RSI_slope={rsi_slope:.2f}",
+                'warning': f"Bearish Divergence: RSI_slope={rsislope:.2f}",
                 'severity': 'moderate'
             }
         
@@ -1274,7 +1523,7 @@ class ConfigResolver:
             (passes: bool, failures: List[str])
         Example:
             >>> config = get_config("multibagger")
-            >>> fundamentals = {"roe": 10, "roce": 12, "de_ratio": 0.3}
+            >>> fundamentals = {"roe": 10, "roce": 12, "deratio": 0.3}
             >>> passes, failures = config.apply_fundamental_filters(fundamentals)
             >>> passes
             False
@@ -1296,9 +1545,9 @@ class ConfigResolver:
         # Check require_low_debt
         if filters.get("require_low_debt"):
             max_de = filters.get("max_de_ratio", 0.5)
-            de_ratio = _get_val(fundamentals, "de_ratio", 0)
-            if de_ratio > max_de:
-                failures.append(f"DE ratio {de_ratio:.2f} > {max_de}")
+            deratio = _get_val(fundamentals, "deratio", 0)
+            if deratio > max_de:
+                failures.append(f"DE ratio {deratio:.2f} > {max_de}")
         
         # Check min_roe
         if "min_roe" in filters:
@@ -1324,9 +1573,9 @@ class ConfigResolver:
         # Check max_pe_ratio
         if "max_pe_ratio" in filters:
             max_pe = filters["max_pe_ratio"]
-            pe_ratio = _get_val(fundamentals, "pe_ratio", 999)
-            if pe_ratio > max_pe:
-                failures.append(f"P/E ratio {pe_ratio:.1f} > {max_pe}")
+            peratio = _get_val(fundamentals, "peratio", 999)
+            if peratio > max_pe:
+                failures.append(f"P/E ratio {peratio:.1f} > {max_pe}")
         
         passes = len(failures) == 0
         
@@ -1360,7 +1609,7 @@ class ConfigResolver:
         Example:
             >>> config = get_config("intraday")
             >>> can_trade, reason = config.validate_volatility_regime(
-            ...     indicators={"volatility_quality": 3.0, "atr_pct": 2.5},
+            ...     indicators={"volatilityquality": 3.0, "atr_pct": 2.5},
             ...     setup_type="MOMENTUM_BREAKOUT"
             ... )
             >>> can_trade
@@ -1368,7 +1617,7 @@ class ConfigResolver:
             >>> reason
             "Volatility expansion allowed for breakout"
         """
-        vol_qual = _get_val(indicators, "volatility_quality")
+        vol_qual = _get_val(indicators, "volatilityquality")
         atr_pct = _get_val(indicators, "atr_pct")
         
         if vol_qual is None or atr_pct is None:
@@ -1496,53 +1745,6 @@ class ConfigResolver:
         """
         return self.get(f"trend_thresholds.slope.{metric}", 10.0)
     
-    def classify_setup(self, indicators: Dict, fundamentals: Dict = None, horizon: str = None) -> Tuple[str, int]:
-        """
-        ✅ SELF-CONTAINED: Classify setup using current horizon rules + fundamentals support
-        
-        1. Tests ALL setup rules from config
-        2. Supports BOTH indicators AND fundamentals (roe, pe_ratio, etc.)
-        3. Returns highest priority match
-        """
-        horizon = horizon or self.horizon
-        rules = self.get_setup_rules()
-        
-        logger.debug(f"[{horizon}] Classifying from {len(rules)} rules")
-        candidates = []
-        
-        for setup_name, rule_cfg in rules.items():
-            priority = rule_cfg.get("priority", 0)
-            conditions = rule_cfg.get("conditions", [])
-            
-            # Test ALL conditions for this setup
-            all_pass = True
-            debug_info = []
-            
-            for cond in conditions:
-                result = self._evaluate_condition_string(cond, indicators, fundamentals)
-                debug_info.append(f"'{cond}'={result}")
-                
-                if not result:
-                    all_pass = False
-                    break
-            
-            if all_pass:
-                candidates.append((setup_name, priority))
-                logger.info(f"✅ [{horizon}] {setup_name} PASSED! (priority {priority})")
-            else:
-                logger.debug(f"  ❌ [{horizon}] {setup_name} FAILED: {', '.join(debug_info[:2])}...")
-        
-        # Highest priority wins
-        if candidates:
-            candidates.sort(key=lambda x: x[1], reverse=True)
-            winner_name, winner_priority = candidates[0]
-            logger.info(f"🎯 [{horizon}] WINNER: {winner_name} (priority {winner_priority})")
-            return winner_name, winner_priority
-        else:
-            logger.warning(f"⚠️ [{horizon}] NO setups passed → GENERIC (0)")
-            return "GENERIC", 0
-
-    
     def get_volatility_bands(self) -> Dict[str, float]:
         """
         Get volatility bands (min, ideal, max).
@@ -1590,7 +1792,7 @@ class ConfigResolver:
         Validates volatility regime for trading.
         Returns: (should_trade: bool, reason: str)
         """
-        vol_qual = self._get_val(indicators, "volatility_quality")
+        vol_qual = self._get_val(indicators, "volatilityquality")
         atr_pct = self._get_val(indicators, "atr_pct")
         
         if vol_qual is None or atr_pct is None:

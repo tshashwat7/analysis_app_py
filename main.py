@@ -660,6 +660,8 @@ def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any
         # =====================================================================
         # STEP 3: ENRICH HYBRIDS (Multi-Horizon Aware)
         # =====================================================================
+        # logger.debug(f"indicators - {analysis_data["raw_indicators_by_horizon"]}")
+        # logger.debug(f"fundamentals - {analysis_data["fundamentals"]}")
         if analysis_data["fundamentals"] and analysis_data["raw_indicators_by_horizon"]:
             try:
                 enriched_fund, enriched_inds = enrich_hybrid_metrics_multi_horizon(

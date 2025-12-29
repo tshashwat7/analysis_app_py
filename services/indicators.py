@@ -321,17 +321,24 @@ def compute_bollinger_bands(df: pd.DataFrame, length: int = 20, std_dev: float =
         }
     return _wrap_calc(_inner, "Bollinger Bands")
 
+
 def compute_rvol(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
         _Validator.require(df, ["Volume"])
         vol = df["Volume"]
         today = safe_float(vol.iloc[-1])
         avg = safe_float(vol.tail(20).mean())
+        avg_30days = safe_float(vol.tail(30).mean())
         if not avg: raise ValueError("Zero avg volume")
+        if not avg_30days or avg_30days == 0: 
+            raise ValueError("Zero average volume indicators compute_rvol")
         
         rvol = today / avg
         score = 10 if rvol > 1.5 else 0 if rvol < 0.8 else 5
-        return {"rvol": {"value": round(rvol, 2), "score": score, "desc": f"rvol -> {rvol:.2f}"}}
+        return {
+            "rvol": {"value": round(rvol, 2), "score": score, "desc": f"rvol -> {rvol:.2f}"},
+            "avg_volume_30Days": {"value": round(avg_30days, 2),"raw": avg_30days,"alias": "Avg Volume (20D)","desc": f"20-period average volume: {int(avg_30days)}"}
+        }
     return _wrap_calc(_inner, "RVOL")
 
 def compute_obv_divergence(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
@@ -1151,6 +1158,19 @@ def compute_indicators(
             if len(series) > 1:
                 prev = float(series.iloc[-2])
                 indicators["prev_close"] = {"value": round(prev, 2), "score": 0, "alias": "Prev Close", "desc": "Previous Close"}
+
+            if len(series) > 10:
+                price_10_ago = float(series.iloc[-11]) # -1 is current, -11 is 10 bars ago
+                indicators["price_10_ago"] = {"value": round(price_10_ago, 2), "score": 0}
+                
+                # Calculate Percentage Slope/Change
+                slope_val = ((price - price_10_ago) / price_10_ago) * 100
+                indicators["price_slope"] = {"value": round(slope_val, 2), "score": 0, "alias": "Price Slope", "desc": "10-period % change" }
+            else:
+                # Fallback if history is too short
+                indicators["price_slope"] = {"value": 0.0, "score": 0}
+                logger.debug(f"[{symbol}] Metric Price slope failed in indicators: {e}")
+
         except Exception as e:
             pass
 
@@ -1227,10 +1247,380 @@ def compute_indicators(
     return indicators
 
 # Legacy Key (Hardcoded),Dynamic Key (Replacement),Why?
-# "ema_20, wma_10, mma_6",ma_fast,"The ""Fast"" trend component for any horizon."
-# "ema_50, wma_40, mma_12",ma_mid,"The ""Medium"" trend component."
-# "ema_200, wma_50, mma_12",ma_slow,"The ""Slow"" trend baseline."
-# "ema_20_slope, wma_50_slope",ma_fast_slope,The velocity of the active trend.
-# "dma_200_slope, mma_12_slope",ma_slow_slope,The velocity of the baseline trend.
-# price_vs_200dma_pct,price_vs_primary_trend_pct,Extension from the main baseline.
-# ema_20_50_cross,ma_cross_signal,The primary crossover signal.
+"""
+indicators_keys = {
+    'intraday': [
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
+        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
+        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'ema_20', 'ema_50', 'ema_200',
+        'ema_20_50_200_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
+        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'rvol','avg_volume_30Days', 'obv_div',
+        'psar_trend', 'psar_level', 'vol_spike_ratio', 'vol_spike_signal', 'hv_10', 'hv_20',
+        'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid', 'bb_low', 'bb_width',
+        'bb_percent_b', 'gap_percent', 'wick_rejection', 'supertrend_signal', 'supertrend_value',
+        'prev_supertrend', 'ichi_cloud', 'ichi_span_a', 'ichi_span_b', 'ichi_tenkan',
+        'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower', 'adx', 'adx_signal', 'di_plus',
+        'di_minus', 'nifty_trend_score', 'atr_dynamic', 'atr_pct', 'atr_sma_ratio',
+        'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal', 'ema_20_50_cross',
+        'ma_fast_slope', 'ma_slow_slope', 'ema_20_slope', 'ema_50_slope', 'true_range',
+        'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_200ema_pct', 'price_action',
+        'cmf_signal', 'bollinger_squeeze', 'bollinger_squeeze_intraday', 'ichimoku_signals',
+        'ichimoku_signals_intraday', 'golden_cross', 'golden_cross_intraday', 'double_top_bottom',
+        'double_top_bottom_intraday', 'technical_score', 'Horizon'
+    ],
+    'short_term': [
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
+        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
+        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'ema_20', 'ema_50', 'ema_200',
+        'ema_20_50_200_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
+        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'obv_div', 'rvol','avg_volume_30Days',
+        'psar_trend', 'psar_level', 'hv_10', 'hv_20', 'vol_spike_ratio', 'vol_spike_signal',
+        'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid', 'bb_low', 'bb_width',
+        'bb_percent_b', 'gap_percent', 'wick_rejection', 'supertrend_signal', 'supertrend_value',
+        'prev_supertrend', 'ichi_cloud', 'ichi_span_a', 'ichi_span_b', 'ichi_tenkan',
+        'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower', 'adx', 'adx_signal', 'di_plus',
+        'di_minus', 'nifty_trend_score', 'atr_dynamic', 'atr_pct', 'atr_sma_ratio',
+        'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal', 'ema_20_50_cross',
+        'ma_fast_slope', 'ma_slow_slope', 'ema_20_slope', 'ema_50_slope', 'true_range',
+        'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_200ema_pct', 'price_action',
+        'cmf_signal', 'bollinger_squeeze', 'bollinger_squeeze_short_term', 'minervini_stage2',
+        'minervini_stage2_short_term', 'ichimoku_signals', 'ichimoku_signals_short_term',
+        'technical_score', 'Horizon'
+    ],
+    'long_term': [
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
+        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
+        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'wma_10', 'wma_40', 'wma_50',
+        'wma_10_40_50_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
+        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'rvol','avg_volume_30Days', 'obv_div',
+        'psar_trend', 'psar_level', 'hv_10', 'hv_20', 'vol_spike_ratio', 'vol_spike_signal',
+        'rel_strength_nifty', 'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid',
+        'bb_low', 'bb_width', 'bb_percent_b', 'gap_percent', 'wick_rejection',
+        'supertrend_signal', 'supertrend_value', 'prev_supertrend', 'ichi_cloud', 'ichi_span_a',
+        'ichi_span_b', 'ichi_tenkan', 'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower',
+        'adx', 'adx_signal', 'di_plus', 'di_minus', 'nifty_trend_score', 'atr_dynamic',
+        'atr_pct', 'atr_sma_ratio', 'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal',
+        'wma_10_40_cross', 'ma_fast_slope', 'ma_slow_slope', 'wma_20_slope', 'wma_50_slope',
+        'true_range', 'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_50wma_pct',
+        'price_action', 'cmf_signal', 'flag_pennant', 'flag_pennant_long_term', 'cup_handle',
+        'cup_handle_long_term', 'ichimoku_signals', 'ichimoku_signals_long_term',
+        'technical_score', 'Horizon'
+    ],
+    'multibagger': [
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
+        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
+        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'mma_6', 'mma_12',
+        'mma_6_12_12_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
+        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'rvol', 'avg_volume_30Days', 'obv_div',
+        'psar_trend', 'psar_level', 'hv_10', 'hv_20', 'vol_spike_ratio', 'vol_spike_signal',
+        'rel_strength_nifty', 'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid',
+        'bb_low', 'bb_width', 'bb_percent_b', 'gap_percent', 'wick_rejection',
+        'supertrend_signal', 'supertrend_value', 'prev_supertrend', 'ichi_cloud', 'ichi_span_a',
+        'ichi_span_b', 'ichi_tenkan', 'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower',
+        'adx', 'adx_signal', 'di_plus', 'di_minus', 'nifty_trend_score', 'atr_dynamic',
+        'atr_pct', 'atr_sma_ratio', 'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal',
+        'mma_6_12_cross', 'ma_fast_slope', 'ma_slow_slope', 'mma_20_slope', 'mma_50_slope',
+        'true_range', 'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_12mma_pct',
+        'price_action', 'cmf_signal', 'ichimoku_signals', 'ichimoku_signals_multibagger',
+        'technical_score', 'Horizon'
+    ]
+}
+# Generic to Legacy mapping with descriptions
+generic_to_legacy = {
+    # Moving Average System
+    'ma_fast_slope': {
+        'legacy_keys': ['ema_20_slope', 'wma_20_slope', 'mma_20_slope'],
+        'description': 'The velocity/angle of the fast moving average (short-term trend momentum)',
+        'horizons': {
+            'intraday': 'ema_20_slope',
+            'short_term': 'ema_20_slope', 
+            'long_term': 'wma_20_slope',
+            'multibagger': 'mma_20_slope'
+        }
+    },
+    
+    'ma_slow_slope': {
+        'legacy_keys': ['ema_50_slope', 'wma_50_slope', 'mma_50_slope'],
+        'description': 'The velocity/angle of the slow moving average (long-term trend momentum)',
+        'horizons': {
+            'intraday': 'ema_50_slope',
+            'short_term': 'ema_50_slope',
+            'long_term': 'wma_50_slope',
+            'multibagger': 'mma_50_slope'
+        }
+    },
+    
+    'ma_cross_signal': {
+        'legacy_keys': ['ema_20_50_cross', 'wma_10_40_cross', 'mma_6_12_cross'],
+        'description': 'Fast/Slow MA crossover signal (1=bullish, -1=bearish, 0=neutral)',
+        'horizons': {
+            'intraday': 'ema_20_50_cross',
+            'short_term': 'ema_20_50_cross',
+            'long_term': 'wma_10_40_cross',
+            'multibagger': 'mma_6_12_cross'
+        }
+    },
+    
+    'ma_trend_signal': {
+        'legacy_keys': ['ema_20_50_200_trend', 'wma_10_40_50_trend', 'mma_6_12_12_trend'],
+        'description': 'Overall MA trend alignment (1=strong uptrend, -1=strong downtrend)',
+        'horizons': {
+            'intraday': 'ema_20_50_200_trend',
+            'short_term': 'ema_20_50_200_trend',
+            'long_term': 'wma_10_40_50_trend',
+            'multibagger': 'mma_6_12_12_trend'
+        }
+    },
+    
+    'price_vs_primary_trend_pct': {
+        'legacy_keys': ['price_vs_200ema_pct', 'price_vs_50wma_pct', 'price_vs_12mma_pct'],
+        'description': 'Price distance from primary trend MA (% above/below)',
+        'horizons': {
+            'intraday': 'price_vs_200ema_pct',
+            'short_term': 'price_vs_200ema_pct',
+            'long_term': 'price_vs_50wma_pct',
+            'multibagger': 'price_vs_12mma_pct'
+        }
+    },
+    
+    'ma_fast': {
+        'legacy_keys': ['ema_20', 'wma_10', 'mma_6'],
+        'description': 'Fast moving average value',
+        'horizons': {
+            'intraday': 'ema_20',
+            'short_term': 'ema_20',
+            'long_term': 'wma_10',
+            'multibagger': 'mma_6'
+        }
+    },
+    
+    'ma_mid': {
+        'legacy_keys': ['ema_50', 'wma_40', 'mma_12'],
+        'description': 'Medium moving average value',
+        'horizons': {
+            'intraday': 'ema_50',
+            'short_term': 'ema_50',
+            'long_term': 'wma_40',
+            'multibagger': 'mma_12'
+        }
+    },
+    
+    'ma_slow': {
+        'legacy_keys': ['ema_200', 'wma_50', 'mma_12'],
+        'description': 'Slow/primary trend moving average value',
+        'horizons': {
+            'intraday': 'ema_200',
+            'short_term': 'ema_200',
+            'long_term': 'wma_50',
+            'multibagger': 'mma_12'
+        }
+    },
+    
+    # Pattern Recognition
+    'bollinger_squeeze': {
+        'legacy_keys': ['bollinger_squeeze_intraday', 'bollinger_squeeze_short_term'],
+        'description': 'Volatility squeeze pattern (consolidation before breakout)',
+        'horizons': {
+            'intraday': 'bollinger_squeeze_intraday',
+            'short_term': 'bollinger_squeeze_short_term'
+        }
+    },
+    
+    'ichimoku_signals': {
+        'legacy_keys': ['ichimoku_signals_intraday', 'ichimoku_signals_short_term', 
+                       'ichimoku_signals_long_term', 'ichimoku_signals_multibagger'],
+        'description': 'Ichimoku cloud signals (price vs cloud position)',
+        'horizons': {
+            'intraday': 'ichimoku_signals_intraday',
+            'short_term': 'ichimoku_signals_short_term',
+            'long_term': 'ichimoku_signals_long_term',
+            'multibagger': 'ichimoku_signals_multibagger'
+        }
+    },
+    
+    # Fundamentals
+    'profit_growth_3y': {
+        'legacy_keys': ['eps_growth_3y'],
+        'description': '3-year profit/EPS CAGR growth rate',
+        'note': 'Both represent the same metric'
+    }
+}
+
+# Duplicate mappings: Keys with identical values across horizons
+duplicate_mappings = {
+    # Moving Average Slopes
+    'ma_fast_slope': ['ema_20_slope', 'wma_20_slope', 'mma_20_slope'],
+    'ma_slow_slope': ['ema_50_slope', 'wma_50_slope', 'mma_50_slope'],
+    
+    # Moving Average Crossovers
+    'ma_cross_signal': ['ema_20_50_cross', 'wma_10_40_cross', 'mma_6_12_cross'],
+    
+    # Moving Average Trend Signals
+    'ma_trend_signal': ['ema_20_50_200_trend', 'wma_10_40_50_trend', 'mma_6_12_12_trend'],
+    
+    # Price vs Primary Trend
+    'price_vs_primary_trend_pct': ['price_vs_200ema_pct', 'price_vs_50wma_pct', 'price_vs_12mma_pct'],
+    
+    # Moving Averages (Fast)
+    'ma_fast': ['ema_20', 'wma_10', 'mma_6'],
+    
+    # Moving Averages (Mid)
+    'ma_mid': ['ema_50', 'wma_40', 'mma_12'],
+    
+    # Moving Averages (Slow)
+    'ma_slow': ['ema_200', 'wma_50', 'mma_12'],  # Note: mma_12 appears in both mid and slow
+    
+    # Pattern duplicates (horizon-specific)
+    'bollinger_squeeze': ['bollinger_squeeze_intraday', 'bollinger_squeeze_short_term'],
+    'ichimoku_signals': ['ichimoku_signals_intraday', 'ichimoku_signals_short_term', 
+                         'ichimoku_signals_long_term', 'ichimoku_signals_multibagger'],
+    'golden_cross': ['golden_cross_intraday'],
+    'double_top_bottom': ['double_top_bottom_intraday'],
+    'minervini_stage2': ['minervini_stage2_short_term'],
+    'flag_pennant': ['flag_pennant_long_term'],
+    'cup_handle': ['cup_handle_long_term'],
+    
+    # Growth metrics (fundamentals)
+    'profit_growth_3y': ['eps_growth_3y'],  # Both represent 3Y profit/EPS CAGR
+}
+# ========================================
+# 🎯 CANONICAL GENERIC KEYS
+# ========================================
+
+GENERIC_KEYS = {
+    # === Moving Average System ===
+    'ma_fast': {
+        'legacy': {
+            'intraday': 'ema_20',
+            'short_term': 'ema_20', 
+            'long_term': 'wma_10',
+            'multibagger': 'mma_6'
+        },
+        'description': 'Fast moving average value (horizon-aware)'
+    },
+    
+    'ma_mid': {
+        'legacy': {
+            'intraday': 'ema_50',
+            'short_term': 'ema_50',
+            'long_term': 'wma_40',
+            'multibagger': 'mma_12'
+        },
+        'description': 'Medium moving average value'
+    },
+    
+    'ma_slow': {
+        'legacy': {
+            'intraday': 'ema_200',
+            'short_term': 'ema_200',
+            'long_term': 'wma_50',
+            'multibagger': 'mma_12'  # Same as ma_mid for multibagger
+        },
+        'description': 'Slow/primary trend moving average'
+    },
+    
+    'ma_fast_slope': {
+        'legacy': {
+            'intraday': 'ema_20_slope',
+            'short_term': 'ema_20_slope',
+            'long_term': 'wma_20_slope',  # NOT wma_10_slope!
+            'multibagger': 'mma_20_slope'  # NOT mma_6_slope!
+        },
+        'description': 'Fast MA velocity (trend momentum)'
+    },
+    
+    'ma_slow_slope': {
+        'legacy': {
+            'intraday': 'ema_50_slope',
+            'short_term': 'ema_50_slope',
+            'long_term': 'wma_50_slope',
+            'multibagger': 'mma_50_slope'
+        },
+        'description': 'Slow MA velocity (long-term momentum)'
+    },
+    
+    'ma_cross_signal': {
+        'legacy': {
+            'intraday': 'ema_20_50_cross',
+            'short_term': 'ema_20_50_cross',
+            'long_term': 'wma_10_40_cross',
+            'multibagger': 'mma_6_12_cross'
+        },
+        'description': 'Fast/Slow MA crossover (1=bull, -1=bear)'
+    },
+    
+    'ma_trend_signal': {
+        'legacy': {
+            'intraday': 'ema_20_50_200_trend',
+            'short_term': 'ema_20_50_200_trend',
+            'long_term': 'wma_10_40_50_trend',
+            'multibagger': 'mma_6_12_12_trend'
+        },
+        'description': 'Overall MA alignment (1=strong up, -1=strong down)'
+    },
+    
+    'price_vs_primary_trend_pct': {
+        'legacy': {
+            'intraday': 'price_vs_200ema_pct',
+            'short_term': 'price_vs_200ema_pct',
+            'long_term': 'price_vs_50wma_pct',
+            'multibagger': 'price_vs_12mma_pct'
+        },
+        'description': 'Price distance from primary trend MA (% above/below)'
+    },
+    
+    # === Volatility & Risk ===
+    'atr_dynamic': {
+        'legacy': None,  # No legacy key, always was generic
+        'description': 'Horizon-aware ATR value'
+    },
+    
+    'sl_atr_dynamic': {
+        'legacy': None,
+        'description': 'Dynamic stop loss based on ATR'
+    },
+    
+    # === Oscillators (Always Generic) ===
+    'rsi': {'legacy': None},
+    'rsi_slope': {'legacy': None},
+    'macd': {'legacy': None},
+    'macd_cross': {'legacy': None},
+    'macd_histogram': {'legacy': None},
+    'adx': {'legacy': None},
+    'stoch_k': {'legacy': None},
+    'stoch_d': {'legacy': None},
+    'stoch_cross': {'legacy': None},
+    
+    # === Volume ===
+    'rvol': {'legacy': None},
+    'vol_spike_ratio': {'legacy': None},
+    'vol_spike_signal': {'legacy': None},
+    'obv_div': {'legacy': None},
+    
+    # === Trend ===
+    'supertrend_signal': {'legacy': None},
+    'psar_trend': {'legacy': None},
+    'ichi_cloud': {'legacy': None},
+    'nifty_trend_score': {'legacy': None},
+    
+    # === Patterns (Horizon-Suffixed) ===
+    'bollinger_squeeze': {
+        'legacy': {
+            'intraday': 'bollinger_squeeze_intraday',
+            'short_term': 'bollinger_squeeze_short_term',
+            'long_term': 'bollinger_squeeze',  # Base key
+            'multibagger': 'bollinger_squeeze'
+        }
+    },
+    
+    'ichimoku_signals': {
+        'legacy': {
+            'intraday': 'ichimoku_signals_intraday',
+            'short_term': 'ichimoku_signals_short_term',
+            'long_term': 'ichimoku_signals_long_term',
+            'multibagger': 'ichimoku_signals_multibagger'
+        }
+    },
+}
+
+"""

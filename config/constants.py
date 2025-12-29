@@ -630,7 +630,7 @@ MASTER_CONFIG = {
             "asset_turnover": 0.04, "piotroski_f": 0.07, "r_d_intensity": 0.04, 
             "earnings_stability": 0.05, "eps_growth_5y": 0.06, "fcf_growth_3y": 0.05,
             "market_cap_cagr": 0.04, "promoter_holding": 0.015, "institutional_ownership": 0.015,
-            "beta": 0.01, "52w_position": 0.01, "dividend_payout": 0.03, "yield_vs_avg": 0.02,
+            "beta": 0.01, "Position52w": 0.01, "dividend_payout": 0.03, "yield_vs_avg": 0.02,
             "promoter_pledge": 0.02, "quarterly_growth": 0.03, "revenue_growth_5y": 0.05
         },
 
@@ -1505,7 +1505,7 @@ FUNDAMENTAL_WEIGHTS = {
     "promoter_holding": 0.015,
     "institutional_ownership": 0.015,
     "beta": 0.01,
-    "52w_position": 0.01,
+    "Position52w": 0.01,
     "dividend_payout": 0.03,
     "yield_vs_avg": 0.02,
 }
@@ -1558,7 +1558,7 @@ FUNDAMENTAL_ALIAS_MAP = {
     "institutional_ownership": "Institutional Ownership (%)",
     "short_interest": "Short Interest",
     "analyst_rating": "Analyst Rating (Momentum)",
-    "52w_position": "52W Position (off-high %)",
+    "Position52w": "52W Position (off-high %)",
     "beta": "Beta",
     "days_to_earnings": "Days to Next Earnings",
     "ps_ratio": "Price-to-Sales (P/S)",
@@ -1566,8 +1566,10 @@ FUNDAMENTAL_ALIAS_MAP = {
     "base_score": "Base Fundamental Score",
     "final_score": "Final Fundamental Score",
     "_meta": "Meta",
-    "52w_high": "52 week high",
-    "52w_low": "52 week low",
+    "high52w": "52 week high",
+    "low52w": "52 week low",
+    "drawdown_from_52w_high":"Drawdown from 52W High",
+    "price_vs_52w_high_pct":"Price vs 52w high percentage",
     "volatility_adjusted_roe": "ROE/Volatility Ratio",
     "price_vs_intrinsic_value": "Price vs Intrinsic Value",
     "fcf_yield_vs_volatility": "FCF Yield vs Volatility",
@@ -1971,7 +1973,7 @@ MOMENTUM_WEIGHTS = {  # 🆕 CORE COMPOSITES (PRIORITY)
     "vwap_bias": {"weight": 0.05, "direction": "normal"},
     "price_action": {"weight": 0.05, "direction": "normal"},
     "nifty_trend_score": {"weight": 0.05, "direction": "normal"},  # Macro Context
-    "52w_position": {"weight": 0.05, "direction": "normal"},  # Hybrid/Sentiment Context
+    "Position52w": {"weight": 0.05, "direction": "normal"},  # Hybrid/Sentiment Context
     # ⚠️ CONTEXTUAL/VOLUME (MUST KEEP)
     "rvol": {
         "weight": 0.00,

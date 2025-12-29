@@ -221,24 +221,63 @@ def _safe_get_raw_float(metric_entry: Any) -> Optional[float]:
                 if f is not None: return f
     return _safe_float(metric_entry)
 
-def _get_val(data: Dict, key: str, default: float = 0.0) -> float:
-    """Safe float extraction from diverse indicator formats."""
+def _safe_get_raw_value(metric_entry):
+    """
+    Returns:
+    - float if numeric
+    - string if categorical
+    - None if unusable
+    """
+    if metric_entry is None:
+        return None
+
+    # Dict case (your main case)
+    if isinstance(metric_entry, dict):
+        for key in ("raw", "value"):
+            if key in metric_entry:
+                v = metric_entry.get(key)
+
+                # Try numeric first
+                f = _safe_float(v)
+                if f is not None:
+                    return f
+
+                # If not numeric but string → allow it
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+
+        return None
+
+    # Scalar case
+    f = _safe_float(metric_entry)
+    if f is not None:
+        return f
+
+    if isinstance(metric_entry, str) and metric_entry.strip():
+        return metric_entry.strip()
+
+    return None
+
+
+def _get_val(data: Dict, key: str, default=None):
     if not data or key not in data:
         logger.debug(f"_get_val: missing key '{key}'")
         return default
-    
-    # Explicit handling for known direct numeric fields
-    if key in {"52w_high", "52_week_high", "52w_low", "52_week_low"}:
+
+    # Explicit numeric-only keys
+    if key in {"high52w", "52_week_high", "low52w", "52_week_low"}:
         val = _safe_float(data.get(key))
         if val is None:
             logger.debug(f"_get_val: key '{key}' has no numeric value")
             return default
         return val
-    
-    val = _safe_get_raw_float(data.get(key))
+
+    val = _safe_get_raw_value(data.get(key))
+
     if val is None:
-        logger.debug(f"_get_val: key '{key}' has no numeric value")
+        logger.debug(f"_get_val: key '{key}' has no usable value")
         return default
+
     return val
 
 def normalize_ratio(v):

@@ -2036,20 +2036,20 @@ def detect_divergence_via_slopes(indicators: Dict, horizon: str = "short_term") 
             'severity': None
         }
 
-def old_detect_divergence_via_slopes_legacy(indicators, horizon):
-    try:
-        rsi_slope = ensure_numeric(_get_val(indicators, "rsi_slope"))
-        price = ensure_numeric(_get_val(indicators, "price"))
-        prev_price = ensure_numeric(_get_val(indicators, "prev_close"), price)
-        thresh = RSI_SLOPE_THRESH.get(horizon, RSI_SLOPE_THRESH["default"])["deceleration_ceiling"]
+# def old_detect_divergence_via_slopes_legacy(indicators, horizon):
+#     try:
+#         rsi_slope = ensure_numeric(_get_val(indicators, "rsi_slope"))
+#         price = ensure_numeric(_get_val(indicators, "price"))
+#         prev_price = ensure_numeric(_get_val(indicators, "prev_close"), price)
+#         thresh = RSI_SLOPE_THRESH.get(horizon, RSI_SLOPE_THRESH["default"])["deceleration_ceiling"]
         
-        if price > prev_price and rsi_slope < thresh:
-            return {'divergence_type': 'bearish', 'confidence_factor': 0.70, 
-                   'warning': f"Bearish Divergence: RSI_slope={rsi_slope:.2f} < {thresh}", 'severity': 'moderate'}
-        return {'divergence_type': 'none', 'confidence_factor': 1.0, 'warning': None, 'severity': None}
-    except Exception as e:
-        logger.debug(f"detect_divergence_via_slopes failed {e}")
-        return {'divergence_type': 'none', 'confidence_factor': 1.0, 'warning': None, 'severity': None}
+#         if price > prev_price and rsi_slope < thresh:
+#             return {'divergence_type': 'bearish', 'confidence_factor': 0.70, 
+#                    'warning': f"Bearish Divergence: RSI_slope={rsi_slope:.2f} < {thresh}", 'severity': 'moderate'}
+#         return {'divergence_type': 'none', 'confidence_factor': 1.0, 'warning': None, 'severity': None}
+#     except Exception as e:
+#         logger.debug(f"detect_divergence_via_slopes failed {e}")
+#         return {'divergence_type': 'none', 'confidence_factor': 1.0, 'warning': None, 'severity': None}
 
 # #6: Spread adjustment
 def calculate_spread_adjustment(
@@ -5492,6 +5492,7 @@ def calculate_targets(
 def calculate_trade_position_size(
     confidence: int,
     indicators: Dict,
+    fundamentals: Dict,
     setup_type: str,
     horizon: str
 ) -> Tuple[float, Dict]:
@@ -5531,6 +5532,7 @@ def calculate_trade_position_size(
     base_position_size = calculate_position_size(
         horizon=horizon,
         indicators=indicators,
+        fundamentals= fundamentals
         confidence=confidence,
         setup_type=setup_type
     )
@@ -5647,7 +5649,7 @@ def calculate_execution_plan(
 
         # Get base position size
         position_size, size_meta = calculate_trade_position_size(
-            confidence, indicators, setup_type, horizon
+            confidence, indicators, fundamentals, setup_type, horizon
         )
 
         plan["position_size"] = position_size

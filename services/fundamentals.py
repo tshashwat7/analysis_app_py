@@ -764,8 +764,8 @@ def calc_beta(t, unifier: DataUnifier = None):
     score = 10 if abs(b) < 0.8 else 7 if abs(b) < 1 else 3
     return {"raw": b, "value": round(b, 2), "score": score, "desc": f"Beta {b:.2f}"}
 
-@_wrap_calc("52w_position")
-def calc_52w_position(t, unifier: DataUnifier = None):
+@_wrap_calc("Position52w")
+def calc_52wPosition(t, unifier: DataUnifier = None):
     high = unifier.get(["fiftyTwoWeekHigh"])
     price = unifier.get(["currentPrice"])
     if not high or not price: return None
@@ -992,7 +992,7 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
         "promoter_pledge": calc_promoter_pledge, "ps_ratio": calc_ps_ratio,
         "r_d_intensity": calc_rd_intensity, "earnings_stability": calc_earnings_stability,
         "fcf_margin": calc_fcf_margin, "market_cap_cagr": calc_market_cap_cagr,
-        "beta": calc_beta, "52w_position": calc_52w_position,
+        "beta": calc_beta, "Position52w": calc_52wPosition,
         "analyst_rating": calc_analyst_rating, "days_to_earnings": calc_days_to_earnings,
         "asset_turnover": calc_asset_turnover,
     }
@@ -1061,8 +1061,15 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
     fundamentals["market_penalty"] = market_penalty
     fundamentals["final_score"] = final_score
     fundamentals["symbol"] = symbol
-    fundamentals["52w_high"] = round(unifier.get(["fiftyTwoWeekHigh"]), 2)
-    fundamentals["52w_low"] = round(unifier.get(["fiftyTwoWeekLow"]),2)
+    fundamentals["high52w"] = round(unifier.get(["fiftyTwoWeekHigh"]), 2)
+    fundamentals["low52w"] = round(unifier.get(["fiftyTwoWeekLow"]),2)
+    fundamentals["drawdown_from_52w_high"] =  (fundamentals["high52w"] - fundamentals["current_price"]) / fundamentals["high52w"] * 100
+    fundamentals["price_vs_52w_high_pct"] = fundamentals["current_price"] / (fundamentals["high52w"]) * 100
+    fundamentals['roe_3y_avg'] = {
+            "value": round(sum(fundamentals.get('roe_history')[:3]) / len(fundamentals.get('roe_history')[:3]), 2),
+            "alias": "ROE 3Y Average",
+            "raw": sum(fundamentals.get('roe_history')[:3]) / len(fundamentals.get('roe_history')[:3])
+        }
 
     return fundamentals
 
@@ -1107,3 +1114,21 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
         return _compute_fundamentals_core(symbol, apply_market_penalty)
     finally:
         db.close()
+
+
+"""
+fundamentals_keys = [
+    'pe_ratio', 'pb_ratio', 'peg_ratio', 'roe', 'roce', 'roic', 'de_ratio',
+    'interest_coverage', 'fcf_yield', 'current_ratio', 'piotroski_f', 'promoter_holding',
+    'institutional_ownership', 'dividend_yield', 'market_cap', 'net_profit_margin',
+    'operating_margin', 'profit_growth_3y', 'eps_growth_5y', 'fcf_growth_3y',
+    'quarterly_growth', 'ebitda_margin', 'short_interest', 'pe_vs_sector',
+    'dividend_payout', 'yield_vs_avg', 'revenue_growth_5y', 'ocf_vs_profit',
+    'promoter_pledge', 'ps_ratio', 'r_d_intensity', 'earnings_stability', 'fcf_margin',
+    'market_cap_cagr', 'beta', 'Position52w', 'analyst_rating', 'days_to_earnings',
+    'asset_turnover', 'eps_growth_3y', 'roe_history', 'roe_5y', 'sector', 'industry',
+    'website', 'current_price', 'name', '_meta', 'base_score', 'market_penalty',
+    'final_score', 'symbol', 'high52w', 'low52w', 'drawdown_from_52w_high',
+    'price_vs_52w_high_pct','roe_3y_avg'
+]
+"""

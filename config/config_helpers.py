@@ -249,19 +249,38 @@ def validate_horizon_entry_gates(
     if confidence is not None:
         # Check for explicit setup-specific override FIRST
         if setup_type and "confidence_min" in overrides:
-            conf_min = overrides["confidence_min"]
-            if conf_min is None:
+            override_min = overrides["confidence_min"]
+            if override_min is None:
                 # Skip gate entirely for accumulation plays
                 gates_log["confidence"] = "SKIPPED (Accumulation Setup)"
                 logger.info(f"[{horizon}] Confidence gate skipped for {setup_type}")
-            elif confidence < conf_min:
-                status = "FAIL"
-                failures.append(f"Confidence {confidence:.1f} < Override {conf_min}")
-                gates_log["confidence"] = status
             else:
-                gates_log["confidence"] = "PASS"
+                # ✅ FIXED: Calculate dynamic floor AND use max
+                adx_val = _get_val(indicators, "adx", 0)
+                dynamic_floor = config.calculate_dynamic_confidence_floor(adx_val, setup_type)
+                
+                # Use the HIGHER of override or dynamic floor
+                required_floor = max(override_min, dynamic_floor)
+                
+                if confidence < required_floor:
+                    status = "FAIL"
+                    # Enhanced logging shows which threshold was used
+                    if required_floor == dynamic_floor:
+                        failures.append(
+                            f"Confidence {confidence:.1f}% < Dynamic Floor {dynamic_floor:.1f}% "
+                            f"(ADX={adx_val:.1f}, override={override_min} was lower)"
+                        )
+                    else:
+                        failures.append(
+                            f"Confidence {confidence:.1f}% < Override {override_min}% "
+                            f"(dynamic floor {dynamic_floor:.1f}% was lower)"
+                        )
+                    gates_log["confidence"] = status
+                else:
+                    status = "PASS"
+                    gates_log["confidence"] = f"PASS (req={required_floor:.1f}%)"
         else:
-            # Use dynamic floor as fallback
+            # Use dynamic floor as fallback (when no override exists)
             adx_val = _get_val(indicators, "adx", 0)
             required_floor = config.calculate_dynamic_confidence_floor(adx_val, setup_type)
             
@@ -481,6 +500,7 @@ def classify_setup(
 def calculate_position_size(
     horizon: str,
     indicators: Dict,
+    fundamentals:Dict,
     confidence: float,
     setup_type: str
 ) -> float:
@@ -532,6 +552,49 @@ def calculate_position_size(
         f"[{horizon}] After strategy multiplier ({strategy_mult:.2f}): "
         f"{base_position:.4f} → {position:.4f}"
     )
+    # ✅ NEW: Fundamental quality discount
+    if fundamentals and setup_type in ["VALUE_TURNAROUND", "DEEP_VALUE_PLAY", "QUALITY_ACCUMULATION"]:
+        # Handle both dict and plain numeric ROE
+        roe = _get_val(fundamentals,'roe')
+        
+        # Also check ROCE for quality assessment
+        roce = _get_val(fundamentals, 'roce')
+        
+        # Expected thresholds per setup
+        expected_roe = {
+            "VALUE_TURNAROUND": 18,
+            "DEEP_VALUE_PLAY": 20,
+            "QUALITY_ACCUMULATION": 20
+        }.get(setup_type, 15)
+        
+        expected_roce = {
+            "VALUE_TURNAROUND": 20,
+            "DEEP_VALUE_PLAY": 25,
+            "QUALITY_ACCUMULATION": 25
+        }.get(setup_type, 18)
+        
+        # Calculate quality score (average of ROE and ROCE)
+        if roe > 0 or roce > 0:
+            roe_ratio = roe / expected_roe if roe > 0 else 1.0
+            roce_ratio = roce / expected_roce if roce > 0 else 1.0
+            quality_ratio = (roe_ratio + roce_ratio) / 2
+            
+            if quality_ratio < 1.0:
+                fundamental_discount = max(0.6, quality_ratio)  # Floor at 60%
+                position *= fundamental_discount
+                logger.warning(
+                    f"[{horizon}] Position reduced by {fundamental_discount:.2f}x "
+                    f"due to weak fundamentals: ROE={roe:.1f}% (exp {expected_roe}%), "
+                    f"ROCE={roce:.1f}% (exp {expected_roce}%)"
+                )
+        else:
+            # Missing fundamental data - log warning but proceed
+            logger.warning(
+                f"[{horizon}] Fundamental data (ROE/ROCE) missing for {setup_type}. "
+                f"Proceeding without quality discount - HIGH RISK!"
+            )
+
+
     
     # Cap at max position
     final_position = min(position, max_pos)
