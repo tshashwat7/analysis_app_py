@@ -17,8 +17,8 @@ STRATEGY_DEFINITIONS = {
     "swing_trading": {
         "description": "Captures multi-day price swings",
         "fit_indicators": {
-            "trend_strength": {"min": 4.0, "weight": 0.3},
-            "volatility_quality": {"min": 5.0, "weight": 0.3},
+            "trendStrength": {"min": 4.0, "weight": 0.3},
+            "volatilityQuality": {"min": 5.0, "weight": 0.3},
             "adx": {"min": 20, "weight": 0.2}
         },
         "fit_threshold": 60,
@@ -34,9 +34,9 @@ STRATEGY_DEFINITIONS = {
     "day_trading": {
         "description": "Intraday entries and exits",
         "fit_indicators": {
-            "momentum_strength": {"min": 6.0, "weight": 0.4},
+            "momentumStrength": {"min": 6.0, "weight": 0.4},
             "rvol": {"min": 2.0, "weight": 0.3},
-            "volatility_quality": {"min": 6.0, "weight": 0.3}
+            "volatilityQuality": {"min": 6.0, "weight": 0.3}
         },
         "fit_threshold": 65,
         "preferred_setups": [
@@ -51,10 +51,10 @@ STRATEGY_DEFINITIONS = {
     "minervini_growth": {
         "description": "Mark Minervini's growth stock method",
         "fit_indicators": {
-            "eps_growth_5y": {"min": 25, "weight": 0.3},
-            "rel_strength_nifty": {"min": 1.2, "weight": 0.3},
-            "trend_strength": {"min": 6.0, "weight": 0.2},
-            "volatility_quality": {"min": 5.0, "weight": 0.2}
+            "epsGrowth5y": {"min": 25, "weight": 0.3},
+            "relStrengthNifty": {"min": 1.2, "weight": 0.3},
+            "trendStrength": {"min": 6.0, "weight": 0.2},
+            "volatilityQuality": {"min": 5.0, "weight": 0.2}
         },
         "fit_threshold": 70,
         "preferred_setups": [
@@ -62,17 +62,17 @@ STRATEGY_DEFINITIONS = {
             "PATTERN_CUP_BREAKOUT",
             "TREND_PULLBACK"
         ],
-        "required_patterns": ["minervini_stage2"],
+        "required_patterns": ["minerviniStage2"],
         "notes": "Requires Stage 2 confirmation + growth fundamentals"
     },
     
     "value_investing": {
         "description": "Long-term value accumulation",
         "fit_indicators": {
-            "pe_ratio": {"max": 15, "weight": 0.3, "direction": "invert"},
+            "peRatio": {"max": 15, "weight": 0.3, "direction": "invert"},
             "roe": {"min": 15, "weight": 0.3},
-            "de_ratio": {"max": 0.5, "weight": 0.2, "direction": "invert"},
-            "fcf_yield": {"min": 5.0, "weight": 0.2}
+            "deRatio": {"max": 0.5, "weight": 0.2, "direction": "invert"},
+            "fcfYield": {"min": 5.0, "weight": 0.2}
         },
         "fit_threshold": 65,
         "preferred_setups": [
@@ -153,13 +153,13 @@ def _get_str(data, key, default=""):
     return str(v).lower() if v else default
 
 def _is_squeeze_on(indicators):
-    return "on" in _get_str(indicators, "ttm_squeeze")
+    return "on" in _get_str(indicators, "ttmSqueeze")
 
 def _get_ma_keys(horizon):
     # Dynamic key mapping based on horizon
-    if horizon == "long_term": return {"fast": "wma_10", "mid": "wma_40", "slow": "wma_50"}
-    if horizon == "multibagger": return {"fast": "mma_6", "mid": "mma_12", "slow": "mma_12"}
-    return {"fast": "ema_20", "mid": "ema_50", "slow": "ema_200"}
+    if horizon == "long_term": return {"fast": "wma10", "mid": "wma40", "slow": "wma50"}
+    if horizon == "multibagger": return {"fast": "mma6", "mid": "mma12", "slow": "mma12"}
+    return {"fast": "ema20", "mid": "ema50", "slow": "ema200"}
 
 def safe_get_numeric(data: Dict[str, Any], key: str, default: float = 0.0) -> float:
     """
@@ -213,24 +213,24 @@ def check_swing_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = N
     """Swing: Catching reversals or dips in trend."""
     reasons, score = [], 0.0
     price = safe_get_numeric(indicators, "price")
-    bb_low = safe_get_numeric(indicators, "bb_low")
+    bbLow = safe_get_numeric(indicators, "bbLow")
     rsi = safe_get_numeric(indicators, "rsi", default=50)
     
     # --- PATTERN MUSCLE ---
     # 1. Double Bottom (Strong Reversal)
     # Using the 'score' from the pattern engine
-    db_score = safe_get_numeric(indicators, "double_top_bottom", 0)
+    db_score = safe_get_numeric(indicators, "doubleTopBottom", 0)
     
     # Check if it's actually bullish (Double Bottom) not Bearish (Double Top)
     is_double_bottom = False
-    if db_score > 0 and isinstance(indicators.get("double_top_bottom"), dict):
-        meta = indicators["double_top_bottom"].get("meta", {})
+    if db_score > 0 and isinstance(indicators.get("doubleTopBottom"), dict):
+        meta = indicators["doubleTopBottom"].get("meta", {})
         if meta.get("type") == "bullish":
             is_double_bottom = True
 
     # --- SCORING ---
     # 1. Band Proximity
-    if bb_low > 0 and price <= bb_low * 1.02:
+    if bbLow > 0 and price <= bbLow * 1.02:
         score += 35; reasons.append("Price near Buy Zone (BB Low)")
     
     # 2. RSI Dip
@@ -249,14 +249,14 @@ def check_swing_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = N
 def check_day_trading_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = None) -> Dict[str, Any]:
     reasons, score = [], 0.0
     rvol = safe_get_numeric(indicators, "rvol", 1.0)
-    atr_pct = safe_get_numeric(indicators, "atr_pct")
+    atrPct = safe_get_numeric(indicators, "atrPct")
     
     # Patterns
-    strike_score = safe_get_numeric(indicators, "three_line_strike", 0)
+    strike_score = safe_get_numeric(indicators, "threeLineStrike", 0)
     
     # 1. Volatility & Liquidity
     if rvol > 1.5: score += 25
-    if atr_pct > 1.5: score += 15
+    if atrPct > 1.5: score += 15
     
     # 2. Patterns (Triggers)
     if strike_score > 0: 
@@ -276,8 +276,8 @@ def check_trend_following_fit(indicators: Dict[str, Any], fundamentals: Dict[str
     adx = safe_get_numeric(indicators, "adx")
     
     # Pattern Muscle
-    ichi_score = safe_get_numeric(indicators, "ichimoku_signals", 0)
-    golden_score = safe_get_numeric(indicators, "golden_cross", 0)
+    ichi_score = safe_get_numeric(indicators, "ichimokuSignals", 0)
+    golden_score = safe_get_numeric(indicators, "goldenCross", 0)
 
     # 1. MA Alignment
     if fast and mid and slow and price > fast > mid > slow:
@@ -293,7 +293,7 @@ def check_trend_following_fit(indicators: Dict[str, Any], fundamentals: Dict[str
     # 4. Golden Cross (Regime Confirmation)
     # Check if bullish
     if golden_score > 0:
-        meta = indicators.get("golden_cross", {}).get("meta", {})
+        meta = indicators.get("goldenCross", {}).get("meta", {})
         if meta.get("type") == "bullish":
             score += 25; reasons.append("Golden Cross (Major Trend)")
     
@@ -306,9 +306,9 @@ def check_momentum_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] 
     rsi = safe_get_numeric(indicators, "rsi")
     
     # Pattern Muscles
-    darvas_score = safe_get_numeric(indicators, "darvas_box", 0)
-    flag_score = safe_get_numeric(indicators, "flag_pennant", 0)
-    squeeze_score = safe_get_numeric(indicators, "bollinger_squeeze", 0)
+    darvas_score = safe_get_numeric(indicators, "darvasBox", 0)
+    flag_score = safe_get_numeric(indicators, "flagPennant", 0)
+    squeeze_score = safe_get_numeric(indicators, "bollingerSqueeze", 0)
     
     if rsi >= 60: score += 20
     
@@ -325,14 +325,14 @@ def check_minervini_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any]
     reasons, score = [], 0.0
     
     # 1. Pattern Muscle
-    vcp_score = safe_get_numeric(indicators, "minervini_stage2", 0)
+    vcp_score = safe_get_numeric(indicators, "minerviniStage2", 0)
     
     if vcp_score > 0:
         score += 50; reasons.append(f"VCP Pattern Confirmed ({int(vcp_score)}%)")
     else:
         # Fallback check for Trend Template
-        ma_50 = safe_get_numeric(indicators, "ema_50")
-        ma_200 = safe_get_numeric(indicators, "ema_200")
+        ma_50 = safe_get_numeric(indicators, "ema50")
+        ma_200 = safe_get_numeric(indicators, "ema200")
         price = safe_get_numeric(indicators, "price")
         
         if price > ma_50 > ma_200:
@@ -341,7 +341,7 @@ def check_minervini_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any]
             score -= 50; reasons.append("Not in Stage 2 Trend")
 
     # 2. Relative Strength
-    rs_nifty = safe_get_numeric(indicators, "rel_strength_nifty")
+    rs_nifty = safe_get_numeric(indicators, "relStrengthNifty")
     if rs_nifty > 0: score += 20; reasons.append("Outperforming Market")
 
     # 3. Near 52W Highs
@@ -359,14 +359,14 @@ def check_canslim_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] =
     reasons, score = [], 0.0
     
     # C & A: Earnings
-    q_growth = safe_get_numeric(fundamentals, "quarterly_growth", 0)
-    a_growth = safe_get_numeric(fundamentals, "eps_growth_3y", 0)
+    q_growth = safe_get_numeric(fundamentals, "quarterlyGrowth", 0)
+    a_growth = safe_get_numeric(fundamentals, "epsGrowth3y", 0)
     
     if q_growth > 20: score += 20; reasons.append("Strong Qtr Growth (>20%)")
     if a_growth > 15: score += 15; reasons.append("Strong Annual Growth")
 
     # N: New Pattern (Cup & Handle)
-    cup_score = safe_get_numeric(indicators, "cup_handle", 0)
+    cup_score = safe_get_numeric(indicators, "cupHandle", 0)
     pos_52w = safe_get_numeric(fundamentals, "52w_position", 0)
     
     if cup_score > 0:
@@ -379,7 +379,7 @@ def check_canslim_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] =
     if rvol > 1.2: score += 10; reasons.append("Demand Volume")
 
     # L: Leader
-    rs_nifty = safe_get_numeric(indicators, "rel_strength_nifty")
+    rs_nifty = safe_get_numeric(indicators, "relStrengthNifty")
     if rs_nifty > 5: score += 15; reasons.append("Market Leader")
 
     return _build_result("canslim", score, reasons, {"cup": cup_score})
@@ -388,29 +388,29 @@ def check_canslim_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] =
 
 def check_value_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = None) -> Dict[str, Any]:
     reasons, score = [], 0.0
-    pe = safe_get_numeric(fundamentals, "pe_ratio")
-    pb = safe_get_numeric(fundamentals, "pb_ratio")
+    pe = safe_get_numeric(fundamentals, "peRatio")
+    pb = safe_get_numeric(fundamentals, "pbRatio")
     if 0 < pe < 15: score += 35
     if 0 < pb < 1.5: score += 25
     return _build_result("value", score, reasons, {})
 
 def check_income_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = None) -> Dict[str, Any]:
     reasons, score = [], 0.0
-    dy = safe_get_numeric(fundamentals, "dividend_yield")
+    dy = safe_get_numeric(fundamentals, "dividendyield")
     if dy > 3.0: score += 40
     return _build_result("income", score, reasons, {})
 
 def check_position_trading_fit(indicators: Dict[str, Any], fundamentals: Dict[str, Any] = None) -> Dict[str, Any]:
     reasons, score = [], 0.0
-    eps_g = safe_get_numeric(fundamentals, "eps_growth_5y")
-    dma200 = safe_get_numeric(indicators, "ema_200")
+    eps_g = safe_get_numeric(fundamentals, "epsGrowth5y")
+    dma200 = safe_get_numeric(indicators, "ema200")
     price = safe_get_numeric(indicators, "price")
     
     if eps_g > 10: score += 30
     if price > dma200: score += 40; reasons.append("Primary Uptrend")
     
     # Pattern Bonus: Golden Cross
-    golden_score = safe_get_numeric(indicators, "golden_cross", 0)
+    golden_score = safe_get_numeric(indicators, "goldenCross", 0)
     if golden_score > 0: score += 20; reasons.append("Golden Cross Confirmation")
     
     return _build_result("position_trading", score, reasons, {})

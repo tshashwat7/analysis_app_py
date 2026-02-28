@@ -1,11 +1,12 @@
 import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
+from services.patterns.utils import _build_formation_context
 
 class ThreeLineStrikePattern(BasePattern):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
-        self.alias = "three_line_strike"
+        self.alias = "threeLineStrike"
 
     def detect(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
         result = {"found": False, "score": 0, "quality": 0, "meta": {}}
@@ -15,61 +16,93 @@ class ThreeLineStrikePattern(BasePattern):
         if df is None or len(df) < 5: return result
         
         # Need last 4 candles
-        c = df.iloc[-4:].copy() # Index 0,1,2,3 (3 is today)
+        c = df.iloc[-4:].copy()
         
-        # Helper for candle color
-        # 1=Green, -1=Red
         opens = c["Open"].values
         closes = c["Close"].values
         lows = c["Low"].values
         highs = c["High"].values
         
-        # CHECK BULLISH STRIKE (Correction of trend)
-        # Pattern: 3 Bearish candles, then 1 Bullish that engulfs all 3
-        
-        # 1. First 3 are Red
+        # CHECK BULLISH STRIKE
         is_3_red = (closes[0] < opens[0]) and (closes[1] < opens[1]) and (closes[2] < opens[2])
-        
-        # 2. Making Lower Lows
         is_lower_lows = (lows[1] < lows[0]) and (lows[2] < lows[1])
-        
+
         if is_3_red and is_lower_lows:
-            # 3. The Strike Candle (Today) must be Green
             is_strike_green = closes[3] > opens[3]
-            
-            # 4. Engulfing Logic:
-            # Open of Strike < Close of 3rd candle (Gaps down or opens low)
-            # Close of Strike > Open of 1st candle (Engulfs the whole sequence)
             is_engulfing = (opens[3] < closes[2]) and (closes[3] > opens[0])
             
             if is_strike_green and is_engulfing:
                 result["found"] = True
-                result["score"] = 90 # High prob pattern
+                result["score"] = 90
                 result["quality"] = 9.0
                 result["desc"] = "Bullish 3-Line Strike"
-                # ADD PATTERN AGE TRACKING
-                # Strike formed on last candle (index -1)
-                formation_index = len(df) - 1
+
+                # ✅ NOW calculate variables (after we know pattern exists)
+                strike_low = lows[3]
+                strike_high = highs[3]
+                strike_open = opens[3]
+                strike_close = closes[3]
+                pattern_low = lows.min()
+                pattern_high = highs.max()
+                
+                # ✅ Calculate body ratio
+                strike_candle_body = abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1)
+                
+                # ✅ Calculate invalidation level
+                if horizon == "intraday":
+                    invalidation_level = strike_low * 0.995
+                elif horizon == "short_term":
+                    invalidation_level = strike_low * 0.99
+                else:
+                    invalidation_level = strike_low * 0.98
+
+                # Pattern strength
+                pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate"
+                strike_strength = "strong" if strike_candle_body >= 0.7 else "moderate" if strike_candle_body >= 0.5 else "weak"
+                
+                rvol = self._get_val(indicators, "rvol")
+                reversal_confidence = "high" if strike_candle_body >= 0.7 and (rvol and rvol >= 1.3) else "moderate"
+                
+                entry_conditions_met = True
 
                 result["meta"] = {
-                    "type": "Bullish",  # or "Bearish"
-                    # 🆕 AGE TRACKING
-                    "age_candles": 1,  # Strike is always 1 bar old (freshest pattern)
+                    "bar_index": len(df),
+                    "strike_candle_body": round(strike_candle_body, 3),
+                    "invalidation_level": round(invalidation_level, 2),
+                    "entry_trigger_price": round(strike_close, 2),
+                    "strike_strength": strike_strength,
+                    "reversal_confidence": reversal_confidence,
+                    "pattern_quality": "strong" if strike_candle_body >= 0.7 else "moderate",
+                    "horizon": horizon,
+                    "pattern_strength": pattern_strength,
+                    "current_price": round(closes[3], 2),
+                    "type": "Bullish",
+                    "strike_low": round(strike_low, 2),
+                    "strike_high": round(strike_high, 2),
+                    "strike_open": round(strike_open, 2),
+                    "strike_close": round(strike_close, 2),
+                    "pattern_low": round(pattern_low, 2),
+                    "pattern_high": round(pattern_high, 2),
+                    "age_candles": 1,
                     "formation_timestamp": df.index[-1].isoformat(),
-                    "strike_candle_body_pct": abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1)
+                    "strike_candle_body_pct": round(strike_candle_body, 3),
+                    "velocity_tracking": {
+                        "can_track": result["quality"] >= 7.0 and entry_conditions_met,
+                        "entry_conditions_met": entry_conditions_met,
+                        "quality_sufficient": result["quality"] >= 7.0,
+                        "strike_confirmed": True,
+                        "pattern_type": "bullish"
+                    },
+                    "formation_context": _build_formation_context(indicators)
                 }
-
                 return result
 
         # CHECK BEARISH STRIKE
-        # Pattern: 3 Green candles, then 1 Red that engulfs all 3
         is_3_green = (closes[0] > opens[0]) and (closes[1] > opens[1]) and (closes[2] > opens[2])
         is_higher_highs = (highs[1] > highs[0]) and (highs[2] > highs[1])
         
         if is_3_green and is_higher_highs:
             is_strike_red = closes[3] < opens[3]
-            # Open of Strike > Close of 3rd
-            # Close of Strike < Open of 1st
             is_engulfing = (opens[3] > closes[2]) and (closes[3] < opens[0])
             
             if is_strike_red and is_engulfing:
@@ -78,13 +111,62 @@ class ThreeLineStrikePattern(BasePattern):
                 result["quality"] = 9.0
                 result["desc"] = "Bearish 3-Line Strike"
                 
-                # ✅ ADD PATTERN AGE TRACKING
+                # ✅ NOW calculate variables (after we know pattern exists)
+                strike_low = lows[3]
+                strike_high = highs[3]
+                strike_open = opens[3]
+                strike_close = closes[3]
+                pattern_low = lows.min()
+                pattern_high = highs.max()
+                
+                # ✅ Calculate body ratio
+                strike_candle_body = abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1)
+                
+                # ✅ Calculate invalidation level (REVERSED for bearish)
+                if horizon == "intraday":
+                    invalidation_level = strike_high * 1.005  # ✅ Use high for bearish
+                elif horizon == "short_term":
+                    invalidation_level = strike_high * 1.01
+                else:
+                    invalidation_level = strike_high * 1.02
+
+                pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate"
+                strike_strength = "strong" if strike_candle_body >= 0.7 else "moderate" if strike_candle_body >= 0.5 else "weak"
+                
+                rvol = self._get_val(indicators, "rvol")
+                reversal_confidence = "high" if strike_candle_body >= 0.7 and (rvol and rvol >= 1.3) else "moderate"
+                
+                entry_conditions_met = True
+
                 result["meta"] = {
+                    "bar_index": len(df),
+                    "strike_candle_body": round(strike_candle_body, 3),
+                    "invalidation_level": round(invalidation_level, 2),
+                    "entry_trigger_price": round(strike_close, 2),
+                    "strike_strength": strike_strength,
+                    "reversal_confidence": reversal_confidence,
+                    "pattern_quality": "strong" if strike_candle_body >= 0.7 else "moderate",
+                    "horizon": horizon,
+                    "pattern_strength": pattern_strength,
+                    "current_price": round(closes[3], 2),
                     "type": "Bearish",
-                    # Strike formed on last candle
-                    "age_candles": 1,  # Always fresh (just formed)
+                    "strike_low": round(strike_low, 2),
+                    "strike_high": round(strike_high, 2),
+                    "strike_open": round(strike_open, 2),
+                    "strike_close": round(strike_close, 2),
+                    "pattern_low": round(pattern_low, 2),
+                    "pattern_high": round(pattern_high, 2),
+                    "age_candles": 1,
                     "formation_timestamp": df.index[-1].isoformat(),
-                    "strike_candle_body_pct": round(abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1), 3)
+                    "strike_candle_body_pct": round(strike_candle_body, 3),
+                    "velocity_tracking": {
+                        "can_track": result["quality"] >= 7.0 and entry_conditions_met,
+                        "entry_conditions_met": entry_conditions_met,
+                        "quality_sufficient": result["quality"] >= 7.0,
+                        "strike_confirmed": True,
+                        "pattern_type": "bearish"
+                    },
+                    "formation_context": _build_formation_context(indicators)
                 }
                 return result
         

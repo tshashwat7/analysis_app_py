@@ -57,7 +57,7 @@ def build_trade_recommendation(
     bull_score: int,
     bull_signal: str,
     long_term_rec: str,
-    technical_score: int,
+    technicalScore: int,
     fundamental_score: int,
     price_history: Optional[Dict[str, Any]] = None,
     reward_multiplier: float = 2.0
@@ -78,7 +78,7 @@ def build_trade_recommendation(
         "Trailing_Stop_Loss": None,
         "RR_Ratio": None,
         "tactical_source": {"bull_score": bull_score, "bull_signal": bull_signal},
-        "strategic_source": {"long_term_rec": long_term_rec, "technical_score": technical_score, "fundamental_score": fundamental_score}
+        "strategic_source": {"long_term_rec": long_term_rec, "technicalScore": technicalScore, "fundamental_score": fundamental_score}
     }
 
     # Safely extract numeric indicators
@@ -86,9 +86,9 @@ def build_trade_recommendation(
         price = _num(indicators.get("Price", {}).get("value"))
         entry = _num(indicators.get("Entry Price (Confirm)", {}).get("value"))
         initial_sl = _num(indicators.get("Suggested SL (2xATR)", {}).get("value"))
-        atr = _num(indicators.get("ATR (14)", {}).get("value"))
-        bb_high = _num(indicators.get("BB High", {}).get("value"))
-        bb_low = _num(indicators.get("BB Low", {}).get("value"))
+        atr = _num(indicators.get("atr14", {}).get("value"))
+        bbHigh = _num(indicators.get("BB High", {}).get("value"))
+        bbLow = _num(indicators.get("BB Low", {}).get("value"))
     except Exception as e:
         logger.exception("Error extracting indicators: %s", e)
         return out
@@ -100,8 +100,8 @@ def build_trade_recommendation(
     # Determine target priority: BB High > ATR multiplier > Risk-Reward fallback
     target, method = None, None
     try:
-        if bb_high is not None and bb_high > price:
-            target = bb_high
+        if bbHigh is not None and bbHigh > price:
+            target = bbHigh
             method = "BB_HIGH"
         elif atr is not None:
             target = price + reward_multiplier * atr
@@ -177,8 +177,8 @@ def build_trade_recommendation(
     # Fallbacks for swing_sl
     try:
         if swing_sl is None:
-            if bb_low is not None:
-                swing_sl = bb_low
+            if bbLow is not None:
+                swing_sl = bbLow
             elif price_history and isinstance(price_history, dict):
                 lows = price_history.get("low", []) or []
                 if lows:

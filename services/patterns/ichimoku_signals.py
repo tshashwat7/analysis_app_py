@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any
 from services.patterns.base import BasePattern
+from services.patterns.utils import _build_formation_context
 
 class IchimokuSignals(BasePattern):
     """
@@ -13,7 +14,7 @@ class IchimokuSignals(BasePattern):
     """
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
-        self.alias = "ichimoku_signals"
+        self.alias = "ichimokuSignals"
         # Configurable Windows
         self.tenkan_win = self.config.get("tenkan_window", 9)
         self.kijun_win = self.config.get("kijun_window", 26)
@@ -29,8 +30,8 @@ class IchimokuSignals(BasePattern):
         # 1. Fetch Current Cloud State
         # Note: These values represent the cloud at the CURRENT price candle.
         # (Real Ichimoku plots this 26 bars forward, but we check price relative to support NOW).
-        span_a = self._get_val(indicators, "ichi_span_a")
-        span_b = self._get_val(indicators, "ichi_span_b")
+        span_a = self._get_val(indicators, "ichiSpanA")
+        span_b = self._get_val(indicators, "ichiSpanB")
         price = self._get_val(indicators, "price")
         
         if price is None or span_a is None or span_b is None:
@@ -61,8 +62,8 @@ class IchimokuSignals(BasePattern):
 
         # 3. Fallback Mechanism
         # If manual calc failed (NaNs), try fetching from indicators
-        if pd.isna(t_curr): t_curr = self._get_val(indicators, "ichi_tenkan")
-        if pd.isna(k_curr): k_curr = self._get_val(indicators, "ichi_kijun")
+        if pd.isna(t_curr): t_curr = self._get_val(indicators, "ichiTenkan")
+        if pd.isna(k_curr): k_curr = self._get_val(indicators, "ichiKijun")
         
         # If we STILL don't have current values, abort
         if pd.isna(t_curr) or pd.isna(k_curr):
@@ -121,17 +122,69 @@ class IchimokuSignals(BasePattern):
             is_fresh_cross = tk_cross_bull or tk_cross_bear
             signal_age = 1 if is_fresh_cross else 5  # Fresh cross = 1 bar old, established = 5 bars
 
+            # Calculate cloud thickness
+            cloud_thickness = abs(span_a - span_b) / price if price else 0
+
+            # Calculate TK spread
+            tenkan_kijun_spread = abs(t_curr - k_curr) / price if price else 0
+
+            # Invalidation level (cloud bottom)
+            invalidation_level = cloud_bottom
+
+            # Entry trigger varies by signal type
+            entry_trigger_price = cloud_top if is_above_cloud else t_curr
+
+            # Pattern strength
+            pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate" if result["quality"] >= 6.5 else "weak"
+
+            # Cloud color
+            cloud_color = "bullish" if span_a > span_b else "bearish"
+
+            entry_conditions_met = (tk_cross_bull or tk_cross_bear) and (is_above_cloud or is_below_cloud)
+
             result["meta"] = {
-            "signal": signal_type,
-            "cloud_top": round(cloud_top, 2),
-            "cloud_bottom": round(cloud_bottom, 2),
-            "fresh_cross": is_fresh_cross,
-            "tenkan": round(float(t_curr), 2),
-            "kijun": round(float(k_curr), 2),
-            # Age tracking
-            "age_candles": signal_age,
-            "formation_timestamp": df.index[-signal_age].isoformat() if len(df) > signal_age else None,
-            "signal_freshness": "fresh" if is_fresh_cross else "established"
+                "bar_index": len(df),
+                "signal": signal_type,
+                "cloud_top": round(cloud_top, 2),
+                "cloud_bottom": round(cloud_bottom, 2),
+                "fresh_cross": is_fresh_cross,
+                "tenkan": round(float(t_curr), 2),
+                "kijun": round(float(k_curr), 2),
+                "age_candles": signal_age,
+                "formation_timestamp": df.index[-signal_age].isoformat() if len(df) > signal_age else None,
+                "signal_freshness": "fresh" if is_fresh_cross else "established",
+                 # Ichimoku Metrics (Critical for entry conditions)
+                "cloud_thickness": round(cloud_thickness, 4),
+                "tenkan_kijun_spread": round(tenkan_kijun_spread, 4),
+                "cloud_color": cloud_color,
+                # Individual Components (for invalidation checks)
+                "ichiSpanA": round(span_a, 2) if span_a else None,
+                "ichiSpanB": round(span_b, 2) if span_b else None,
+                "ichiTenkan": round(float(t_curr), 2),
+                "ichiKijun": round(float(k_curr), 2),
+                
+                # Entry/Exit Levels
+                "invalidation_level": round(invalidation_level, 2),
+                "entry_trigger_price": round(entry_trigger_price, 2) if entry_trigger_price else None,
+                
+                # Quality Assessment
+                "tk_cross_strength": "strong" if tenkan_kijun_spread > 0.01 else "moderate",
+                "entry_quality": "high" if entry_conditions_met and result["quality"] >= 8.0 else "moderate",
+                
+                # Universal Fields
+                "horizon": horizon,
+                "pattern_strength": pattern_strength,
+                "current_price": round(price, 2),
+                # 🆕 Pattern-Specific Velocity Tracking
+                "velocity_tracking": {
+                    "can_track": result["quality"] >= 7.0 and entry_conditions_met,
+                    "entry_conditions_met": entry_conditions_met,
+                    "quality_sufficient": result["quality"] >= 7.0,
+                    "cross_confirmed": is_fresh_cross,
+                    "cloud_aligned": is_above_cloud or is_below_cloud
+                },
+                # 🆕 Formation Context (Generic)
+                "formation_context": _build_formation_context(indicators)
             }
             
         return result

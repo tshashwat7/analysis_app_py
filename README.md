@@ -49,7 +49,7 @@ It overrides generic ATR targets with **Pattern Geometry**:
 | **Fundamentals** | `fundamentals.py` | **DB-Cached**: Stores raw financial statements in SQLite to strictly limit API calls to once per 24h. |
 | **Indicators** | `indicators.py` | Computes 30+ technicals (RSI, MACD, ADX, Supertrend, etc.) per horizon. |
 | **Orchestrator** | `main.py` | FastAPI app. Manages **Smart Index Mapping** and Separate Executors (API vs Compute). |
-| **Pattern Engine** | `services/patterns/` | **Modular Detectors**: `darvas.py`, `cup_handle.py`, `minervini_vcp.py`, etc. |
+| **Pattern Engine** | `services/patterns/` | **Modular Detectors**: `darvas.py`, `cupHandle.py`, `minervini_vcp.py`, etc. |
 | **Pattern State** | `pattern_state_manager.py` | **Lifecycle Tracker**: Monitors pattern age, breakdown states, invalidation logic. |
 | **Config Layer** | `constants.py` (MASTER_CONFIG) | **Centralized Config**: Single source of truth for all horizon-specific parameters. |
 | **Timezone Utils** | `market_utils.py` | **Modular Timezone**: Centralized IST handling, consistent datetime formatting. |
@@ -298,8 +298,8 @@ MASTER_CONFIG = {
 "min_confidence": 70,
 "pattern_config": {
 "minervini_vcp": {"lookback": 50},
-"darvas_box": {"lookback": 50, "box_length": 5},
-"flag_pennant": {"pole_back": 15, "flag_back": 5}
+"darvasBox": {"lookback": 50, "box_length": 5},
+"flagPennant": {"pole_back": 15, "flag_back": 5}
 }
 },
 "short_term": {...},
@@ -405,18 +405,18 @@ PRIMARY KEY (symbol, pattern_name, horizon)
 Day 1: Price breaks below Darvas box_low
 save_breakdown_state(
 symbol="RELIANCE",
-pattern_name="darvas_box",
+pattern_name="darvasBox",
 horizon="short_term",
 price=1195.00,
 threshold=1200.00
 )
 
 Day 2: Still below threshold
-new_count = update_breakdown_state("RELIANCE", "darvas_box", "short_term")
+new_count = update_breakdown_state("RELIANCE", "darvasBox", "short_term")
 
 If new_count >= 2: Invalidate pattern
 if new_count >= 2:
-delete_breakdown_state("RELIANCE", "darvas_box", "short_term")
+delete_breakdown_state("RELIANCE", "darvasBox", "short_term")
 
 # Trigger EXIT signal
 
@@ -562,11 +562,12 @@ The engine processes every stock through this specific pipeline:
 │   │   ├── base.py            # Base pattern class
 │   │   ├── pattern_state_manager.py  # Breakdown tracking
 │   │   ├── darvas.py
-│   │   ├── cup_handle.py
+│   │   ├── cupHandle.py
 │   │   └── ...            
 │   ├── analyzers/             # The "Brain" (Strategy, Patterns)
 │   ├── tradeplan/             # The "Planner" (Enhancer, Estimator)
 │   ├── fusion/                # Merges Patterns into Indicators
+│   ├── config_helpers.py      # ✅ Business logic
 │   ├── data_layer.py          # Parquet I/O Engine
 │   ├── db.py                  # SQL Models
 │   ├── data_fetch.py
@@ -576,10 +577,15 @@ The engine processes every stock through this specific pipeline:
 │   ├── corporate_actions.py
 │   ├── summaries.py
 │   └── metrics_ext.py
-│
-├── config
-│   ├── constants.py        # master config
-│   ├── market_utils.py        # Timezone utilities 
+|
+├── config/
+│   ├── master_config.py           # Master config dict
+│   ├── config_helper.py           # ✅ Data retrieval (NEW)
+│   ├── config_validators.py       # ✅ Validation (NEW)
+│   ├── config_migrator.py         # ✅ Migration (NEW)
+│   └── config_profiler.py         # ✅ Profiling (NEW)
+│   ├── constants.py            # master config
+│   ├── market_utils.py         # Timezone utilities 
 │   ├── logger_config.py        # modular logging  
 ├── main.py                     # FastAPI Orchestrator
 ├── templates/                  # Jinja2 Dashboards
@@ -618,6 +624,44 @@ The engine processes every stock through this specific pipeline:
 | OHLC Fetch | Always YF | Mostly Parquet | **10–20x faster** |
 
 ---
+SMRT Config V2 Complete System
+Core Components:
+
+config_helper.py (from previous chat)
+
+Smart config resolution with horizon-aware inheritance
+50+ specialized getter methods
+Caching and performance optimization
+Legacy key mapping support
+
+
+config_validators.py ✨ NEW
+
+ConfigValidator - Validates structure, types, ranges, cross-references
+ConfigBuilder - Fluent API for building configs programmatically
+ValidationReport - Detailed error/warning reporting
+Schema checking and inheritance validation
+
+
+config_migrator.py ✨ NEW
+
+ConfigMigrator - V1 flat → V2 SMRT migration
+ConfigDiffer - Compare configs and horizons
+ConfigExporter - Export to JSON/YAML/Markdown/Python
+Multi-horizon migration support
+Migration reporting and unmapped key tracking
+
+
+config_profiler.py ✨ NEW
+
+ConfigProfiler - Tracks all config accesses
+ProfiledConfigHelper - Drop-in replacement with profiling
+OptimizationRecommender - Suggests performance improvements
+Cache efficiency analysis
+Hot path identification
+Access timeline visualization
+
+---
 ## 📈 Roadmap
 [ ] ML Integration: Predict probability of breakout success.
 ---
@@ -625,9 +669,7 @@ The engine processes every stock through this specific pipeline:
 ---
 
 ## 🧠 Logic Deep Dive
-This is an excellent, comprehensive deep dive. It perfectly bridges the gap between "high-level features" and "developer implementation."
-
-Here is the formatted version, matching the exact style (bold headers, bullet points, and clean hierarchy) used in the rest of your README. You can paste this directly under the **Logic Deep Dive** section.
+the **Logic Deep Dive** section.
 
 ---
 

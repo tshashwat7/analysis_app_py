@@ -6,6 +6,8 @@ from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, D
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import text
+import logging
+logger = logging.getLogger(__name__)
 
 def utc_now():
     """Returns timezone-aware UTC datetime."""
@@ -51,14 +53,15 @@ class StockMeta(Base):
     last_scan_time = Column(DateTime, nullable=True)
     sector = Column(String, nullable=True)
     industry = Column(String, nullable=True)
-    market_cap = Column(Float, nullable=True)
+    marketCap = Column(Float, nullable=True)
 
 class SignalCache(Base):
     __tablename__ = "signal_cache"
     symbol = Column(String, primary_key=True, index=True)
+    best_horizon = Column(String)           # System-determined optimal (e.g., "intraday")
+    selected_horizon = Column(String)       # User's choice (e.g., "multibagger")
     score = Column(Float)
     recommendation = Column(String)
-    best_horizon = Column(String)
     signal_text = Column(String)
     conf_score = Column(Integer)
     rr_ratio = Column(Float, nullable=True)
@@ -104,8 +107,7 @@ class FundamentalCache(Base):
         index=True
     )
 
-# services/db.py
-
+# 1. Pattern Breakdown State
 class PatternBreakdownState(Base):
     """Tracks pattern breakdown progress for duration candle logic."""
     __tablename__ = "pattern_breakdown_state"
@@ -134,11 +136,99 @@ def enforce_timezone_on_pattern_state(target, context):
     if target.last_updated and target.last_updated.tzinfo is None:
         target.last_updated = target.last_updated.replace(tzinfo=timezone.utc)
 
+# 2. New Pattern Performance History
+class PatternPerformanceHistory(Base):
+    """Tracks actual pattern performance for velocity analytics."""
+    __tablename__ = 'pattern_performance_history'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # Pattern Identity
+    symbol = Column(String(20), nullable=False, index=True)
+    pattern_name = Column(String(50), nullable=False, index=True)
+    horizon = Column(String(20), nullable=False, index=True)
+    setup_type = Column(String(50), nullable=True, index=True)
+    
+    # Detection Metadata
+    detected_at = Column(DateTime, nullable=False, default=utc_now)
+    detection_quality = Column(Float, nullable=True)
+    entry_price = Column(Float, nullable=False)
+    
+    # Targets & Stops
+    target_1 = Column(Float, nullable=True)
+    target_2 = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    
+    # Actual Performance
+    t1_reached = Column(Boolean, default=False)
+    t2_reached = Column(Boolean, default=False)
+    stopped_out = Column(Boolean, default=False)
+    invalidated = Column(Boolean, default=False)
+    
+    # Timing Metrics (CORE DATA)
+    days_to_t1 = Column(Float, nullable=True)
+    days_to_t2 = Column(Float, nullable=True)
+    days_to_invalidation = Column(Float, nullable=True)
+    bars_to_t1 = Column(Integer, nullable=True)
+    bars_to_t2 = Column(Integer, nullable=True)
+    
+    # Market Context
+    trend_regime = Column(String(20), nullable=True)
+    adx_at_entry = Column(Float, nullable=True)
+    volatility_regime = Column(String(20), nullable=True)
+    rr_ratio = Column(Float, nullable=True)
+    
+    # Pattern Metadata
+    pattern_meta = Column(JSON, nullable=True)
+    
+    # Tracking
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+    completed = Column(Boolean, default=False, index=True)
+    
+    # Exit details
+    exit_price = Column(Float, nullable=True)
+    exit_reason = Column(String(50), nullable=True)
+
+@event.listens_for(PatternPerformanceHistory, 'load')
+def enforce_timezone_on_performance(target, context):
+    """Ensure datetime fields are timezone-aware."""
+    if target.detected_at and target.detected_at.tzinfo is None:
+        target.detected_at = target.detected_at.replace(tzinfo=timezone.utc)
+    
+    if target.created_at and target.created_at.tzinfo is None:
+        target.created_at = target.created_at.replace(tzinfo=timezone.utc)
+    
+    if target.updated_at and target.updated_at.tzinfo is None:
+        target.updated_at = target.updated_at.replace(tzinfo=timezone.utc)
 
 # 3. Create Tables
 def init_db():
     # [FIX] Use Base.metadata directly. No invalid import.
     Base.metadata.create_all(bind=engine)
+    migrate_add_selected_horizon()
+
+def migrate_add_selected_horizon():
+    """Add selected_horizon column if it doesn't exist."""
+    try:
+        conn = engine.connect()
+        # Check if column exists
+        result = conn.execute(text("PRAGMA table_info(signal_cache)"))
+        columns = [row[1] for row in result.fetchall()]
+        
+        if "selected_horizon" not in columns:
+            logger.info("Running migration: Adding selected_horizon column...")
+            conn.execute(text("ALTER TABLE signal_cache ADD COLUMN selected_horizon VARCHAR"))
+            conn.execute(text("UPDATE signal_cache SET selected_horizon = best_horizon WHERE selected_horizon IS NULL"))
+            conn.commit()
+            logger.info("✅ Migration complete: selected_horizon column added")
+        else:
+            logger.info("ℹ️  selected_horizon column already exists")
+        
+        conn.close()
+    except Exception as e:
+        logger.info(f"❌ Migration failed: {e}")
+        raise
 
 # 4. Helper to get DB session
 def get_db():
@@ -150,3 +240,4 @@ def get_db():
 
 if __name__ == "__main__":
     init_db()
+    migrate_add_selected_horizon()

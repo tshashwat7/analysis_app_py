@@ -41,14 +41,14 @@ def compute_signals(indicators: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         add_metric(s, reason_template.format(status=status))
 
     # --- ATR Volatility Penalty ---
-    atr_pct = val("atr_pct")  # now returns numeric 2.32 directly
-    if atr_pct is not None and atr_pct > 3.0:
-        penalty = int((atr_pct - 3.0) * 5)
-        reasons.append(f"RISK ALERT: High ATR ({atr_pct:.2f}%) suggests elevated volatility risk.")
+    atrPct = val("atrPct")  # now returns numeric 2.32 directly
+    if atrPct is not None and atrPct > 3.0:
+        penalty = int((atrPct - 3.0) * 5)
+        reasons.append(f"RISK ALERT: High ATR ({atrPct:.2f}%) suggests elevated volatility risk.")
 
 
     # --- 200 DMA Trend (Slope) check ---
-    dma_trend = str(val("dma_200_slope")).lower() if val("dma_200_slope") else "n/a"
+    dma_trend = str(val("dma200Slope")).lower() if val("dma200Slope") else "n/a"
 
     # =========================================================
     # 1. Metric Consumption (Unweighted)
@@ -64,9 +64,9 @@ def compute_signals(indicators: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         add_metric(rsi_score, f"RSI ({rsi_val}): {zone}")
 
     # MACD Cross + Histogram Z (Logic retained, as it combines two scores)
-    macd_cross = indicators.get("macd_cross", {}).get("score", 5)
-    macd_z = indicators.get("macd_hist_z", {}).get("score", 5)
-    final_macd = max(macd_cross, macd_z)
+    macdCross = indicators.get("macdCross", {}).get("score", 5)
+    macd_z = indicators.get("macdHistZ", {}).get("score", 5)
+    final_macd = max(macdCross, macd_z)
     if final_macd == 10:
         add_metric(10, "MACD: Bullish crossover or positive momentum")
     elif final_macd == 0:
@@ -75,7 +75,7 @@ def compute_signals(indicators: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         add_metric(5, "MACD: Neutral momentum")
 
     # Stochastic %K (Logic retained, as it extracts the crossover signal)
-    stoch = indicators.get("stoch_k")
+    stoch = indicators.get("stochK")
     if stoch:
         s_score = stoch.get("score", 5)
         stoch_cross = val("stoch_cross")
@@ -86,22 +86,22 @@ def compute_signals(indicators: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         add_metric(s_score, f"Stochastic %K: {('Bullish' if s_score == 10 else 'Bearish' if s_score == 0 else 'Neutral')} bias")
 
     # --- All other indicators ---
-    retrieve_and_add_metric("price_vs_200dma_pct", "Price vs 200 DMA: {status}")
+    retrieve_and_add_metric("priceVsMaSlowPct", "Price vs 200 DMA: {status}")
     retrieve_and_add_metric("adx", "ADX: {status} trend strength")
-    retrieve_and_add_metric("vwap_bias", "VWAP: {status} intraday bias")
-    retrieve_and_add_metric("vol_trend", "Volume Trend: {status}")
+    retrieve_and_add_metric("vwapBias", "VWAP: {status} intraday bias")
+    retrieve_and_add_metric("volTrend", "Volume Trend: {status}")
     retrieve_and_add_metric("rvol", "Relative Volume (RVOL): {status}")
-    retrieve_and_add_metric("bb_low", "Bollinger Band Low: {status}")
+    retrieve_and_add_metric("bbLow", "Bollinger Band Low: {status}")
     retrieve_and_add_metric("bb_width", "Bollinger Width: {status}")
-    retrieve_and_add_metric("entry_confirm", "Entry Price Confirmation: {status}")
-    retrieve_and_add_metric("dma_20_50_cross", "20/50 DMA Crossover: {status}")
-    retrieve_and_add_metric("dma_200_slope", "200 DMA Slope: {status}")
-    retrieve_and_add_metric("ichi_cloud", "Ichimoku Cloud: {status}")
-    retrieve_and_add_metric("obv_div", "OBV Divergence: {status}")
-    retrieve_and_add_metric("atr_14", "ATR Volatility: {status}")
-    retrieve_and_add_metric("vol_spike_ratio", "Volume Spike Ratio: {status}")
-    retrieve_and_add_metric("rel_strength_nifty", "Relative Strength vs NIFTY: {status}")
-    retrieve_and_add_metric("price_action", "Price Action: {status}")
+    retrieve_and_add_metric("entryConfirm", "Entry Price Confirmation: {status}")
+    retrieve_and_add_metric("dma20_50Cross", "20/50 DMA Crossover: {status}")
+    retrieve_and_add_metric("dma200Slope", "200 DMA Slope: {status}")
+    retrieve_and_add_metric("ichiCloud", "Ichimoku Cloud: {status}")
+    retrieve_and_add_metric("obvDiv", "OBV Divergence: {status}")
+    retrieve_and_add_metric("atr14", "ATR Volatility: {status}")
+    retrieve_and_add_metric("volSpikeRatio", "Volume Spike Ratio: {status}")
+    retrieve_and_add_metric("relStrengthNifty", "Relative Strength vs NIFTY: {status}")
+    retrieve_and_add_metric("priceAction", "Price Action: {status}")
 
     # =========================================================
     # 2. Final Signal Mapping & Overrides

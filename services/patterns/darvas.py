@@ -2,11 +2,12 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
+from services.patterns.utils import _build_formation_context, _classify_volatility
 
 class DarvasBoxPattern(BasePattern):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
-        self.alias = "darvas_box"
+        self.alias = "darvasBox"
         # Configurable lookbacks (default to 50 for robust trend context)
         self.lookback = self.config.get("lookback", 50) 
         self.box_length = self.config.get("box_length", 5)
@@ -57,32 +58,88 @@ class DarvasBoxPattern(BasePattern):
             
             # Trend context (200 MA Check)
             # We try standard keys first, then fallback
-            ema_200 = self._get_val(indicators, "ema_200") or \
-                      self._get_val(indicators, "dma_200") or \
-                      self._get_val(indicators, "wma_50") # Weekly proxy
+            ema200 = self._get_val(indicators, "ema200") or \
+                      self._get_val(indicators, "dma200") or \
+                      self._get_val(indicators, "wma50") # Weekly proxy
                       
-            if ema_200 and current_close > ema_200:
+            if ema200 and current_close > ema200:
                 qual += 2.0 
             
             result["quality"] = min(qual, 10.0)
             result["score"] = self._normalize_score(qual * 10)
             formation_index = len(df) - (self.box_length * 2)  # Box started 2x box_length ago
+            entry_conditions_met = has_volume and is_breakout
+
             result["meta"] = {
                 "box_high": round(box_high, 2),
                 "box_low": round(box_low, 2),
                 "breakout_vol": bool(has_volume),
-                # Age tracking
                 "age_candles": len(df) - formation_index,
                 "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
-                "box_duration_candles": self.box_length * 2
+                "box_duration_candles": self.box_length * 2,
+                # 🆕 Pattern-Specific Velocity Tracking
+                "velocity_tracking": {
+                    "can_track": result["quality"] >= 7.0 and entry_conditions_met,
+                    "entry_conditions_met": entry_conditions_met,
+                    "quality_sufficient": result["quality"] >= 7.0,
+                    "breakout_confirmed": is_breakout,
+                    "volume_confirmed": has_volume
+                },
+                # 🆕 Formation Context (Generic)
+                "formation_context": _build_formation_context(indicators)
             }
+            # Calculate invalidation level (varies by horizon)
+            if horizon == "intraday":
+                invalidation_level = box_low * 0.998
+            elif horizon == "short_term":
+                invalidation_level = box_low * 0.995
+            else:
+                invalidation_level = box_low * 0.99
+
+            # Calculate entry trigger (varies by horizon)
+            if horizon == "intraday":
+                entry_trigger_price = box_high * 1.002
+            elif horizon == "short_term":
+                entry_trigger_price = box_high * 1.005
+            else:
+                entry_trigger_price = box_high * 1.005
+
+            # Box age for entry conditions
+            box_age_candles = len(df) - formation_index
+
+            # Pattern strength
+            pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate" if result["quality"] >= 6.5 else "weak"
+
+            # ADD TO META:
+            result["meta"].update({
+                "bar_index": len(df),
+                # Raw Anchors (Required for Config Conditions)
+                "box_low": round(invalidation_level, 2), # The raw box bottom
+                "box_high": round(entry_trigger_price, 2), # The raw box top
+                
+                # Analytics
+                "box_height_pct": round(((box_high - box_low) / box_low) * 100, 2),
+                # Entry/Exit Levels (Critical)
+                "invalidation_level": round(invalidation_level, 2),
+                "entry_trigger_price": round(entry_trigger_price, 2),
+                
+                # Box Age (Used in entry conditions)
+                "box_age_candles": box_age_candles,
+                
+                # Physics Parameters (from config)
+                "physics": {
+                    "lookback": self.lookback,
+                    "box_length": self.box_length,
+                    "target_ratio": 2.0,
+                    "max_stop_pct": 5.0
+                },
+                
+                # Universal Fields
+                "horizon": horizon,
+                "pattern_strength": pattern_strength,
+                "current_price": round(current_close, 2)
+            })
             result["desc"] = "Darvas Box Breakout"
             return result
 
         return result
-
-    def _get_val(self, data, key):
-        if key not in data: return None
-        item = data[key]
-        if isinstance(item, dict): return item.get("value")
-        return item

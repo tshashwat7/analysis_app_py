@@ -2,22 +2,25 @@
 import logging
 from functools import lru_cache
 import math
+import statistics
 import pandas as pd
 import numpy as np
 import yfinance as yf
 from typing import Dict, Any, Optional, List, Union
 from sqlalchemy.orm import Session
+from config.fundamental_score_config import compute_fundamental_score
 from services.db import SessionLocal, FundamentalCache
 import json
 import datetime
 from services.data_fetch import (
-    safe_float, safe_div, safe_info, safe_history, _wrap_calc, 
+    _safe_float, safe_float, safe_div, safe_info, safe_history, _wrap_calc, 
     _fmt_pct, _retry, safe_get, get_history_for_horizon, safe_info_normalized
 )
 from config.constants import (
     FUNDAMENTAL_WEIGHTS, 
     FUNDAMENTAL_ALIAS_MAP, 
-    FUNDAMENTAL_FIELD_CANDIDATES as FIELD, 
+    FUNDAMENTAL_FIELD_CANDIDATES as FIELD,
+    HORIZON_PROFILE_MAP, 
     SECTOR_PE_AVG
 )
 
@@ -215,20 +218,20 @@ def _derive_wacc(unifier: DataUnifier) -> float:
     try:
         rf = 6.8; mkt_prem = 5.5; tax = 0.25
         beta = safe_float(unifier.get_raw("beta") or unifier.get_raw("beta3Y")) or 1.0
-        de_ratio = unifier.get(["debtToEquity"])
-        if de_ratio and de_ratio > 50: de_ratio /= 100.0
+        deRatio = unifier.get(["debtToEquity"])
+        if deRatio and deRatio > 50: deRatio /= 100.0
         
-        if de_ratio is None:
+        if deRatio is None:
             d = unifier.find_value(FIELD.get("total_debt", []), unifier.balance_sheet)
             e = unifier.find_value(FIELD.get("total_equity", []), unifier.balance_sheet)
-            de_ratio = d/e if d is not None and e else 0.5
+            deRatio = d/e if d is not None and e else 0.5
 
         icr_ebit = unifier.find_value(FIELD.get("ebit", []), unifier.financials)
         icr_int = unifier.find_value(FIELD.get("interest_expense", []), unifier.financials)
         icr = safe_div(icr_ebit, abs(icr_int)) if icr_ebit and icr_int else None
 
-        e_weight = 1 / (1 + de_ratio)
-        d_weight = de_ratio / (1 + de_ratio)
+        e_weight = 1 / (1 + deRatio)
+        d_weight = deRatio / (1 + deRatio)
 
         cost_debt = 8.0
         if icr and icr > 0:
@@ -239,7 +242,7 @@ def _derive_wacc(unifier: DataUnifier) -> float:
     except Exception:
         return 7.2
 
-@_wrap_calc("pe_ratio")
+@_wrap_calc("peRatio")
 def calc_pe_ratio(t, unifier: DataUnifier = None):
     pe = unifier.get(["trailingPE", "forwardPE", "peRatio"])
     
@@ -254,14 +257,14 @@ def calc_pe_ratio(t, unifier: DataUnifier = None):
     score = 10 if pe <= 12 else 7 if pe <= 20 else 4 if pe <= 30 else 1
     return {"raw": pe, "value": round(pe, 2), "score": score, "desc": f"P/E {pe:.2f}"}
 
-@_wrap_calc("pb_ratio")
+@_wrap_calc("pbRatio")
 def calc_pb_ratio(t, unifier: DataUnifier = None):
     pb = unifier.get(["priceToBook", "pbRatio"])
     if pb is None: return None
     score = 10 if pb <= 1.5 else 6 if pb <= 3 else 3 if pb <= 5 else 1
     return {"raw": pb, "value": round(pb, 2), "score": score, "desc": f"P/B {pb:.2f}"}
 
-@_wrap_calc("profit_growth_3y")
+@_wrap_calc("profitGrowth3y")
 def calc_profit_growth_3y(t, unifier: DataUnifier = None):
     fin = unifier.financials
     profit_series = unifier.find_series(FIELD.get("net_income", []), fin)
@@ -279,7 +282,7 @@ def calc_profit_growth_3y(t, unifier: DataUnifier = None):
     score = 10 if cagr > 15 else 5 if cagr >= 5 else 0
     return {"raw": cagr, "value": round(cagr, 2), "score": score, "desc": f"Profit CAGR {cagr:.1f}% ({n}yr)"}
 
-@_wrap_calc("eps_growth_5y")
+@_wrap_calc("epsGrowth5y")
 def calc_eps_growth_5y(t, unifier: DataUnifier = None):
     fin = unifier.financials
     eps_series = unifier.find_series(["Diluted EPS", "Basic EPS", "EPS (Diluted)"], fin)
@@ -311,7 +314,7 @@ def calc_eps_growth_5y(t, unifier: DataUnifier = None):
     score = 10 if cagr > 15 else 5 if cagr >= 5 else 0
     return {"raw": cagr, "value": round(cagr, 2), "score": int(score), "desc": f"EPS CAGR {round(cagr,2)}%"}
 
-@_wrap_calc("peg_ratio")
+@_wrap_calc("pegRatio")
 def calc_peg_ratio(t, unifier: DataUnifier = None):
     peg = unifier.get(["pegRatio"])
     if peg is None:
@@ -356,7 +359,7 @@ def calc_roe(t, unifier: DataUnifier = None):
     return {"raw": pct, "value": f"{pct:.2f}%", "score": score, "desc": f"ROE {pct:.2f}%"}
 
 # --- NEW: ROE HISTORY CALCULATOR FOR STABILITY ---
-@_wrap_calc("roe_history")
+@_wrap_calc("roeHistory")
 def calc_roe_history(unifier: DataUnifier) -> Dict[str, Any]:
     """Calculate ROE for available years to feed Signal Engine stability checks."""
     try:
@@ -506,7 +509,7 @@ def calc_roic(t, unifier: DataUnifier = None):
     score = 10 if roic > (wacc + 5) else 7 if roic > wacc else 3
     return {"raw": roic, "value": f"{roic:.2f}%", "score": score, "desc": f"ROIC {roic:.1f}% (WACC {wacc:.1f}%)"}
 
-@_wrap_calc("de_ratio")
+@_wrap_calc("deRatio")
 def calc_de_ratio(t, unifier: DataUnifier = None):
     bs = unifier.balance_sheet
     info = unifier.info
@@ -558,7 +561,7 @@ def calc_de_ratio(t, unifier: DataUnifier = None):
     # Return None so the engine knows data is missing.
     return None
 
-@_wrap_calc("interest_coverage")
+@_wrap_calc("interestCoverage")
 def calc_interest_coverage(t, unifier: DataUnifier = None):
     ebit = unifier.find_value(FIELD.get("ebit", []), unifier.financials)
     interest = unifier.find_value(FIELD.get("interest_expense", []), unifier.financials)
@@ -570,7 +573,7 @@ def calc_interest_coverage(t, unifier: DataUnifier = None):
     score = 10 if icr > 5 else 5 if icr > 2 else 0
     return {"raw": icr, "value": f"{icr:.2f}x", "score": score, "desc": f"Int. Cov {icr:.1f}x"}
 
-@_wrap_calc("fcf_yield")
+@_wrap_calc("fcfYield")
 def calc_fcf_yield(t, unifier: DataUnifier = None):
     fcf = unifier.find_value(FIELD.get("free_cash_flow", []), unifier.cashflow)
     if not fcf:
@@ -584,7 +587,7 @@ def calc_fcf_yield(t, unifier: DataUnifier = None):
     score = 10 if yld >= 10 else 6 if yld >= 6 else 4 if yld >= 2 else 0
     return {"raw": yld, "value": f"{yld:.2f}%", "score": score, "desc": f"FCF Yield {yld:.2f}%"}
 
-@_wrap_calc("fcf_margin")
+@_wrap_calc("fcfMargin")
 def calc_fcf_margin(t, unifier: DataUnifier = None):
     fin, cf = unifier.financials, unifier.cashflow
     col_fin, col_cf = get_smart_aligned_columns(fin, cf)
@@ -602,7 +605,7 @@ def calc_fcf_margin(t, unifier: DataUnifier = None):
     score = 10 if margin >= 15 else 5 if margin >= 10 else 0
     return {"raw": margin, "value": f"{margin:.1f}%", "score": score, "desc": f"FCF Margin {margin:.1f}%"}
 
-@_wrap_calc("current_ratio")
+@_wrap_calc("currentRatio")
 def calc_current_ratio(t, unifier: DataUnifier = None):
     cr = unifier.get(["currentRatio"])
     if not cr:
@@ -613,7 +616,7 @@ def calc_current_ratio(t, unifier: DataUnifier = None):
     score = 10 if cr >= 1.5 else 7 if cr >= 1.0 else 2
     return {"raw": cr, "value": round(cr, 2), "score": score, "desc": f"CR {cr:.2f}"}
 
-@_wrap_calc("asset_turnover")
+@_wrap_calc("assetTurnover")
 def calc_asset_turnover(t, unifier: DataUnifier = None):
     fin, bs = unifier.financials, unifier.balance_sheet
     col_fin, col_bs = get_smart_aligned_columns(fin, bs)
@@ -624,7 +627,7 @@ def calc_asset_turnover(t, unifier: DataUnifier = None):
     score = 10 if at > 1 else 5 if at > 0.5 else 0
     return {"raw": at, "value": round(at, 2), "score": score, "desc": f"Asset Turnover {at:.2f}"}
 
-@_wrap_calc("piotroski_f")
+@_wrap_calc("piotroskiF")
 def calc_piotroski_f(t, unifier: DataUnifier = None):
     fin = unifier.financials; bs = unifier.balance_sheet; cf = unifier.cashflow
     if fin.empty or bs.empty: return None
@@ -671,7 +674,7 @@ def calc_piotroski_f(t, unifier: DataUnifier = None):
     normalized = round((score / 9) * 10, 1)
     return {"raw": score, "value": f"{score}/9", "score": normalized, "desc": f"F-Score {score}"}
 
-@_wrap_calc("r_d_intensity")
+@_wrap_calc("RDIntensity")
 def calc_rd_intensity(t, unifier: DataUnifier = None):
     rd = unifier.find_value(FIELD.get("rd_expense", []), unifier.financials)
     rev = unifier.find_value(FIELD.get("revenue", []), unifier.financials)
@@ -680,7 +683,7 @@ def calc_rd_intensity(t, unifier: DataUnifier = None):
     score = 10 if pct > 5 else 5 if pct > 2 else 0
     return {"raw": pct, "value": round(pct, 2), "score": score, "desc": f"R&D {pct:.2f}%"}
 
-@_wrap_calc("earnings_stability")
+@_wrap_calc("earningsStability")
 def calc_earnings_stability(t, unifier: DataUnifier = None):
     fin = unifier.financials
     ser = unifier.find_series(FIELD.get("net_income", []), fin)
@@ -692,7 +695,7 @@ def calc_earnings_stability(t, unifier: DataUnifier = None):
     score = 10 if cv < 0.2 else 6 if cv < 0.5 else 2
     return {"raw": cv, "value": round(cv, 2), "score": score, "desc": f"Earnings CV {cv:.2f}"}
 
-@_wrap_calc("fcf_growth_3y")
+@_wrap_calc("fcfGrowth3y")
 def calc_fcf_growth_3y(t, unifier: DataUnifier = None):
     cf = unifier.cashflow
     if cf.empty: return None
@@ -713,7 +716,7 @@ def calc_fcf_growth_3y(t, unifier: DataUnifier = None):
     score = 10 if cagr > 10 else 5 if cagr > 5 else 0
     return {"raw": cagr, "value": f"{cagr:.1f}%", "score": int(score), "desc": f"FCF CAGR {cagr:.1f}%"}
 
-@_wrap_calc("market_cap_cagr")
+@_wrap_calc("marketCapCagr")
 def calc_market_cap_cagr(t, unifier: DataUnifier = None):
     df = get_history_for_horizon(unifier.symbol, "multibagger")
     if df is None or df.empty: return None
@@ -727,7 +730,7 @@ def calc_market_cap_cagr(t, unifier: DataUnifier = None):
     score = 10 if cagr >= 25 else 8 if cagr >= 15 else 5 if cagr >= 5 else 0
     return {"raw": cagr, "value": f"{cagr:.1f}%", "score": score, "desc": f"Mkt Cap CAGR {cagr:.1f}%"}
 
-@_wrap_calc("promoter_holding")
+@_wrap_calc("promoterHolding")
 def calc_promoter_holding(t, unifier: DataUnifier = None):
     ph = unifier.get(["promoterShare", "heldPercentInsiders"])
     if ph and ph <= 1:
@@ -737,7 +740,7 @@ def calc_promoter_holding(t, unifier: DataUnifier = None):
     score = 10 if pct > 40 else 5 if pct > 20 else 0
     return {"raw": pct, "value": round(pct, 2), "score": score, "desc": f"Promoter {pct:.1f}%"}
 
-@_wrap_calc("institutional_ownership")
+@_wrap_calc("institutionalOwnership")
 def calc_institutional_ownership(t, unifier: DataUnifier = None):
     # Yahoo only gives FII — add DIIs via fallback weights
     fii = unifier.get(["heldPercentInstitutions"])
@@ -764,7 +767,7 @@ def calc_beta(t, unifier: DataUnifier = None):
     score = 10 if abs(b) < 0.8 else 7 if abs(b) < 1 else 3
     return {"raw": b, "value": round(b, 2), "score": score, "desc": f"Beta {b:.2f}"}
 
-@_wrap_calc("Position52w")
+@_wrap_calc("position52w")
 def calc_52wPosition(t, unifier: DataUnifier = None):
     high = unifier.get(["fiftyTwoWeekHigh"])
     price = unifier.get(["currentPrice"])
@@ -773,7 +776,7 @@ def calc_52wPosition(t, unifier: DataUnifier = None):
     score = 10 if off < 10 else 7 if off < 20 else 3
     return {"raw": off, "value": round(off, 2), "score": score, "desc": f"{off:.1f}% off-high"}
 
-@_wrap_calc("dividend_yield")
+@_wrap_calc("dividendyield")
 def calc_dividend_yield(t, unifier: DataUnifier = None):
     dy = unifier.get(["dividendYield"])
     if dy is None: return None
@@ -782,7 +785,7 @@ def calc_dividend_yield(t, unifier: DataUnifier = None):
     score = 10 if pct > 3 else 7 if pct > 1 else 0
     return {"raw": pct, "value": f"{pct:.2f}%", "score": score, "desc": f"Yield {pct:.2f}%"}
 
-@_wrap_calc("quarterly_growth")
+@_wrap_calc("quarterlyGrowth")
 def calc_quarterly_growth(t, unifier: DataUnifier = None):
     eps_g = unifier.get(["earningsQuarterlyGrowth"])
     rev_g = unifier.get(["revenueQuarterlyGrowth"])
@@ -800,7 +803,7 @@ def calc_quarterly_growth(t, unifier: DataUnifier = None):
     desc = f"Avg {avg:.1f}%"
     return {"raw": avg, "value": desc, "score": score, "desc": desc}
 
-@_wrap_calc("short_interest")
+@_wrap_calc("shortInterest")
 def calc_short_interest(t, unifier: DataUnifier = None):
     ratio = unifier.get(["shortRatio"])
     pct = unifier.get(["shortPercentOfFloat", "sharesPercentSharesOut"])
@@ -809,7 +812,7 @@ def calc_short_interest(t, unifier: DataUnifier = None):
     desc = f"Short {ratio}d / {round(pct or 0, 1)}%"
     return {"raw": {"ratio": ratio, "percent": pct}, "value": desc, "score": score, "desc": desc}
 
-@_wrap_calc("net_profit_margin")
+@_wrap_calc("netProfitMargin")
 def calc_net_profit_margin(t, unifier: DataUnifier = None):
     npm = unifier.get(["profitMargins"])
     if not npm:
@@ -823,7 +826,7 @@ def calc_net_profit_margin(t, unifier: DataUnifier = None):
     score = 10 if pct > 15 else 7 if pct > 10 else 3
     return {"raw": pct, "value": f"{pct:.1f}%", "score": score, "desc": f"NPM {pct:.1f}%"}
 
-@_wrap_calc("operating_margin")
+@_wrap_calc("operatingMargin")
 def calc_operating_margin(t, unifier: DataUnifier = None):
     fin = unifier.financials
     col_idx = pick_latest_column(fin)
@@ -843,7 +846,7 @@ def calc_operating_margin(t, unifier: DataUnifier = None):
         return {"raw": pct, "value": f"{pct:.1f}%", "score": 5, "desc": f"OPM {pct:.1f}% (Yahoo)"}
     return None
 
-@_wrap_calc("ebitda_margin")
+@_wrap_calc("ebitdaMargin")
 def calc_ebitda_margin(t, unifier: DataUnifier = None):
     em = unifier.get(["ebitdaMargins"])
     if em:
@@ -861,7 +864,7 @@ def calc_ebitda_margin(t, unifier: DataUnifier = None):
     score = 10 if pct > 20 else 7 if pct > 10 else 3
     return {"raw": pct, "value": f"{pct:.1f}%", "score": score, "desc": f"EBITDA Margin {pct:.1f}%"}
 
-@_wrap_calc("pe_vs_sector")
+@_wrap_calc("peVsSector")
 def calc_pe_vs_sector(t, unifier: DataUnifier = None):
     pe = unifier.get(["trailingPE"])
     sector = unifier.get_raw("sector")
@@ -871,7 +874,7 @@ def calc_pe_vs_sector(t, unifier: DataUnifier = None):
     score = 10 if ratio < 0.8 else 7 if ratio < 1.0 else 4
     return {"raw": ratio, "value": round(ratio, 2), "score": score, "desc": f"vs Sector {ratio:.2f}x"}
 
-@_wrap_calc("dividend_payout")
+@_wrap_calc("dividendPayout")
 def calc_dividend_payout(t, unifier: DataUnifier = None):
     payout = unifier.get(["payoutRatio"])
     if payout is None: return None
@@ -879,7 +882,7 @@ def calc_dividend_payout(t, unifier: DataUnifier = None):
     score = 10 if 30 <= pct <= 70 else 7 if 20 <= pct <= 80 else 3
     return {"raw": pct, "value": f"{pct:.1f}%", "score": score, "desc": f"Payout {pct:.1f}%"}
 
-@_wrap_calc("yield_vs_avg")
+@_wrap_calc("yieldVsAvg")
 def calc_yield_vs_avg(t, unifier: DataUnifier = None):
     y = unifier.get(["dividendYield"])
     y5 = unifier.get(["fiveYearAvgDividendYield"])
@@ -888,7 +891,7 @@ def calc_yield_vs_avg(t, unifier: DataUnifier = None):
     score = 0 if ratio <= 1 else 10
     return {"raw": ratio, "value": round(ratio, 2), "score": score, "desc": "Yield vs 5Y"}
 
-@_wrap_calc("revenue_growth_5y")
+@_wrap_calc("revenueGrowth5y")
 def calc_revenue_growth_cagr(t, unifier: DataUnifier = None):
     fin = unifier.financials
     ser = unifier.find_series(FIELD.get("revenue", []), fin)
@@ -917,7 +920,7 @@ def calc_days_to_earnings(t, unifier: DataUnifier = None):
     score = 10 if days > 30 else 7 if days > 14 else 5
     return {"raw": days, "value": days, "score": score, "desc": f"{days} days to earnings"}
 
-@_wrap_calc("ocf_vs_profit")
+@_wrap_calc("ocfVsProfit")
 def calc_ocf_vs_profit(t, unifier: DataUnifier = None):
     fin, cf = unifier.financials, unifier.cashflow
     col_fin, col_cf = get_smart_aligned_columns(fin, cf)
@@ -930,7 +933,7 @@ def calc_ocf_vs_profit(t, unifier: DataUnifier = None):
     else: score = 0
     return {"raw": ratio, "value": round(ratio, 2), "score": score, "desc": f"OCF/NI {ratio:.2f}"}
 
-@_wrap_calc("promoter_pledge")
+@_wrap_calc("promoterpledge")
 def calc_promoter_pledge(t, unifier: DataUnifier = None):
     pledge = unifier.get(["pledgedPercentage", "promoterPledge"])
     if pledge is None: return {"raw": 0, "value": "0%", "score": 5, "desc": "N/A"}
@@ -938,7 +941,7 @@ def calc_promoter_pledge(t, unifier: DataUnifier = None):
     score = 10 if pct == 0 else 7 if pct < 5 else 3 if pct < 20 else 0
     return {"raw": pct, "value": f"{pct:.1f}%", "score": score, "desc": f"Pledge {pct:.1f}%"}
 
-@_wrap_calc("ps_ratio")
+@_wrap_calc("psRatio")
 def calc_ps_ratio(t, unifier: DataUnifier = None):
     ps = unifier.get(["priceToSalesTrailing12Months"])
     if not ps:
@@ -949,7 +952,7 @@ def calc_ps_ratio(t, unifier: DataUnifier = None):
     score = 10 if ps < 1 else 7 if ps < 2.5 else 4
     return {"raw": ps, "value": f"{round(ps, 2)}x", "score": score, "desc": f"P/S {ps:.2f}x"}
 
-@_wrap_calc("market_cap")
+@_wrap_calc("marketCap")
 def calc_market_cap(t, unifier: DataUnifier = None):
     mc = unifier.get(["marketCap"])
     if not mc: return None
@@ -959,11 +962,52 @@ def calc_market_cap(t, unifier: DataUnifier = None):
     else: val_str = f"{mc}"
     return {"raw": mc, "value": val_str, "score": score, "desc": val_str}
 
-@_wrap_calc("analyst_rating")
+@_wrap_calc("analystRating")
 def calc_analyst_rating(t: yf.Ticker, unifier: DataUnifier = None):
     key = unifier.get_raw("recommendationKey")
     score = 10 if key in ("strong_buy", "buy") else 5 if key == "hold" else 2
     return {"raw": key, "value": key, "score": score, "desc": key.title() if key else 'N/A'}
+
+def compute_roe_stability(fundamentals: Dict) -> Dict:
+    """
+    🔧 UNCHANGED: Pure fundamental calculation (no config needed)
+    """
+    try:
+        history = fundamentals.get("roeHistory")
+        vals = []
+        
+        if isinstance(history, list) and len(history) >= 3:
+            vals = [v for v in [_safe_float(x) for x in history] if v is not None]   
+        # Fallback: Try roe_5y dict
+        if not vals:
+            r5 = fundamentals.get("roe_5y")
+            if isinstance(r5, dict):
+                vals = [v for v in (_safe_float(x) for x in r5.values()) if v is not None]
+        if not vals:
+            return {"raw": None,"value": None,"score": None,"desc": "No ROE history","alias": "ROE Stability","source": "composite"}
+
+        std = statistics.pstdev(vals) if len(vals) > 1 else 0.0
+        score = 10 if std < 2.0 else 8 if std < 4.0 else 5 if std < 7.0 else 1
+        
+        return {
+            "raw": std,
+            "value": round(std, 2),
+            "score": int(score),
+            "desc": f"ROE stability stddev={std:.2f}",
+            "alias": "ROE Stability",
+            "source": "composite"
+        }
+        
+    except Exception as e:
+        logger.debug(f"ROE stability failed: {e}")
+        return {
+            "raw": None,
+            "value": None,
+            "score": None,
+            "desc": "err",
+            "alias": "ROE Stability",
+            "source": "composite"
+        }
 
 # ========================================================
 # AGGREGATOR
@@ -976,25 +1020,25 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
     fundamentals: Dict[str, Dict[str, Any]] = {}
 
     METRIC_FUNCTIONS = {
-        "pe_ratio": calc_pe_ratio, "pb_ratio": calc_pb_ratio, "peg_ratio": calc_peg_ratio,
+        "peRatio": calc_pe_ratio, "pbRatio": calc_pb_ratio, "pegRatio": calc_peg_ratio,
         "roe": calc_roe, "roce": calc_roce, "roic": calc_roic,
-        "de_ratio": calc_de_ratio, "interest_coverage": calc_interest_coverage,
-        "fcf_yield": calc_fcf_yield, "current_ratio": calc_current_ratio,
-        "piotroski_f": calc_piotroski_f, "promoter_holding": calc_promoter_holding,
-        "institutional_ownership": calc_institutional_ownership, "dividend_yield": calc_dividend_yield,
-        "market_cap": calc_market_cap, "net_profit_margin": calc_net_profit_margin,
-        "operating_margin": calc_operating_margin, "profit_growth_3y": calc_profit_growth_3y,
-        "eps_growth_5y": calc_eps_growth_5y, "fcf_growth_3y": calc_fcf_growth_3y,
-        "quarterly_growth": calc_quarterly_growth, "ebitda_margin": calc_ebitda_margin,
-        "short_interest": calc_short_interest, "pe_vs_sector": calc_pe_vs_sector,
-        "dividend_payout": calc_dividend_payout, "yield_vs_avg": calc_yield_vs_avg,
-        "revenue_growth_5y": calc_revenue_growth_cagr, "ocf_vs_profit": calc_ocf_vs_profit,
-        "promoter_pledge": calc_promoter_pledge, "ps_ratio": calc_ps_ratio,
-        "r_d_intensity": calc_rd_intensity, "earnings_stability": calc_earnings_stability,
-        "fcf_margin": calc_fcf_margin, "market_cap_cagr": calc_market_cap_cagr,
-        "beta": calc_beta, "Position52w": calc_52wPosition,
-        "analyst_rating": calc_analyst_rating, "days_to_earnings": calc_days_to_earnings,
-        "asset_turnover": calc_asset_turnover,
+        "deRatio": calc_de_ratio, "interestCoverage": calc_interest_coverage,
+        "fcfYield": calc_fcf_yield, "currentRatio": calc_current_ratio,
+        "piotroskiF": calc_piotroski_f, "promoterHolding": calc_promoter_holding,
+        "institutionalOwnership": calc_institutional_ownership, "dividendyield": calc_dividend_yield,
+        "marketCap": calc_market_cap, "netProfitMargin": calc_net_profit_margin,
+        "operatingMargin": calc_operating_margin, "profitGrowth3y": calc_profit_growth_3y,
+        "epsGrowth5y": calc_eps_growth_5y, "fcfGrowth3y": calc_fcf_growth_3y,
+        "quarterlyGrowth": calc_quarterly_growth, "ebitdaMargin": calc_ebitda_margin,
+        "shortInterest": calc_short_interest, "peVsSector": calc_pe_vs_sector,
+        "dividendPayout": calc_dividend_payout, "yieldVsAvg": calc_yield_vs_avg,
+        "revenueGrowth5y": calc_revenue_growth_cagr, "ocfVsProfit": calc_ocf_vs_profit,
+        "promoterpledge": calc_promoter_pledge, "psRatio": calc_ps_ratio,
+        "RDIntensity": calc_rd_intensity, "earningsStability": calc_earnings_stability,
+        "fcfMargin": calc_fcf_margin, "marketCapCagr": calc_market_cap_cagr,
+        "beta": calc_beta, "position52w": calc_52wPosition,
+        "analystRating": calc_analyst_rating, "days_to_earnings": calc_days_to_earnings,
+        "assetTurnover": calc_asset_turnover,"roeStability":compute_roe_stability
     }
 
     for key, func in METRIC_FUNCTIONS.items():
@@ -1008,69 +1052,32 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
                 fundamentals[key] = res
         except Exception: pass
             
-    fundamentals["eps_growth_3y"] = fundamentals.get("profit_growth_3y")
+    fundamentals["epsGrowth3y"] = fundamentals.get("profitGrowth3y")
     
     # --- ADD MISSING DATA FOR SIGNAL ENGINE ---
     roe_history_data = calc_roe_history(unifier)
-    fundamentals["roe_history"] = roe_history_data.get("raw", [])  # List for primary
+    fundamentals["roeHistory"] = roe_history_data.get("raw", [])  # List for primary
     fundamentals["roe_5y"] = roe_history_data.get("roe_5y", {})    # Dict for fallback
     fundamentals["sector"] = unifier.get_raw("sector")
     fundamentals["industry"] = unifier.get_raw("industry")
     fundamentals["website"] = unifier.get_raw("website")
     fundamentals["current_price"] = unifier.get(["currentPrice", "regularMarketPrice"])
     fundamentals["name"] = unifier.get_raw("shortName")
-
-    total_w = 0.0; weighted_sum = 0.0; used_weights = {}
-    for k, w in FUNDAMENTAL_WEIGHTS.items():
-        m = fundamentals.get(k)
-        if not m or m.get("value") in (None, "N/A"): continue
-        s = safe_float(m.get("score"))
-        if s is not None:
-            weighted_sum += float(s) * float(w)
-            total_w += float(w)
-            used_weights[k] = float(w)
-
-    base_score = round(weighted_sum / total_w, 2) if total_w else 0.0
-    market_penalty = 0.0
-    penalty_reasons = []
-    
-    ph_entry = fundamentals.get("promoter_holding")
-    # Only penalize if we are SURE it's low (e.g., > 0 but < 10). 
-    # If it is exactly 0 or None, assume data missing to avoid false negatives.
-    raw_ph = ph_entry.get("raw", 0) if ph_entry else 0
-    
-    if raw_ph and 0 < raw_ph < 10:  # Changed condition
-        market_penalty += 0.5
-        penalty_reasons.append("Low Promoter Holding")
-        
-    inst_entry = fundamentals.get("institutional_ownership")
-    if inst_entry and inst_entry.get("raw", 0) < 5:
-        market_penalty += 0.5
-        penalty_reasons.append("Low Inst. Holding")
-
-    final_score = base_score
-    if apply_market_penalty:
-        final_score = max(0.0, round(base_score - market_penalty, 2))
-
-    fundamentals["_meta"] = {
-        "weights_used": used_weights,
-        "total_weight": total_w,
-        "penalty_reasons": penalty_reasons
-    }
-    fundamentals["base_score"] = base_score
-    fundamentals["market_penalty"] = market_penalty
-    fundamentals["final_score"] = final_score
     fundamentals["symbol"] = symbol
     fundamentals["high52w"] = round(unifier.get(["fiftyTwoWeekHigh"]), 2)
     fundamentals["low52w"] = round(unifier.get(["fiftyTwoWeekLow"]),2)
-    fundamentals["drawdown_from_52w_high"] =  (fundamentals["high52w"] - fundamentals["current_price"]) / fundamentals["high52w"] * 100
-    fundamentals["price_vs_52w_high_pct"] = fundamentals["current_price"] / (fundamentals["high52w"]) * 100
-    fundamentals['roe_3y_avg'] = {
-            "value": round(sum(fundamentals.get('roe_history')[:3]) / len(fundamentals.get('roe_history')[:3]), 2),
+    fundamentals["drawdown52wHigh"] =  (fundamentals["high52w"] - fundamentals["current_price"]) / fundamentals["high52w"] * 100
+    fundamentals["priceVs52wHighPct"] = fundamentals["current_price"] / (fundamentals["high52w"]) * 100
+    fundamentals['roe3yAvg'] = {
+            "value": round(sum(fundamentals.get('roeHistory')[:3]) / len(fundamentals.get('roeHistory')[:3]), 2),
             "alias": "ROE 3Y Average",
-            "raw": sum(fundamentals.get('roe_history')[:3]) / len(fundamentals.get('roe_history')[:3])
+            "raw": sum(fundamentals.get('roeHistory')[:3]) / len(fundamentals.get('roeHistory')[:3])
         }
-
+    fundamentals["fundamentalScore"] = {}
+    try:
+        fundamentals["roeStability"] = compute_roe_stability(fundamentals)   
+    except Exception as e:
+        logger.error(f"Failed to compute roe stability: {e}")
     return fundamentals
 
 def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict[str, Any]:
@@ -1085,10 +1092,10 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
         entry = db.query(FundamentalCache).filter(FundamentalCache.symbol == symbol).first()
         if entry:
             age = (datetime.datetime.now() - entry.updated_at).total_seconds()
-            # if age < (24 * 3600):
+            if age < (24 * 3600):
                 # Valid Cache Hit
                 # SQLAlchemy automatically converts the JSON column back to a Dict
-                # return entry.data
+                return entry.data
 
         # 2. FETCH FRESH (If cache missing or stale)
         data = _compute_fundamentals_core(symbol, apply_market_penalty)
@@ -1118,17 +1125,17 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
 
 """
 fundamentals_keys = [
-    'pe_ratio', 'pb_ratio', 'peg_ratio', 'roe', 'roce', 'roic', 'de_ratio',
-    'interest_coverage', 'fcf_yield', 'current_ratio', 'piotroski_f', 'promoter_holding',
-    'institutional_ownership', 'dividend_yield', 'market_cap', 'net_profit_margin',
-    'operating_margin', 'profit_growth_3y', 'eps_growth_5y', 'fcf_growth_3y',
-    'quarterly_growth', 'ebitda_margin', 'short_interest', 'pe_vs_sector',
-    'dividend_payout', 'yield_vs_avg', 'revenue_growth_5y', 'ocf_vs_profit',
-    'promoter_pledge', 'ps_ratio', 'r_d_intensity', 'earnings_stability', 'fcf_margin',
-    'market_cap_cagr', 'beta', 'Position52w', 'analyst_rating', 'days_to_earnings',
-    'asset_turnover', 'eps_growth_3y', 'roe_history', 'roe_5y', 'sector', 'industry',
+    'peRatio', 'pbRatio', 'pegRatio', 'roe', 'roce', 'roic', 'deRatio',
+    'interestCoverage', 'fcfYield', 'currentRatio', 'piotroskiF', 'promoterHolding',
+    'institutionalOwnership', 'dividendyield', 'marketCap', 'netProfitMargin',
+    'operatingMargin', 'profitGrowth3y', 'epsGrowth5y', 'fcfGrowth3y',
+    'quarterlyGrowth', 'ebitdaMargin', 'shortInterest', 'peVsSector',
+    'dividendPayout', 'yieldVsAvg', 'revenueGrowth5y', 'ocfVsProfit',
+    'promoterpledge', 'psRatio', 'RDIntensity', 'earningsStability', 'fcfMargin',
+    'marketCapCagr', 'beta', 'position52w', 'analystRating', 'days_to_earnings',
+    'assetTurnover', 'epsGrowth3y', 'roeHistory', 'roe_5y', 'sector', 'industry',
     'website', 'current_price', 'name', '_meta', 'base_score', 'market_penalty',
-    'final_score', 'symbol', 'high52w', 'low52w', 'drawdown_from_52w_high',
-    'price_vs_52w_high_pct','roe_3y_avg'
+    'final_score', 'symbol', 'high52w', 'low52w', 'drawdown52wHigh',
+    'priceVs52wHighPct','roe3yAvg','roeStability'
 ]
 """

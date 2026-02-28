@@ -11,6 +11,7 @@ import asyncio
 import datetime
 import functools
 import random
+import re
 import threading
 import time
 import math
@@ -28,6 +29,7 @@ import pandas_ta as ta
 import yfinance as yf
 
 # --- Import the Parquet Engine ---
+from config.market_utils import is_market_open
 from services.data_layer import ParquetStore
 
 # Config imports with safe fallbacks
@@ -75,10 +77,7 @@ def _get_cache_key(symbol: str, period: str, interval: str) -> str:
 
 # Item #7: IST-aware Market Check
 def _is_market_open_now():
-    IST = pytz.timezone("Asia/Kolkata")
-    now = datetime.datetime.now(IST)
-    if now.weekday() >= 5: return False
-    return 9 <= now.hour < 16
+    return is_market_open()
 
 def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
     """
@@ -324,6 +323,42 @@ def ensure_numeric(x, default=0.0):
         pass
     return float(default)
 
+def _format_metric_name(metric_key: str) -> str:
+    """Handles both camelCase and snake_case"""
+    if "_" not in metric_key:
+        # Convert camelCase → snake_case first
+        snake = re.sub('([a-z0-9])([A-Z])', r'\1_\2', metric_key)
+        return snake.lower()
+    return metric_key
+
+def extract_metric_details(breakdown_metrics: dict) -> dict:
+    """
+    Flattens breakdownMetrics into {metric_name: score}
+
+    Handles:
+    - category -> metric -> score
+    - flat hybrid metrics with score
+    """
+
+    metric_details = {}
+
+    def walk(node: dict):
+        for key, val in node.items():
+            if not isinstance(val, dict):
+                continue
+
+            # Case 1: Leaf metric with score
+            if "score" in val and isinstance(val.get("score"), (int, float)):
+                metric_name = _format_metric_name(key)
+                metric_details[metric_name] = val["score"]
+
+            # Case 2: Nested category → recurse
+            else:
+                walk(val)
+
+    walk(breakdown_metrics)
+    return metric_details
+
 
 def _coerce_value(v: Any) -> Any:
     try:
@@ -414,7 +449,7 @@ def normalize_currency_value(val, unit_hint=None):
 def safe_info_normalized(key: str, info: dict):
     val = info.get(key)
     if key in ("sharesOutstanding", "shares_outstanding"): return normalize_shares(val)
-    if key in ("marketCap", "market_cap", "enterpriseValue"): return normalize_currency_value(val)
+    if key in ("marketCap", "marketCap", "enterpriseValue"): return normalize_currency_value(val)
     if key in ("bookValue", "book_value"): return safe_float(val)
     return safe_float(val)
 

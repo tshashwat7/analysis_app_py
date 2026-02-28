@@ -8,7 +8,7 @@ STOCH_SLOW = {"k_period": 14, "d_period": 3, "smooth": 3}
 STOCH_THRESHOLDS = {"overbought": 80, "oversold": 20}
 
 # config/constants.py
-ENABLE_CACHE = True
+ENABLE_CACHE = False
 ENABLE_CACHE_WARMER = os.getenv("ENABLE_CACHE_WARMER", "false").lower() == "true"
 ENABLE_JSON_ENRICHMENT = os.getenv("ENABLE_JSON_ENRICHMENT", "true").lower() == "true"
 ENABLE_VOLATILITY_QUALITY = True
@@ -97,16 +97,16 @@ MASTER_CONFIG = {
         },
         # 1. PATTERN PHYSICS
         "pattern_physics": {
-            "cup_handle": {
+            "cupHandle": {
                 "target_ratio": 0.618, "duration_multiplier": 1.2, "max_stop_pct": 8.0,
                 "min_cup_len": 20, "max_cup_depth": 0.50, "handle_len": 5, "require_volume": False,
                 "horizons_supported": ["short_term", "long_term"]
             },
-            "darvas_box": {
+            "darvasBox": {
                 "target_ratio": 1.0, "duration_multiplier": 1.3, "max_stop_pct": 5.0,
                 "lookback": 50, "box_length": 5, "horizons_supported": ["intraday", "short_term"]
             },
-            "flag_pennant": {
+            "flagPennant": {
                 "target_ratio": 0.5, "duration_multiplier": 0.8, "max_stop_pct": 6.0,
                 "horizons_supported": ["intraday", "short_term"]
             },
@@ -118,7 +118,7 @@ MASTER_CONFIG = {
                 "target_ratio": 1.0, "duration_multiplier": 0.5, "max_stop_pct": 4.0,
                 "horizons_supported": ["intraday", "short_term"]
             },
-            "golden_cross": {
+            "goldenCross": {
                 "target_ratio": None, "duration_multiplier": 2.0, "max_stop_pct": None,
                 "horizons_supported": ["short_term", "long_term", "multibagger"]
             },
@@ -129,7 +129,7 @@ MASTER_CONFIG = {
 
         # 2. PATTERN ENTRY RULES
         "pattern_entry_rules": {
-            "bollinger_squeeze": {
+            "bollingerSqueeze": {
                 "horizons": {
                     "intraday": {
                         "rsi_min": 50,
@@ -151,7 +151,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "darvas_box": {
+            "darvasBox": {
                 "horizons": {
                     "intraday": {
                         "box_clearance": 1.002,  # Must be 0.2% above box high
@@ -165,7 +165,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "cup_handle": {
+            "cupHandle": {
                 "horizons": {
                     "short_term": {
                         "rim_clearance": 0.995,  # Can enter 0.5% below rim
@@ -179,7 +179,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "minervini_stage2": {
+            "minerviniStage2": {
                 "horizons": {
                     "short_term": {
                         "contraction_max": 1.5,
@@ -193,7 +193,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "flag_pennant": {
+            "flagPennant": {
                 "horizons": {
                     "intraday": {
                         "pole_length_min": 8,  # Min 2 hours of prior move
@@ -207,7 +207,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "three_line_strike": {
+            "threeLineStrike": {
                 "horizons": {
                     "intraday": {
                         "strike_candle_body_min": 0.6,  # 4th candle must engulf 60%
@@ -219,7 +219,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "ichimoku_signals": {
+            "ichimokuSignals": {
                 "horizons": {
                     "short_term": {
                         "cloud_thickness_min": 0.01,  # 1% thick cloud
@@ -231,7 +231,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "golden_cross": {
+            "goldenCross": {
                 "horizons": {
                     "short_term": {
                         "cross_clearance": 0.002,  # 50 EMA must be 0.2% above 200 EMA
@@ -243,7 +243,7 @@ MASTER_CONFIG = {
                     }
                 }
             },
-            "double_top_bottom": {
+            "doubleTopBottom": {
                 "horizons": {
                     "short_term": {
                         "peak_similarity_tolerance": 0.02,  # Peaks within 2%
@@ -264,22 +264,22 @@ MASTER_CONFIG = {
             # ========================================================
             # 1. BOLLINGER SQUEEZE (High Failure Risk)
             # ========================================================
-            "bollinger_squeeze": {
+            "bollingerSqueeze": {
                 "breakdown_threshold": {
                     "intraday": {
-                        "condition": "price < bb_low",  # Changed from bb_mid * 0.995
+                        "condition": "price < bbLow",  # Changed from bbMid * 0.995
                         "duration_candles": 2,
-                        "or_condition": "bb_width > 8.0"  # NEW: Squeeze released
+                        "or_condition": "bbWidth > 8.0"  # NEW: Squeeze released
                     },
                     "short_term": {
-                        "condition": "price < bb_low * 0.99",  # Changed from bb_low * 1.01
+                        "condition": "price < bbLow * 0.99",  # Changed from bbLow * 1.01
                         "duration_candles": 1,
-                        "or_condition": "bb_width > 10.0"
+                        "or_condition": "bbWidth > 10.0"
                     },
                     "long_term": {
-                        "condition": "price < bb_low",
+                        "condition": "price < bbLow",
                         "duration_candles": 2,
-                        "or_condition": "bb_width > 12.0"
+                        "or_condition": "bbWidth > 12.0"
                     }
                 },
                 "action": {
@@ -291,7 +291,7 @@ MASTER_CONFIG = {
             # ========================================================
             # 2. DARVAS BOX (Strict Boundaries)
             # ========================================================
-            "darvas_box": {
+            "darvasBox": {
                 "breakdown_threshold": {
                     "intraday": {
                         "condition": "price < box_low * 0.998",  # 0.2% buffer
@@ -316,7 +316,7 @@ MASTER_CONFIG = {
             # ========================================================
             # 3. FLAG/PENNANT (Tight Structure)
             # ========================================================
-            "flag_pennant": {
+            "flagPennant": {
                 "breakdown_threshold": {
                     "intraday": {
                         "condition": "price < flag_low * 0.998",
@@ -348,7 +348,7 @@ MASTER_CONFIG = {
             # ========================================================
             # 4. MINERVINI VCP (Gradual Tolerance)
             # ========================================================
-            "minervini_stage2": {  # Your alias is "minervini_stage2"
+            "minerviniStage2": {  # Your alias is "minerviniStage2"
                 "breakdown_threshold": {
                     "intraday": {
                         "condition": "price < pivot * 0.98",  # 2% below pivot
@@ -376,7 +376,7 @@ MASTER_CONFIG = {
             # ========================================================
             # 5. CUP & HANDLE (Progressive Stops)
             # ========================================================
-            "cup_handle": {
+            "cupHandle": {
                 "breakdown_threshold": {
                     "intraday": {
                         "condition": "price < handle_low * 0.99",  # 1% below handle
@@ -404,7 +404,7 @@ MASTER_CONFIG = {
             # ========================================================
             # 6. THREE-LINE STRIKE (Fast Reversal)
             # ========================================================
-            "three_line_strike": {
+            "threeLineStrike": {
                 "expiration": {
                     "max_hold_candles": {
                         "intraday": 10,
@@ -416,7 +416,7 @@ MASTER_CONFIG = {
             # ========================================================
             # 7. ICHIMOKU SIGNALS (Cloud Support)
             # ========================================================
-            "ichimoku_signals": {
+            "ichimokuSignals": {
                 "breakdown_threshold": {
                     "intraday": {
                         "condition": "price < cloud_bottom * 0.998",
@@ -445,18 +445,18 @@ MASTER_CONFIG = {
             # ========================================================
             # 8. GOLDEN/DEATH CROSS (Slow Reversal)
             # ========================================================
-            "golden_cross": {
+            "goldenCross": {
                 "breakdown_threshold": {
                     "intraday": {
-                        "condition": "ema_50 < ema_200",
+                        "condition": "ema50 < ema200",
                         "duration_candles": 3
                     },
                     "short_term": {
-                        "condition": "ema_50 < ema_200",
+                        "condition": "ema50 < ema200",
                         "duration_candles": 3
                     },
                     "long_term": {
-                        "condition": "ema_50 < ema_200",
+                        "condition": "ema50 < ema200",
                         "duration_candles": 4
                     }
                 },
@@ -469,7 +469,7 @@ MASTER_CONFIG = {
             # ========================================================
             # 9. DOUBLE TOP/BOTTOM (Neckline Defense)
             # ========================================================
-            "double_top_bottom": {
+            "doubleTopBottom": {
                 "breakdown_threshold": {
                     "intraday": {
                         "condition": "price < neckline * 0.998",  # 0.2% below neckline
@@ -525,25 +525,25 @@ MASTER_CONFIG = {
         # 6. CALCULATION ENGINE
         "calculation_engine": {
             "composite_weights": {
-                "trend_strength": {
+                "trendStrength": {
                     "adx": {"weight": 0.4, "scoring": [{"min": 25, "score": 10}, {"min": 20, "score": 8}, {"default": 2}]},
                     "ema_slope": {"weight": 0.3, "scoring": [{"min": 20, "score": 10}, {"min": 5, "score": 7}, {"default": 2}]},
-                    "di_spread": {"weight": 0.2, "scoring": [{"min": 15, "score": 10}, {"min": 10, "score": 7}, {"default": 5}]},
+                    "diSpread": {"weight": 0.2, "scoring": [{"min": 15, "score": 10}, {"min": 10, "score": 7}, {"default": 5}]},
                     "supertrend": {"weight": 0.1, "scoring": {"bullish": 10, "bearish": 0}},
-                    "adaptive_weights_no_supertrend": {"adx": 0.45, "ema_slope": 0.35, "di_spread": 0.20}
+                    "adaptive_weights_no_supertrend": {"adx": 0.45, "ema_slope": 0.35, "diSpread": 0.20}
                 },
-                "momentum_strength": {
+                "momentumStrength": {
                     "rsi_value": {"weight": 0.25, "scoring": [{"min": 70, "score": 8}, {"min": 60, "score": 7}, {"default": 2}]},
-                    "rsi_slope": {"weight": 0.25, "scoring": [{"min": 1.0, "score": 8}, {"min": 0, "score": 4}, {"default": 2}]},
+                    "rsislope": {"weight": 0.25, "scoring": [{"min": 1.0, "score": 8}, {"min": 0, "score": 4}, {"default": 2}]},
                     "macd_hist": {"weight": 0.3, "scoring": [{"min": 0.5, "score": 8}, {"min": 0, "score": 5}, {"default": 2}]},
                     "stoch_cross": {"weight": 0.2, "scoring": {"bullish_strong": {"condition": "k>d and k>=50", "score": 8}, "default": 3}}
                 },
-                "volatility_quality": {
-                    "atr_pct": {"weight": 0.3},
-                    "bb_width": {"weight": 0.2, "scoring": [{"max": 0.01, "score": 10}, {"max": 0.02, "score": 8}, {"default": 2}]},
+                "volatilityQuality": {
+                    "atrPct": {"weight": 0.3},
+                    "bbWidth": {"weight": 0.2, "scoring": [{"max": 0.01, "score": 10}, {"max": 0.02, "score": 8}, {"default": 2}]},
                     "true_range_consistency": {"weight": 0.2, "scoring": [{"max": 0.5, "score": 10}, {"default": 4}]},
                     "hv_trend": {"weight": 0.15, "scoring": {"declining": {"condition": "hv10 < hv20", "score": 8}, "default": 4}},
-                    "atr_sma_ratio": {"weight": 0.15, "scoring": [{"max": 0.02, "score": 10}, {"default": 3}]}
+                    "atrSmaRatio": {"weight": 0.15, "scoring": [{"max": 0.02, "score": 10}, {"default": 3}]}
                 }
             },
             "setup_classification": {
@@ -577,7 +577,7 @@ MASTER_CONFIG = {
                 "drought": {"threshold": 0.7, "confidence_adjustment": -25},
                 "climax": {"threshold": 2.0, "rsi_condition_min": 70}
             },
-            "wick_rejection": {
+            "wickRejection": {
                 "max_ratio": 2.5,
                 "calculation": "abs(high - close) / abs(close - open)"
             },
@@ -624,14 +624,14 @@ MASTER_CONFIG = {
         # 8. WEIGHTS
         "trend_weights": {"primary": 0.50, "secondary": 0.30, "acceleration": 0.20},
         "fundamental_weights": {
-            "pe_ratio": 0.05, "pb_ratio": 0.04, "peg_ratio": 0.03, "fcf_yield": 0.05,
-            "roe": 0.10, "roce": 0.07, "roic": 0.08, "de_ratio": 0.05, 
-            "interest_coverage": 0.05, "current_ratio": 0.03, "ocf_vs_profit": 0.02,
-            "asset_turnover": 0.04, "piotroski_f": 0.07, "r_d_intensity": 0.04, 
-            "earnings_stability": 0.05, "eps_growth_5y": 0.06, "fcf_growth_3y": 0.05,
-            "market_cap_cagr": 0.04, "promoter_holding": 0.015, "institutional_ownership": 0.015,
-            "beta": 0.01, "Position52w": 0.01, "dividend_payout": 0.03, "yield_vs_avg": 0.02,
-            "promoter_pledge": 0.02, "quarterly_growth": 0.03, "revenue_growth_5y": 0.05
+            "peRatio": 0.05, "pbRatio": 0.04, "pegRatio": 0.03, "fcfyield": 0.05,
+            "roe": 0.10, "roce": 0.07, "roic": 0.08, "deRatio": 0.05, 
+            "interestCoverage": 0.05, "currentRatio": 0.03, "ocfVsProfit": 0.02,
+            "assetTurnover": 0.04, "piotroskiF": 0.07, "RDIntensity": 0.04, 
+            "earningsStability": 0.05, "epsgrowth5y": 0.06, "fcfGrowth3y": 0.05,
+            "marketCapCagr": 0.04, "promoterHolding": 0.015, "institutionalOwnership": 0.015,
+            "beta": 0.01, "position52w": 0.01, "dividendPayout": 0.03, "yieldVsAvg": 0.02,
+            "promoterpledge": 0.02, "quarterlyGrowth": 0.03, "revenueGrowth5y": 0.05
         },
 
         # 9. STRATEGY CONFIG
@@ -693,13 +693,13 @@ MASTER_CONFIG = {
                     "max_boost": 15.0 
                 },
                 "squeeze_release": {
-                    "condition": "bb_width < 3.0 and rvol >= 2.0",
+                    "condition": "bbWidth < 3.0 and rvol >= 2.0",
                     "amount": 15.0,
                     "reason": "Tight squeeze breaking with volume",
                     "max_boost": 18.0 
                 },
                 "momentum_spike": {
-                    "condition": "momentum_strength >= 8.0",
+                    "condition": "momentumStrength >= 8.0",
                     "amount": 10.0,
                     "reason": "Explosive momentum for scalp",
                     "max_boost": 12.0 
@@ -709,14 +709,14 @@ MASTER_CONFIG = {
             "description": "Quick scalps and day trades",
             "scoring": {
                 "metrics": {
-                    "ma_fast_slope": 0.20, "rsi_slope": 0.20, "price_action": 0.15,
-                    "vwap_bias": 0.15, "vol_spike_ratio": 0.10, "momentum_strength": 0.10,
-                    "volatility_quality": 0.05, "ma_trend_signal": 0.05
+                    "maFastSlope": 0.20, "rsislope": 0.20, "priceAction": 0.15,
+                    "vwapBias": 0.15, "volSpikeRatio": 0.10, "momentumStrength": 0.10,
+                    "volatilityQuality": 0.05, "maTrendSignal": 0.05
                 },
                 "penalties": {
-                    "gap_percent": {"op": "<", "val": 0.1, "pen": 0.1},
-                    "atr_pct": {"op": "<", "val": 0.4, "pen": 0.3},
-                    "ma_fast_slope": {"op": "<", "val": -2, "pen": 0.3}
+                    "gapPercent": {"op": "<", "val": 0.1, "pen": 0.1},
+                    "atrPct": {"op": "<", "val": 0.4, "pen": 0.3},
+                    "maFastSlope": {"op": "<", "val": -2, "pen": 0.3}
                 },
                 "thresholds": {"buy": 6.5, "hold": 5.0, "sell": 3.8}
             },
@@ -746,14 +746,14 @@ MASTER_CONFIG = {
             },
             "moving_averages": {
                 "type": "EMA", "fast": 20, "mid": 50, "slow": 200, 
-                "keys": ["ema_20", "ema_50", "ema_200"], "dip_buy_reference": "ema_20"
+                "keys": ["ema20", "ema50", "ema200"], "dip_buy_reference": "ema20"
             },
             "momentum_thresholds": {
-                "rsi_slope": {"acceleration_floor": 0.10, "deceleration_ceiling": -0.10},
+                "rsislope": {"acceleration_floor": 0.10, "deceleration_ceiling": -0.10},
                 "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
             },
             "volatility": {
-                "scoring_thresholds": {"atr_pct": {"excellent": 1.5,"good": 3.0,"fair": 4.0,"poor": 5.0}, "bb_width": {"tight": 2.0, "normal": 5.0, "wide": 10.0}}
+                "scoring_thresholds": {"atrPct": {"excellent": 1.5,"good": 3.0,"fair": 4.0,"poor": 5.0}, "bbWidth": {"tight": 2.0, "normal": 5.0, "wide": 10.0}}
             },
             "risk_management": {
                 "max_position_pct": 0.01,
@@ -793,13 +793,13 @@ MASTER_CONFIG = {
                     "max_boost": 15.0 
                 },
                 "trend_momentum_sync": {
-                    "condition": "trend_strength >= 7.0 and momentum_strength >= 7.0",
+                    "condition": "trendStrength >= 7.0 and momentumStrength >= 7.0",
                     "amount": 10.0,
                     "reason": "Strong trend + momentum for swing",
                     "max_boost": 15.0 
                 },
                 "quality_pullback": {
-                    "condition": "setup_type == 'TREND_PULLBACK' and volatility_quality >= 6.0",
+                    "condition": "setup_type == 'TREND_PULLBACK' and volatilityQuality >= 6.0",
                     "amount": 8.0,
                     "reason": "Clean pullback setup",
                     "max_boost": 12.0 
@@ -809,15 +809,15 @@ MASTER_CONFIG = {
             "description": "Swing trading (Days to Weeks)",
             "scoring": {
                 "metrics": {
-                    "trend_strength": 0.15, "ma_fast_slope": 0.15, "rsi_slope": 0.10,
-                    "momentum_strength": 0.12, "volatility_quality": 0.10, "supertrend_signal": 0.10, 
-                    "ma_trend_signal": 0.10, "price_vs_primary_trend_pct": 0.08, "rvol": 0.10
+                    "trendStrength": 0.15, "maFastSlope": 0.15, "rsislope": 0.10,
+                    "momentumStrength": 0.12, "volatilityQuality": 0.10, "supertrendsignal": 0.10, 
+                    "maTrendSignal": 0.10, "priceVsPrimaryTrendPct": 0.08, "rvol": 0.10
                 },
                 "penalties": {
                     "days_to_earnings": {"op": "<", "val": 3, "pen": 0.5},
                     "rvol": {"op": "<", "val": 0.5, "pen": 0.2},
-                    "atr_pct": {"op": "<", "val": 1.0, "pen": 0.2},
-                    "ma_fast_slope": {"op": "<", "val": -5, "pen": 0.3}
+                    "atrPct": {"op": "<", "val": 1.0, "pen": 0.2},
+                    "maFastSlope": {"op": "<", "val": -5, "pen": 0.3}
                 },
                 "thresholds": {"buy": 6.0, "hold": 4.8, "sell": 4.0}
             },
@@ -846,14 +846,14 @@ MASTER_CONFIG = {
             },
             "moving_averages": {
                 "type": "EMA", "fast": 20, "mid": 50, "slow": 200, 
-                "keys": ["ema_20", "ema_50", "ema_200"], "dip_buy_reference": "ema_50"
+                "keys": ["ema20", "ema50", "ema200"], "dip_buy_reference": "ema50"
             },
             "momentum_thresholds": {
-                "rsi_slope": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
+                "rsislope": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
                 "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
             },
             "volatility": {
-                "scoring_thresholds": {"atr_pct": {"excellent": 2.5, "good": 3.0, "fair": 4.5, "poor": 5.5}, "bb_width": {"tight": 3.0, "normal": 6.0, "wide": 12.0}}
+                "scoring_thresholds": {"atrPct": {"excellent": 2.5, "good": 3.0, "fair": 4.5, "poor": 5.5}, "bbWidth": {"tight": 3.0, "normal": 6.0, "wide": 12.0}}
             },
             "risk_management": {
                 "max_position_pct": 0.02,
@@ -869,7 +869,7 @@ MASTER_CONFIG = {
             },
             "execution": {
                 "stop_loss_atr_mult": 2.0, "target_atr_mult": 3.0, "max_hold_candles": 15,
-                "dip_buy_reference": "ema_50", "risk_reward_min": 2.0
+                "dip_buy_reference": "ema50", "risk_reward_min": 2.0
             },
             "indicators": {
                 "rsi_period": 14, "adx_period": 14, "atr_period": 14,
@@ -893,13 +893,13 @@ MASTER_CONFIG = {
                     "max_boost": 20.0 
                 },
                 "earnings_acceleration": {
-                    "condition": "quarterly_growth >= 15 and eps_growth_5y >= 15",
+                    "condition": "quarterlyGrowth >= 15 and epsgrowth5y >= 15",
                     "amount": 12.0,
                     "reason": "Consistent earnings growth",
                     "max_boost": 15.0 
                 },
                 "institutional_interest": {
-                    "condition": "institutional_ownership >= 25 and institutional_ownership <= 75",
+                    "condition": "institutionalOwnership >= 25 and institutionalOwnership <= 75",
                     "amount": 8.0,
                     "reason": "Smart money accumulating",
                     "max_boost": 10.0 
@@ -909,17 +909,17 @@ MASTER_CONFIG = {
             "description": "Trend Following & Investing",
             "scoring": {
                 "metrics": {
-                    "ma_trend_signal": 0.15, "price_vs_primary_trend_pct": 0.10, "roe": 0.10,
-                    "roce": 0.08, "roic": 0.08, "earnings_stability": 0.08, "fcf_yield": 0.08,
-                    "eps_growth_5y": 0.06, "piotroski_f": 0.05, "rel_strength_nifty": 0.04,
-                    "ma_fast_slope": 0.05, "promoter_holding": 0.05
+                    "maTrendSignal": 0.15, "priceVsPrimaryTrendPct": 0.10, "roe": 0.10,
+                    "roce": 0.08, "roic": 0.08, "earningsStability": 0.08, "fcfyield": 0.08,
+                    "epsgrowth5y": 0.06, "piotroskiF": 0.05, "relStrengthNifty": 0.04,
+                    "maFastSlope": 0.05, "promoterHolding": 0.05
                 },
                 "penalties": {
-                    "price_vs_primary_trend_pct": {"op": "<", "val": 0, "pen": 0.5},
+                    "priceVsPrimaryTrendPct": {"op": "<", "val": 0, "pen": 0.5},
                     "roe": {"op": "<", "val": 10, "pen": 0.3},
-                    "fcf_yield": {"op": "<", "val": 2, "pen": 0.3},
-                    "promoter_pledge": {"op": ">", "val": 15.0, "pen": 0.2},
-                    "ocf_vs_profit": {"op": "<", "val": 0.6, "pen": 0.5}
+                    "fcfyield": {"op": "<", "val": 2, "pen": 0.3},
+                    "promoterpledge": {"op": ">", "val": 15.0, "pen": 0.2},
+                    "ocfVsProfit": {"op": "<", "val": 0.6, "pen": 0.5}
                 },
                 "thresholds": {"buy": 7.5, "hold": 6.0, "sell": 4.0}
             },
@@ -948,14 +948,14 @@ MASTER_CONFIG = {
             },
             "moving_averages": {
                 "type": "WMA", "fast": 10, "mid": 40, "slow": 50, 
-                "keys": ["wma_10", "wma_40", "wma_50"], "dip_buy_reference": "wma_40"
+                "keys": ["wma10", "wma40", "wma50"], "dip_buy_reference": "wma40"
             },
             "momentum_thresholds": {
-                "rsi_slope": {"acceleration_floor": 0.03, "deceleration_ceiling": -0.03},
+                "rsislope": {"acceleration_floor": 0.03, "deceleration_ceiling": -0.03},
                 "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
             },
             "volatility": {
-                "scoring_thresholds": {"atr_pct": {"excellent": 5.5, "good": 9.0, "fair": 13.0, "poor": 18.0}, "bb_width": {"tight": 4.0, "normal": 8.0, "wide": 15.0}}
+                "scoring_thresholds": {"atrPct": {"excellent": 5.5, "good": 9.0, "fair": 13.0, "poor": 18.0}, "bbWidth": {"tight": 4.0, "normal": 8.0, "wide": 15.0}}
             },
             "risk_management": {
                 "max_position_pct": 0.03,
@@ -971,7 +971,7 @@ MASTER_CONFIG = {
             },
             "execution": {
                 "stop_loss_atr_mult": 2.5, "target_atr_mult": 5.0, "max_hold_candles": 52,
-                "dip_buy_reference": "wma_40", "risk_reward_min": 2.5
+                "dip_buy_reference": "wma40", "risk_reward_min": 2.5
             },
             "indicators": {
                 "rsi_period": 14, "adx_period": 14, "atr_period": 14,
@@ -989,25 +989,25 @@ MASTER_CONFIG = {
         "multibagger": {
             "enhancements": {
                 "quality_technical_setup": {
-                    "condition": "setup_type == 'QUALITY_ACCUMULATION' and trend_strength >= 4.0",
+                    "condition": "setup_type == 'QUALITY_ACCUMULATION' and trendStrength >= 4.0",
                     "amount": 20.0,
                     "reason": "Quality stock in early accumulation",
                     "max_boost": 25.0 
                 },
                 "growth_combo": {
-                    "condition": "eps_growth_5y >= 25 and market_cap_cagr >= 25",
+                    "condition": "epsgrowth5y >= 25 and marketCapCagr >= 25",
                     "amount": 18.0,
                     "reason": "Consistent compounding + price performance",
                     "max_boost": 20.0 
                 },
                 "moat_indicators": {
-                    "condition": "roic >= 20 and roe >= 25 and de_ratio < 0.3",
+                    "condition": "roic >= 20 and roe >= 25 and deRatio < 0.3",
                     "amount": 15.0,
                     "reason": "Economic moat indicators present",
                     "max_boost": 20.0 
                 },
                 "undiscovered_gem": {
-                    "condition": "institutional_ownership < 15 and market_cap < 10000",
+                    "condition": "institutionalOwnership < 15 and marketCap < 10000",
                     "amount": 12.0,
                     "reason": "Under-the-radar quality stock",
                     "max_boost": 15.0 
@@ -1017,18 +1017,18 @@ MASTER_CONFIG = {
             "description": "Deep Value & Compounders",
             "scoring": {
                 "metrics": {
-                    "eps_growth_5y": 0.10, "revenue_growth_5y": 0.10, "quarterly_growth": 0.05,
-                    "market_cap_cagr": 0.08, "roic": 0.10, "roe": 0.08, "peg_ratio": 0.08,
-                    "r_d_intensity": 0.05, "ocf_vs_profit": 0.06, "rel_strength_nifty": 0.05,
-                    "institutional_ownership": 0.03, "promoter_holding": 0.05
+                    "epsgrowth5y": 0.10, "revenueGrowth5y": 0.10, "quarterlyGrowth": 0.05,
+                    "marketCapCagr": 0.08, "roic": 0.10, "roe": 0.08, "pegRatio": 0.08,
+                    "RDIntensity": 0.05, "ocfVsProfit": 0.06, "relStrengthNifty": 0.05,
+                    "institutionalOwnership": 0.03, "promoterHolding": 0.05
                 },
                 "penalties": {
-                    "peg_ratio": {"op": ">", "val": 3.0, "pen": 0.3},
-                    "market_cap": {"op": ">", "val": 1000000000000, "pen": 0.5},
-                    "de_ratio": {"op": ">", "val": 1.0, "pen": 0.2},
+                    "pegRatio": {"op": ">", "val": 3.0, "pen": 0.3},
+                    "marketCap": {"op": ">", "val": 1000000000000, "pen": 0.5},
+                    "deRatio": {"op": ">", "val": 1.0, "pen": 0.2},
                     "roe": {"op": "<", "val": 12, "pen": 0.2},
-                    "institutional_ownership": {"op": ">", "val": 85, "pen": 0.3},
-                    "promoter_pledge": {"op": ">", "val": 10.0, "pen": 0.4}
+                    "institutionalOwnership": {"op": ">", "val": 85, "pen": 0.3},
+                    "promoterpledge": {"op": ">", "val": 10.0, "pen": 0.4}
                 },
                 "thresholds": {"buy": 8.0, "hold": 6.5, "sell": 4.5}
             },
@@ -1057,14 +1057,14 @@ MASTER_CONFIG = {
             },
             "moving_averages": {
                 "type": "MMA", "fast": 6, "mid": 12, "slow": 12, 
-                "keys": ["mma_6", "mma_12", "mma_12"], "dip_buy_reference": "mma_12"
+                "keys": ["mma6", "mma12", "mma12"], "dip_buy_reference": "mma12"
             },
             "momentum_thresholds": {
-                "rsi_slope": {"acceleration_floor": 0.02, "deceleration_ceiling": -0.02},
+                "rsislope": {"acceleration_floor": 0.02, "deceleration_ceiling": -0.02},
                 "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
             },
             "volatility": {
-                "scoring_thresholds": {"atr_pct": {"excellent": 11.5, "good": 18.0, "fair": 27.0, "poor": 36.0}, "bb_width": {"tight": 6.0, "normal": 12.0, "wide": 20.0}}
+                "scoring_thresholds": {"atrPct": {"excellent": 11.5, "good": 18.0, "fair": 27.0, "poor": 36.0}, "bbWidth": {"tight": 6.0, "normal": 12.0, "wide": 20.0}}
             },
             "risk_management": {
                 "max_position_pct": 0.05,
@@ -1080,7 +1080,7 @@ MASTER_CONFIG = {
             },
             "execution": {
                 "stop_loss_atr_mult": 3.0, "target_atr_mult": 10.0, "max_hold_candles": 60,
-                "dip_buy_reference": "mma_12", "risk_reward_min": 3.0
+                "dip_buy_reference": "mma12", "risk_reward_min": 3.0
             },
             "indicators": {
                 "rsi_period": 14, "adx_period": 20, "atr_period": 12,
@@ -1192,7 +1192,7 @@ flowchart_mapping = {
     "Bollinger Bands": ("quick_score", None, "BB Signal"),
     "BB High": ("quick_score", None, "BB High"),
     "BB Low": ("quick_score", None, "BB Low"),
-    "ATR (Volatility)": ("quick_score", None, "ATR (14)"),
+    "ATR (Volatility)": ("quick_score", None, "atr14"),
     "Volume Spike": ("quick_score", None, "Volume Spike Signal"),
     "Ichimoku Cloud": ("quick_score", None, "Ichimoku Cloud"),
     "Stochastic Oscillator": ("quick_score", None, "Stoch %K"),
@@ -1272,31 +1272,31 @@ flowchart_mapping = {
 #todo remove
 TECHNICAL_WEIGHTS = {
     "rsi": 1.0,
-    "macd_cross": 1.0,
-    "macd_hist_z": 0.8,
-    "price_vs_200dma_pct": 1.0,
+    "macdCross": 1.0,
+    "macdHistZ": 0.8,
+    "priceVsMaSlowPct": 1.0,
     "adx": 1.0,
-    "vwap_bias": 0.8,
-    "vol_trend": 0.6,
+    "vwapBias": 0.8,
+    "volTrend": 0.6,
     "rvol": 0.6,
-    "stoch_k": 0.6,
-    "bb_low": 0.4,
-    "bb_width": 0.3,
-    "entry_confirm": 0.5,
-    "ema_20_50_cross": 0.8,
-    "dma_200_slope": 0.8,
-    "ichi_cloud": 1.0,
-    "obv_div": 0.6,
-    "atr_14": 0.8,
-    "vol_spike_ratio": 0.5,
-    "rel_strength_nifty": 0.6,
-    "price_action": 0.7,
-    "supertrend_signal": 1.0,
+    "stochK": 0.6,
+    "bbLow": 0.4,
+    "bbWidth": 0.3,
+    "entryConfirm": 0.5,
+    "ema20_50Cross": 0.8,
+    "dma200Slope": 0.8,
+    "ichiCloud": 1.0,
+    "obvDiv": 0.6,
+    "atr14": 0.8,
+    "volSpikeRatio": 0.5,
+    "relStrengthNifty": 0.6,
+    "priceAction": 0.7,
+    "supertrendsignal": 1.0,
     "cci": 0.6,
-    "bb_percent_b": 0.4,
-    "cmf_signal": 0.6,
-    "donchian_signal": 0.8,
-    "reg_slope": 0.8,
+    "bbpercentb": 0.4,
+    "cmfSignal": 0.6,
+    "donchianSignal": 0.8,
+    "regSlope": 0.8,
 }
 
 TECHNICAL_METRIC_MAP = {
@@ -1305,157 +1305,157 @@ TECHNICAL_METRIC_MAP = {
     "prev_close": "Previous Close",
 
     # Trend / Moving averages “DMA” should be considered Daily Moving Average (SMA),But your dynamic logic never generates dma_XX anymore we're using:EMA for daily (intraday/short_term) WMA-label for weekly (long_term) MMA-label for monthly (multibagger)
-    "dma_20": "20 DMA",
-    "dma_50": "50 DMA",
-    "dma_200": "200 DMA",
-    "dma_10": "10 DMA",
-    "dma_40": "40 DMA",
-    "wma_50": "50WMA",
+    "dma20": "20 DMA",
+    "dma50": "50 DMA",
+    "dma200": "200 DMA",
+    "dma10": "10 DMA",
+    "dma40": "40 DMA",
+    "wma50": "50WMA",
     "price_vs_50wma_pct": "Price vs 50WMA (%)",
-    "price_vs_200dma_pct": "Price vs 200 DMA (%)",
-    "dma_200_slope": "200 DMA Slope",
+    "priceVsMaSlowPct": "Price vs 200 DMA (%)",
+    "dma200Slope": "200 DMA Slope",
     # === Dynamic MA Mapping (Fully Horizon-Aware) ===
     # Intraday / Short Term (EMA-based)
-    "ema_20": "20 EMA (Short-Term Trend)",
-    "ema_50": "50 EMA (Medium-Term Trend)",
-    "ema_200": "200 EMA (Long-Term Trend)",
+    "ema20": "20 EMA (Short-Term Trend)",
+    "ema50": "50 EMA (Medium-Term Trend)",
+    "ema200": "200 EMA (Long-Term Trend)",
     # EMA Crossovers (Intraday / Short-Term)
-    "ema_20_50_cross": "EMA 20/50 Crossover",
+    "ema20_50Cross": "EMA 20/50 Crossover",
     "ema_20_200_cross": "EMA 20/200 Crossover",
     "ema_50_200_cross": "EMA 50/200 Crossover",
     # EMA Trend Stacking
     "ema_20_50_200_trend": "EMA Trend Alignment (20 > 50 > 200)",
     # Long-Term Horizon (Weekly MAs) — WMA prefix, SMA math
-    "wma_10": "10-Week MA",
-    "wma_40": "40-Week MA",
-    "wma_50": "50-Week MA",
+    "wma10": "10-Week MA",
+    "wma40": "40-Week MA",
+    "wma50": "50-Week MA",
     # Weekly Crossover
     "wma_10_40_cross": "Weekly MA Crossover (10/40)",
     # Weekly Trend Stacking
     "wma_10_40_50_trend": "Weekly Trend Alignment (10 > 40 > 50)",
     # Multibagger Horizon (Monthly MAs) — MMA prefix, SMA math
-    "mma_6": "6-Month MA",
-    "mma_12": "12-Month MA",
+    "mma6": "6-Month MA",
+    "mma12": "12-Month MA",
     # Monthly Crossover
     "mma_6_12_cross": "Monthly MA Crossover (6/12)",
     # Monthly Trend Stacking
     "mma_6_12_12_trend": "Monthly Trend Alignment (6 > 12 > 12)",
     # Generic Crossover Trend Key (Used by dynamic MA Trend)
-    "ma_cross_trend": "Composite MA Trend Signal",
-    "ema_20_slope": "20 EMA Slope",
-    "ema_50_slope": "50 EMA Slope",
-    "wma_50_slope": "50 WMA Slope",
-    "mma_12_slope": "12-Month MA Slope",
-    "ma_cross_setup": "MA Crossover Setup",
-    "ma_trend_setup": "MA Trend Setup",
+    "maCrossTrend": "Composite MA Trend Signal",
+    "ema20Slope": "20 EMA Slope",
+    "ema50Slope": "50 EMA Slope",
+    "wma50Slope": "50 WMA Slope",
+    "mma12Slope": "12-Month MA Slope",
+    "maCrossSetup": "MA Crossover Setup",
+    "maTrendSetup": "MA Trend Setup",
 
     # Momentum
     "rsi": "RSI",
-    "rsi_slope": "RSI Slope",
-    "dma_20_50_cross": "20/50 DMA Cross",
-    "dma_10_40_cross": "10/40 DMA Cross",
-    "short_ma_cross": "Short MA Cross",
+    "rsislope": "RSI Slope",
+    "dma20_50Cross": "20/50 DMA Cross",
+    "dma10_40Cross": "10/40 DMA Cross",
+    "shortMaCross": "Short MA Cross",
     "macd": "MACD",
-    "macd_cross": "MACD Cross",
-    "macd_hist_z": "MACD Hist Z-Score",
-    "macd_histogram": "MACD Histogram (Raw)",
+    "macdCross": "MACD Cross",
+    "macdHistZ": "MACD Hist Z-Score",
+    "macdhistogram": "MACD Histogram (Raw)",
     "mfi": "MFI",
-    "stoch_k": "Stoch %K",
-    "stoch_d": "Stoch %D",
+    "stochK": "Stoch %K",
+    "stochD": "Stoch %D",
     "stoch_cross": "Stoch Crossover",
     "cci": "CCI",
     "adx": "ADX",
     "adx_signal": "ADX Signal",
-    "di_plus": "DI+",
-    "di_minus": "DI-",
+    "diPlus": "DI+",
+    "diMinus": "DI-",
 
     # Volatility / volume
-    "atr_14": "ATR (14)",
-    "atr_pct": "ATR %",
-    "true_range": "True Range (Raw)",
-    "true_range_pct": "True Range % of Price",
-    "hv_10": "Historical Volatility (10D)",
-    "hv_20": "Historical Volatility (20D)",
+    "atr14": "atr14",
+    "atrPct": "ATR %",
+    "trueRange": "True Range (Raw)",
+    "trueRangePct": "True Range % of Price",
+    "hv10": "Historical Volatility (10D)",
+    "hv20": "Historical Volatility (20D)",
     "rvol": "Relative Volume (RVOL)",
-    "vol_spike_ratio": "Volume Spike Ratio",
-    "vol_spike_signal": "Volume Spike Signal",
-    "vol_trend": "Volume Trend",
+    "volSpikeRatio": "Volume Spike Ratio",
+    "volSpikeSignal": "Volume Spike Signal",
+    "volTrend": "Volume Trend",
     "vpt": "VPT",
-    "cmf_signal": "Chaikin Money Flow (CMF)",
-    "obv_div": "OBV Divergence",
+    "cmfSignal": "Chaikin Money Flow (CMF)",
+    "obvDiv": "OBV Divergence",
 
     # Bands / Channel
-    "bb_high": "BB High",
-    "bb_mid": "BB Mid",
-    "bb_low": "BB Low",
-    "bb_width": "BB Width",
-    "bb_percent_b": "Bollinger %B",
-    "ttm_squeeze": "TTM Squeeze Signal",
-    "kc_upper": "Keltner Upper",
-    "kc_lower": "Keltner Lower",
-    "donchian_signal": "Donchian Channel Breakout",
-    "ichi_cloud": "Ichimoku Cloud",
-    "ichi_span_a": "Ichimoku Span A",
-    "ichi_span_b": "Ichimoku Span B",
-    "ichi_tenkan": "Tenkan-sen",
-    "ichi_kijun": "Kijun-sen",
+    "bbHigh": "BB High",
+    "bbMid": "BB Mid",
+    "bbLow": "BB Low",
+    "bbWidth": "BB Width",
+    "bbpercentb": "Bollinger %B",
+    "ttmSqueeze": "TTM Squeeze Signal",
+    "kcUpper": "Keltner Upper",
+    "kcLower": "Keltner Lower",
+    "donchianSignal": "Donchian Channel Breakout",
+    "ichiCloud": "Ichimoku Cloud",
+    "ichiSpanA": "Ichimoku Span A",
+    "ichiSpanB": "Ichimoku Span B",
+    "ichiTenkan": "Tenkan-sen",
+    "ichiKijun": "Kijun-sen",
 
     # Levels / pivots
-    "pivot_point": "Pivot Point (Daily)",
-    "resistance_1": "Resistance 1 (Fib)",
-    "resistance_2": "Resistance 2 (Fib)",
-    "resistance_3": "Resistance 3 (Fib)",
-    "support_1": "Support 1 (Fib)",
-    "support_2": "Support 2 (Fib)",
-    "support_3": "Support 3 (Fib)",
-    "entry_confirm": "Entry Price (Confirm)",
-    "gap_percent": "Gap %",
+    "pivotPoint": "Pivot Point (Daily)",
+    "resistance1": "Resistance 1 (Fib)",
+    "resistance2": "Resistance 2 (Fib)",
+    "resistance3": "Resistance 3 (Fib)",
+    "support1": "Support 1 (Fib)",
+    "support2": "Support 2 (Fib)",
+    "support3": "Support 3 (Fib)",
+    "entryConfirm": "Entry Price (Confirm)",
+    "gapPercent": "Gap %",
 
     # Misc / signals
-    "psar_trend": "Parabolic SAR Trend",
-    "psar_level": "PSAR Level",
-    "supertrend_signal": "SuperTrend Signal",
-    "supertrend_value": "Supertrend Value",
-    "price_action": "Price Action",
+    "psarTrend": "Parabolic SAR Trend",
+    "psarLevel": "PSAR Level",
+    "supertrendsignal": "SuperTrend Signal",
+    "supertrendValue": "Supertrend Value",
+    "priceAction": "Price Action",
     "vwap": "VWAP",
-    "vwap_bias": "VWAP Bias",
+    "vwapBias": "VWAP Bias",
 
     # Relative / benchmark
-    "rel_strength_nifty": "Relative Strength vs NIFTY (%)",
-    "nifty_trend_score": "NIFTY Trend Score",
+    "relStrengthNifty": "Relative Strength vs NIFTY (%)",
+    "niftyTrendScore": "NIFTY Trend Score",
 
     # Composite placeholders (some are computed in signal_engine but include them so profile keys don't break)
-    "fundamental_momentum": "Fundamental Momentum",
-    "price_vs_avg": "Price vs Average",
+    "fundamentalMomentum": "Fundamental Momentum",
+    "priceVsAvg": "Price vs Average",
 
     # Utility / reporting
-    "sl_2x_atr": "Suggested SL (2xATR)",
-    "technical_score": "Technical Score",
+    "sl2xAtr": "Suggested SL (2xATR)",
+    "technicalScore": "Technical Score",
     "Horizon": "Horizon",
-    "wick_rejection": "Wick Rejection",
-    "atr_dynamic": "Dynamic ATR",
-    "sl_atr_dynamic": "Stop Loss (Dynamic ATR)",
-    "risk_per_share_pct": "Risk Per Share (%)",
-    "atr_sma_ratio": "ATR/SMA Ratio",
+    "wickRejection": "Wick Rejection",
+    "atrDynamic": "Dynamic ATR",
+    "slAtrDynamic": "Stop Loss (Dynamic ATR)",
+    "riskPerSharePct": "Risk Per Share (%)",
+    "atrSmaRatio": "ATR/SMA Ratio",
 
     #pattern Key
-    "darvas_box": "Darvas Box Pattern",
-    "cup_handle": "Cup & Handle Pattern",
-    "flag_pennant": "Flag/Pennant Pattern",
-    "bollinger_squeeze": "Bollinger Squeeze",
-    "golden_cross": "Golden/Death Cross",
-    "double_top_bottom": "Double Top/Bottom",
-    "three_line_strike": "Three-Line Strike",
-    "minervini_stage2": "Minervini VCP / Stage 2",
-    "ichimoku_signals": "Ichimoku Signals",
-    "trend_strength": "Trend Strength (Composite ADX+Slope+DI)",
-    "momentum_strength": "Momentum Strength (Composite RSI+MACD+Stoch)",
-    "volatility_quality": "Volatility Quality (0-10 Score)",
+    "darvasBox": "Darvas Box Pattern",
+    "cupHandle": "Cup & Handle Pattern",
+    "flagPennant": "Flag/Pennant Pattern",
+    "bollingerSqueeze": "Bollinger Squeeze",
+    "goldenCross": "Golden/Death Cross",
+    "doubleTopBottom": "Double Top/Bottom",
+    "threeLineStrike": "Three-Line Strike",
+    "minerviniStage2": "Minervini VCP / Stage 2",
+    "ichimokuSignals": "Ichimoku Signals",
+    "trendStrength": "Trend Strength (Composite ADX+Slope+DI)",
+    "momentumStrength": "Momentum Strength (Composite RSI+MACD+Stoch)",
+    "volatilityQuality": "Volatility Quality (0-10 Score)",
     
     # Universal MA Keys
-    "ma_fast_slope": "Primary MA Slope (Horizon-Aware)",
-    "ma_mid_slope": "Secondary MA Slope",
-    "ma_slow_slope": "Tertiary MA Slope",
+    "maFastSlope": "Primary MA Slope (Horizon-Aware)",
+    "maMidSlope": "Secondary MA Slope",
+    "maSlowSlope": "Tertiary MA Slope",
 
 
 
@@ -1464,50 +1464,50 @@ TECHNICAL_METRIC_MAP = {
 
 CORE_TECHNICAL_SETUP_METRICS = [
         "rsi", 
-        "ema_20", 
-        "ema_200", 
-        "bb_high", 
-        "bb_low", 
-        "ttm_squeeze", 
-        "atr_14",          # Needed for Stop Loss
-        "price_action",    # Good context
-        "volatility_quality" # Needed for Confidence Score
+        "ema20", 
+        "ema200", 
+        "bbHigh", 
+        "bbLow", 
+        "ttmSqueeze", 
+        "atr14",          # Needed for Stop Loss
+        "priceAction",    # Good context
+        "volatilityQuality" # Needed for Confidence Score
     ]
 # -------------------------
 # Updated fundamental weights (short keys)
 # -------------------------
 FUNDAMENTAL_WEIGHTS = {
     # --- Valuation (20%) ---
-    "pe_ratio": 0.05,
-    "pb_ratio": 0.04,
-    "peg_ratio": 0.03,
-    "fcf_yield": 0.05,
-    "dividend_yield": 0.03,
+    "peRatio": 0.05,
+    "pbRatio": 0.04,
+    "pegRatio": 0.03,
+    "fcfyield": 0.05,
+    "dividendyield": 0.03,
     # --- Profitability / Returns (25%) ---
     "roe": 0.10,
     "roce": 0.07,
     "roic": 0.08,
     # --- Leverage / Liquidity (15%) ---
-    "de_ratio": 0.05,
-    "interest_coverage": 0.05,
-    "current_ratio": 0.03,
-    "ocf_vs_profit": 0.02,
+    "deRatio": 0.05,
+    "interestCoverage": 0.05,
+    "currentRatio": 0.03,
+    "ocfVsProfit": 0.02,
     # --- Efficiency / Quality (20%) ---
-    "asset_turnover": 0.04,
-    "piotroski_f": 0.07,
-    "r_d_intensity": 0.04,
-    "earnings_stability": 0.05,
+    "assetTurnover": 0.04,
+    "piotroskiF": 0.07,
+    "RDIntensity": 0.04,
+    "earningsStability": 0.05,
     # --- Growth (15%) ---
-    "eps_growth_5y": 0.06,
-    "fcf_growth_3y": 0.05,
-    "market_cap_cagr": 0.04,
+    "epsgrowth5y": 0.06,
+    "fcfGrowth3y": 0.05,
+    "marketCapCagr": 0.04,
     # --- Ownership / Market Sentiment (5%) ---
-    "promoter_holding": 0.015,
-    "institutional_ownership": 0.015,
+    "promoterHolding": 0.015,
+    "institutionalOwnership": 0.015,
     "beta": 0.01,
-    "Position52w": 0.01,
-    "dividend_payout": 0.03,
-    "yield_vs_avg": 0.02,
+    "position52w": 0.01,
+    "dividendPayout": 0.03,
+    "yieldVsAvg": 0.02,
 }
 
 # Safety normalization (ensures sum = 1.0)
@@ -1516,65 +1516,65 @@ if abs(_total - 1.0) > 1e-3:
     FUNDAMENTAL_WEIGHTS = {k: v / _total for k, v in FUNDAMENTAL_WEIGHTS.items()}
 
 FUNDAMENTAL_ALIAS_MAP = {
-    "pe_ratio": "P/E Ratio",
-    "pb_ratio": "Price to Book (P/B)",
-    "peg_ratio": "PEG Ratio",
-    "ps_ratio": "Price-to-Sales (P/S)",
-    "pe_vs_sector": "P/E vs Sector",
-    "fcf_yield": "FCF Yield (%)",
-    "dividend_yield": "Dividend Yield (%)",
-    "dividend_payout": "Dividend Payout (%)",
-    "market_cap": "Market Cap",
-    "market_cap_cagr": "Market Cap CAGR (%)",
+    "peRatio": "P/E Ratio",
+    "pbRatio": "Price to Book (P/B)",
+    "pegRatio": "PEG Ratio",
+    "psRatio": "Price-to-Sales (P/S)",
+    "peVsSector": "P/E vs Sector",
+    "fcfyield": "FCF Yield (%)",
+    "dividendyield": "Dividend Yield (%)",
+    "dividendPayout": "Dividend Payout (%)",
+    "marketCap": "Market Cap",
+    "marketCapCagr": "Market Cap CAGR (%)",
     # Profitability / returns
-    "roe_history": "ROE History",
+    "roeHistory": "ROE History",
     "roe": "Return on Equity (ROE)",
     "roce": "Return on Capital Employed (ROCE)",
     "roic": "Return on Invested Capital (ROIC)",
-    "net_profit_margin": "Net Profit Margin (%)",
-    "operating_margin": "Operating Margin (%)",
-    "ebitda_margin": "EBITDA Margin (%)",
-    "fcf_margin": "FCF Margin (%)",
+    "netProfitMargin": "Net Profit Margin (%)",
+    "operatingMargin": "Operating Margin (%)",
+    "ebitdaMargin": "EBITDA Margin (%)",
+    "fcfMargin": "FCF Margin (%)",
     # Growth
-    "revenue_growth_5y": "Revenue Growth (5Y CAGR)",
-    "profit_growth_3y": "Profit Growth (3Y CAGR)",
-    "eps_growth_5y": "EPS Growth (5Y CAGR)",
-    "eps_growth_3y": "EPS Growth (3Y CAGR)",
-    "fcf_growth_3y": "FCF Growth (3Y CAGR)",
-    "quarterly_growth": "Quarterly Growth (EPS/Rev)",
+    "revenueGrowth5y": "Revenue Growth (5Y CAGR)",
+    "profitGrowth3y": "Profit Growth (3Y CAGR)",
+    "epsgrowth5y": "EPS Growth (5Y CAGR)",
+    "epsGrowth3y": "EPS Growth (3Y CAGR)",
+    "fcfGrowth3y": "FCF Growth (3Y CAGR)",
+    "quarterlyGrowth": "Quarterly Growth (EPS/Rev)",
     # Health / liquidity
-    "de_ratio": "Debt to Equity",
-    "interest_coverage": "Interest Coverage Ratio",
-    "current_ratio": "Current Ratio",
-    "ocf_vs_profit": "Operating CF vs Net Profit",
+    "deRatio": "Debt to Equity",
+    "interestCoverage": "Interest Coverage Ratio",
+    "currentRatio": "Current Ratio",
+    "ocfVsProfit": "Operating CF vs Net Profit",
     # Quality / efficiency
-    "piotroski_f": "Piotroski F-Score",
-    "asset_turnover": "Asset Turnover Ratio",
-    "r_d_intensity": "R&D Intensity (%)",
-    "earnings_stability": "Earnings Stability",
+    "piotroskiF": "Piotroski F-Score",
+    "assetTurnover": "Asset Turnover Ratio",
+    "RDIntensity": "R&D Intensity (%)",
+    "earningsStability": "Earnings Stability",
     # Ownership / market
-    "promoter_holding": "Promoter Holding (%)",
-    "promoter_pledge": "Promoter Pledge (%)",
-    "institutional_ownership": "Institutional Ownership (%)",
-    "short_interest": "Short Interest",
-    "analyst_rating": "Analyst Rating (Momentum)",
-    "Position52w": "52W Position (off-high %)",
+    "promoterHolding": "Promoter Holding (%)",
+    "promoterpledge": "Promoter Pledge (%)",
+    "institutionalOwnership": "Institutional Ownership (%)",
+    "shortInterest": "Short Interest",
+    "analystRating": "Analyst Rating (Momentum)",
+    "position52w": "52W Position (off-high %)",
     "beta": "Beta",
     "days_to_earnings": "Days to Next Earnings",
-    "ps_ratio": "Price-to-Sales (P/S)",
+    "psRatio": "Price-to-Sales (P/S)",
     # reporting/meta
     "base_score": "Base Fundamental Score",
     "final_score": "Final Fundamental Score",
     "_meta": "Meta",
     "high52w": "52 week high",
     "low52w": "52 week low",
-    "drawdown_from_52w_high":"Drawdown from 52W High",
-    "price_vs_52w_high_pct":"Price vs 52w high percentage",
-    "volatility_adjusted_roe": "ROE/Volatility Ratio",
-    "price_vs_intrinsic_value": "Price vs Intrinsic Value",
-    "fcf_yield_vs_volatility": "FCF Yield vs Volatility",
-    "earnings_consistency_index": "Earnings Consistency Index",
-    "roe_stability": "ROE Stability (StdDev)"
+    "drawdown52wHigh":"Drawdown from 52W High",
+    "priceVs52wHighPct":"Price vs 52w high percentage",
+    "volatilityAdjustedRoe": "ROE/Volatility Ratio",
+    "priceToIntrinsicValue": "Price vs Intrinsic Value",
+    "fcfYieldVsVolatility": "FCF Yield vs Volatility",
+    "earningsConsistencyIndex": "Earnings Consistency Index",
+    "roeStability": "ROE Stability (StdDev)"
 
 }
 FUNDAMENTAL_FIELD_CANDIDATES = {
@@ -1741,27 +1741,27 @@ FUNDAMENTAL_FIELD_CANDIDATES = {
         "Shares",
     ],
     "gross_profit": ["Gross Profit", "GrossIncome"],
-    "market_cap": ["marketCap", "Market Capitalization", "market_cap", "Market Cap"],
+    "marketCap": ["marketCap", "Market Capitalization", "marketCap", "Market Cap"],
     "book_value": ["bookValue", "Book Value", "Book value per share"],
     "dividend": ["Dividends Paid", "dividendRate", "Cash Dividends Paid"],
-    "fcf_yield": ["Free Cash Flow Yield", "fcfYield"],
-    "promoter_holding": [
+    "fcfyield": ["Free Cash Flow Yield", "fcfYield"],
+    "promoterHolding": [
         "heldPercentInsiders",
         "insiderPercent",
         "insidersPercent",
         "Insider Ownership",
     ],
-    "institutional_ownership": [
+    "institutionalOwnership": [
         "heldPercentInstitutions",
         "institutionPercent",
         "institutionsPercent",
         "Institutional Ownership",
     ],
-    "dividend_yield": ["dividendYield"],
-    "analyst_rating": ["recommendations", "recommendationKey", "recommendationMean"],
-    "quarterly_growth": ["earningsQuarterlyGrowth", "revenueQuarterlyGrowth"],
-    "short_interest": ["shortRatio", "sharesPercentSharesOut", "shortPercentOfFloat"],
-    "trend_strength": [],
+    "dividendyield": ["dividendYield"],
+    "analystRating": ["recommendations", "recommendationKey", "recommendationMean"],
+    "quarterlyGrowth": ["earningsQuarterlyGrowth", "revenueQuarterlyGrowth"],
+    "shortInterest": ["shortRatio", "sharesPercentSharesOut", "shortPercentOfFloat"],
+    "trendStrength": [],
 }
 
 SECTOR_PE_AVG = {
@@ -1782,47 +1782,47 @@ SECTOR_PE_AVG = {
 HORIZON_PROFILE_MAP = {
     "intraday": {
         "metrics": {
-            "ma_fast_slope": 0.20,          # ✅ Boosted (was 0.15)
-            "rsi_slope": 0.20,              # ✅ Boosted (was 0.15)
-            "price_action": 0.15,           # ✅ Kept
-            "vwap_bias": 0.15,
-            "vol_spike_ratio": 0.10,
-            "volatility_quality": 0.05,     # ✅ Reduced (let engine handle)
-            "ma_trend_signal": 0.05,
-            "momentum_strength": 0.10,
+            "maFastSlope": 0.20,          # ✅ Boosted (was 0.15)
+            "rsislope": 0.20,              # ✅ Boosted (was 0.15)
+            "priceAction": 0.15,           # ✅ Kept
+            "vwapBias": 0.15,
+            "volSpikeRatio": 0.10,
+            "volatilityQuality": 0.05,     # ✅ Reduced (let engine handle)
+            "maTrendSignal": 0.05,
+            "momentumStrength": 0.10,
         },
         "penalties": {
-            # ✅ REMOVED: bb_width (Let squeeze score high!)
-            # ✅ REMOVED: nifty_trend_score (Stock-specific plays allowed)
-            "gap_percent": {"operator": "<", "value": 0.1, "penalty": 0.1},  # ✅ Relaxed
-            "ma_fast_slope": {"operator": "<", "value": -2, "penalty": 0.3},  # ✅ Relaxed (was 0)
-            "atr_pct": {"operator": "<", "value": 0.4, "penalty": 0.3},      # ✅ FIXED (was 0.75)
+            # ✅ REMOVED: bbWidth (Let squeeze score high!)
+            # ✅ REMOVED: niftyTrendScore (Stock-specific plays allowed)
+            "gapPercent": {"operator": "<", "value": 0.1, "penalty": 0.1},  # ✅ Relaxed
+            "maFastSlope": {"operator": "<", "value": -2, "penalty": 0.3},  # ✅ Relaxed (was 0)
+            "atrPct": {"operator": "<", "value": 0.4, "penalty": 0.3},      # ✅ FIXED (was 0.75)
         },
         "thresholds": {"buy": 6.0, "hold": 4.8, "sell": 3.5},  # Was: 6.5, 5.0, 3.5
     },
 
     "short_term": {
         "metrics": {
-            "trend_strength": 0.15,         # ✅ Key metric
-            "ma_trend_signal": 0.10,
-            "price_vs_primary_trend_pct": 0.08,  # ✅ Reduced (pullbacks OK)
-            "ma_fast_slope": 0.05,
-            "supertrend_signal": 0.10,
-            "momentum_strength": 0.12,      # ✅ Boosted (was 0.10)
-            "rsi_slope": 0.08,              # ✅ Boosted (was 0.05)
-            "macd_cross": 0.05,
-            "cmf_signal": 0.05,
-            "obv_div": 0.05,
-            "volatility_quality": 0.05,
+            "trendStrength": 0.15,         # ✅ Key metric
+            "maTrendSignal": 0.10,
+            "priceVsPrimaryTrendPct": 0.08,  # ✅ Reduced (pullbacks OK)
+            "maFastSlope": 0.05,
+            "supertrendsignal": 0.10,
+            "momentumStrength": 0.12,      # ✅ Boosted (was 0.10)
+            "rsislope": 0.08,              # ✅ Boosted (was 0.05)
+            "macdCross": 0.05,
+            "cmfSignal": 0.05,
+            "obvDiv": 0.05,
+            "volatilityQuality": 0.05,
             "rvol": 0.05,
-            "quarterly_growth": 0.03,
-            "analyst_rating": 0.02,
-            "nifty_trend_score": 0.02,      # ✅ Reduced (was 0.05)
+            "quarterlyGrowth": 0.03,
+            "analystRating": 0.02,
+            "niftyTrendScore": 0.02,      # ✅ Reduced (was 0.05)
         },
         "penalties": {
             "days_to_earnings": {"operator": "<", "value": 3, "penalty": 0.5},  # ✅ FIXED (was 7 days, -1.0)
-            # ✅ REMOVED: price_vs_primary_trend_pct (Allow dip buys)
-            "ma_fast_slope": {"operator": "<", "value": -5, "penalty": 0.3},    # ✅ Kept (severe downtrend)
+            # ✅ REMOVED: priceVsPrimaryTrendPct (Allow dip buys)
+            "maFastSlope": {"operator": "<", "value": -5, "penalty": 0.3},    # ✅ Kept (severe downtrend)
             "rvol": {"operator": "<", "value": 0.5, "penalty": 0.2}            # ✅ Relaxed (was 0.8)
         },
         "thresholds": {"buy": 6.0, "hold": 4.8, "sell": 3.8},  # Was: 6.5, 5.0, 4.0
@@ -1831,29 +1831,29 @@ HORIZON_PROFILE_MAP = {
     "long_term": {
         # ✅ No changes needed - already balanced
         "metrics": {
-            "ma_trend_signal": 0.15,
-            "ma_fast_slope": 0.10,
-            "price_vs_primary_trend_pct": 0.10,
+            "maTrendSignal": 0.15,
+            "maFastSlope": 0.10,
+            "priceVsPrimaryTrendPct": 0.10,
             "roe": 0.10,
             "roce": 0.08,
             "roic": 0.08,
-            "earnings_stability": 0.08,
-            "fcf_yield": 0.08,
-            "eps_growth_5y": 0.06,
-            "piotroski_f": 0.05,
-            "de_ratio": 0.03,
-            "promoter_holding": 0.05,
-            "rel_strength_nifty": 0.04,
+            "earningsStability": 0.08,
+            "fcfyield": 0.08,
+            "epsgrowth5y": 0.06,
+            "piotroskiF": 0.05,
+            "deRatio": 0.03,
+            "promoterHolding": 0.05,
+            "relStrengthNifty": 0.04,
             # 🟢 SYNC WITH STRATEGY ANALYZER: Valuation Check
-            "peg_ratio": 0.05 
+            "pegRatio": 0.05 
         },
         "penalties": {
-            "price_vs_primary_trend_pct": {"operator": "<", "value": 0, "penalty": 0.5},
+            "priceVsPrimaryTrendPct": {"operator": "<", "value": 0, "penalty": 0.5},
             "roe": {"operator": "<", "value": 10, "penalty": 0.3},
-            "fcf_yield": {"operator": "<", "value": 2, "penalty": 0.3},
-            "promoter_pledge": {"operator": ">", "value": 15.0, "penalty": 0.2},
+            "fcfyield": {"operator": "<", "value": 2, "penalty": 0.3},
+            "promoterpledge": {"operator": ">", "value": 15.0, "penalty": 0.2},
             # 🟢 FRAUD CHECK: High Profit but No Cash Flow
-            "ocf_vs_profit": {"operator": "<", "value": 0.6, "penalty": 0.5} 
+            "ocfVsProfit": {"operator": "<", "value": 0.6, "penalty": 0.5} 
         },
         "thresholds": {"buy": 7.5, "hold": 6.0, "sell": 4.0},
     },
@@ -1861,31 +1861,31 @@ HORIZON_PROFILE_MAP = {
     "multibagger": {
         # ✅ No changes needed
         "metrics": {
-            "ma_trend_signal": 0.10,
-            "ma_fast_slope": 0.10,
-            "price_vs_primary_trend_pct": 0.05,
-            "eps_growth_5y": 0.10,
-            "revenue_growth_5y": 0.10,
+            "maTrendSignal": 0.10,
+            "maFastSlope": 0.10,
+            "priceVsPrimaryTrendPct": 0.05,
+            "epsgrowth5y": 0.10,
+            "revenueGrowth5y": 0.10,
             # 🟢 SYNC WITH CANSLIM STRATEGY: Recent Growth
-            "quarterly_growth": 0.05, 
-            "market_cap_cagr": 0.08,
+            "quarterlyGrowth": 0.05, 
+            "marketCapCagr": 0.08,
             "roic": 0.10,
             "roe": 0.08,
-            "peg_ratio": 0.08,
-            "r_d_intensity": 0.05,
-            "promoter_holding": 0.05,
-            "institutional_ownership": 0.03,
-            "ocf_vs_profit": 0.06,
-            "rel_strength_nifty": 0.05,
+            "pegRatio": 0.08,
+            "RDIntensity": 0.05,
+            "promoterHolding": 0.05,
+            "institutionalOwnership": 0.03,
+            "ocfVsProfit": 0.06,
+            "relStrengthNifty": 0.05,
         },
         "penalties": {
-            "ma_fast_slope": {"operator": "<", "value": 0, "penalty": 0.5},
-            "peg_ratio": {"operator": ">", "value": 3.0, "penalty": 0.3},
-            "market_cap": {"operator": ">", "value": 1e12, "penalty": 0.5},
-            "de_ratio": {"operator": ">", "value": 1.0, "penalty": 0.2},
+            "maFastSlope": {"operator": "<", "value": 0, "penalty": 0.5},
+            "pegRatio": {"operator": ">", "value": 3.0, "penalty": 0.3},
+            "marketCap": {"operator": ">", "value": 1e12, "penalty": 0.5},
+            "deRatio": {"operator": ">", "value": 1.0, "penalty": 0.2},
             "roe": {"operator": "<", "value": 12, "penalty": 0.2},
-            "institutional_ownership": {"operator": ">", "value": 85, "penalty": 0.3},
-            "promoter_pledge": {"operator": ">", "value": 10.0, "penalty": 0.4}
+            "institutionalOwnership": {"operator": ">", "value": 85, "penalty": 0.3},
+            "promoterpledge": {"operator": ">", "value": 10.0, "penalty": 0.4}
         },
         "thresholds": {"buy": 8.0, "hold": 6.5, "sell": 4.5},
     }
@@ -1898,7 +1898,7 @@ HORIZON_FETCH_CONFIG = {
         "label": "Intraday"
     },
     "short_term": {
-        "period": "5y",    # CHANGED from '3mo' to 2y. Gives ~250 candles. Enough for 200 DMA.
+        "period": "3y",    # CHANGED from '3mo' to 2y. Gives ~250 candles. Enough for 200 DMA.
         "interval": "1d", 
         "label": "Short Term"
     },
@@ -1921,70 +1921,70 @@ QUALITY_WEIGHTS = {
     "roe": {"weight": 1.0, "direction": "normal"},
     "roce": {"weight": 1.0, "direction": "normal"},
     "roic": {"weight": 1.0, "direction": "normal"},
-    "piotroski_f": {"weight": 1.0, "direction": "normal"},
-    "ocf_vs_profit": {"weight": 1.0, "direction": "normal"},
-    "interest_coverage": {"weight": 1.0, "direction": "normal"},
-    "earnings_stability": {"weight": 1.0, "direction": "normal"},
-    "net_profit_margin": {"weight": 1.0, "direction": "normal"},
+    "piotroskiF": {"weight": 1.0, "direction": "normal"},
+    "ocfVsProfit": {"weight": 1.0, "direction": "normal"},
+    "interestCoverage": {"weight": 1.0, "direction": "normal"},
+    "earningsStability": {"weight": 1.0, "direction": "normal"},
+    "netProfitMargin": {"weight": 1.0, "direction": "normal"},
     # Lower is better
-    "de_ratio": {"weight": 1.0, "direction": "invert"},
-    "promoter_pledge": {"weight": 1.0, "direction": "normal"},
-    "roe_stability": {
+    "deRatio": {"weight": 1.0, "direction": "invert"},
+    "promoterpledge": {"weight": 1.0, "direction": "normal"},
+    "roeStability": {
         "weight": 0.10,
         "direction": "invert",
     },  # Lower standard deviation = higher score (invert)
-    "volatility_quality": {"weight": 0.10, "direction": "normal"},
+    "volatilityQuality": {"weight": 0.10, "direction": "normal"},
 }
 #todo : remove
 GROWTH_WEIGHTS = {
-    "eps_growth_3y": {"weight": 1.0, "direction": "normal"},
-    "revenue_growth_5y": {"weight": 1.0, "direction": "normal"},
-    "quarterly_growth": {"weight": 1.0, "direction": "normal"},
-    "fcf_growth_3y": {"weight": 1.0, "direction": "normal"},
-    "market_cap_cagr": {"weight": 1.0, "direction": "normal"},
+    "epsGrowth3y": {"weight": 1.0, "direction": "normal"},
+    "revenueGrowth5y": {"weight": 1.0, "direction": "normal"},
+    "quarterlyGrowth": {"weight": 1.0, "direction": "normal"},
+    "fcfGrowth3y": {"weight": 1.0, "direction": "normal"},
+    "marketCapCagr": {"weight": 1.0, "direction": "normal"},
 }
 #todo : remove
 VALUE_WEIGHTS = {
     # Lower is better
-    "pe_ratio": {"weight": 1.0, "direction": "invert"},
-    "pb_ratio": {"weight": 1.0, "direction": "invert"},
-    "peg_ratio": {"weight": 1.0, "direction": "invert"},
-    "pe_vs_sector": {"weight": 1.0, "direction": "invert"},
+    "peRatio": {"weight": 1.0, "direction": "invert"},
+    "pbRatio": {"weight": 1.0, "direction": "invert"},
+    "pegRatio": {"weight": 1.0, "direction": "invert"},
+    "peVsSector": {"weight": 1.0, "direction": "invert"},
     # Higher is better
-    "fcf_yield": {"weight": 1.0, "direction": "normal"},
-    "dividend_yield": {"weight": 1.0, "direction": "normal"},
+    "fcfyield": {"weight": 1.0, "direction": "normal"},
+    "dividendyield": {"weight": 1.0, "direction": "normal"},
 }
 
 #todo : remove
 MOMENTUM_WEIGHTS = {  # 🆕 CORE COMPOSITES (PRIORITY)
-    "momentum_strength": {
+    "momentumStrength": {
         "weight": 0.30,
         "direction": "normal",
     },  # RSI, MACD, Stoch Bundle
-    "trend_strength": {
+    "trendStrength": {
         "weight": 0.40,
         "direction": "normal",
     },  # ADX, EMA Slope, ST Bundle
-    "volatility_quality": {
+    "volatilityQuality": {
         "weight": 0.10,
         "direction": "normal",
     },  # New Volatility Setup Score
     # CONTEXTUAL/HYBRID MOMENTUM (MUST KEEP)
-    "vwap_bias": {"weight": 0.05, "direction": "normal"},
-    "price_action": {"weight": 0.05, "direction": "normal"},
-    "nifty_trend_score": {"weight": 0.05, "direction": "normal"},  # Macro Context
-    "Position52w": {"weight": 0.05, "direction": "normal"},  # Hybrid/Sentiment Context
+    "vwapBias": {"weight": 0.05, "direction": "normal"},
+    "priceAction": {"weight": 0.05, "direction": "normal"},
+    "niftyTrendScore": {"weight": 0.05, "direction": "normal"},  # Macro Context
+    "position52w": {"weight": 0.05, "direction": "normal"},  # Hybrid/Sentiment Context
     # ⚠️ CONTEXTUAL/VOLUME (MUST KEEP)
     "rvol": {
         "weight": 0.00,
         "direction": "normal",
     },  # Weight mass moved to composite, keep key for context
-    "obv_div": {
+    "obvDiv": {
         "weight": 0.00,
         "direction": "normal",
     },  # Weight mass moved to composite, keep key for context
-    "psar_trend": {"weight": 0.00, "direction": "normal"},
-    "ttm_squeeze": {"weight": 0.00, "direction": "normal"},
+    "psarTrend": {"weight": 0.00, "direction": "normal"},
+    "ttmSqueeze": {"weight": 0.00, "direction": "normal"},
 }
 
 INDEX_TICKERS = {
@@ -2150,7 +2150,7 @@ TREND_THRESH = {
     "weak_floor": 20.0,
     "moderate_floor": 25.0,
     "strong_floor": 40.0,
-    "di_spread_strong": 20.0,
+    "diSpread_strong": 20.0,
 }
 
 RVOL_SURGE_THRESHOLD, RVOL_DROUGHT_THRESHOLD, VOLUME_CLIMAX_SPIKE = 3.0, 0.7, 2.0
@@ -2228,12 +2228,12 @@ SIGNAL_ENGINE = {
     # Pattern Priority (NEW)
     # ------------------------------------------------------------------
     "PATTERN_PRIORITY": [  # ✅ ADD THIS ENTIRE SECTION
-        {"pattern": "darvas_box", "setup_name": "PATTERN_DARVAS_BREAKOUT", "min_score": 85},
-        {"pattern": "minervini_stage2", "setup_name": "PATTERN_VCP_BREAKOUT", "min_score": 85},
-        {"pattern": "cup_handle", "setup_name": "PATTERN_CUP_BREAKOUT", "min_score": 80},
-        {"pattern": "three_line_strike", "setup_name": "PATTERN_STRIKE_REVERSAL", "min_score": 80},
-        {"pattern": "golden_cross", "setup_name": "PATTERN_GOLDEN_CROSS", "min_score": 75},
-        {"pattern": "flag_pennant", "setup_name": "PATTERN_FLAG_BREAKOUT", "min_score": 80}
+        {"pattern": "darvasBox", "setup_name": "PATTERN_DARVAS_BREAKOUT", "min_score": 85},
+        {"pattern": "minerviniStage2", "setup_name": "PATTERN_VCP_BREAKOUT", "min_score": 85},
+        {"pattern": "cupHandle", "setup_name": "PATTERN_CUP_BREAKOUT", "min_score": 80},
+        {"pattern": "threeLineStrike", "setup_name": "PATTERN_STRIKE_REVERSAL", "min_score": 80},
+        {"pattern": "goldenCross", "setup_name": "PATTERN_GOLDEN_CROSS", "min_score": 75},
+        {"pattern": "flagPennant", "setup_name": "PATTERN_FLAG_BREAKOUT", "min_score": 80}
     ],
 
     # ------------------------------------------------------------------
@@ -2418,7 +2418,7 @@ SIGNAL_ENGINE = {
             "neutral": 50,
             "weak": 40
         },
-        "rsi_slope": {
+        "rsislope": {
             "intraday": {"positive": 0.10, "neutral": 0.0},
             "short_term": {"positive": 0.05, "neutral": 0.0},
             "long_term": {"positive": 0.03, "neutral": 0.0},
@@ -2435,20 +2435,20 @@ SIGNAL_ENGINE = {
     # ------------------------------------------------------------------
     "VOLATILITY_QUALITY_THRESHOLDS": {
         "intraday": {
-            "atr_pct": {"very_low": 1.5, "low": 3.0, "high": 6.0},
-            "bb_width": {"very_tight": 0.01, "tight": 0.02, "wide": 0.04}
+            "atrPct": {"very_low": 1.5, "low": 3.0, "high": 6.0},
+            "bbWidth": {"very_tight": 0.01, "tight": 0.02, "wide": 0.04}
         },
         "short_term": {
-            "atr_pct": {"very_low": 1.0, "low": 2.5, "high": 5.0},
-            "bb_width": {"very_tight": 0.01, "tight": 0.02, "wide": 0.04}
+            "atrPct": {"very_low": 1.0, "low": 2.5, "high": 5.0},
+            "bbWidth": {"very_tight": 0.01, "tight": 0.02, "wide": 0.04}
         },
         "long_term": {
-            "atr_pct": {"very_low": 2.0, "low": 5.5, "high": 12.0},
-            "bb_width": {"very_tight": 0.02, "tight": 0.04, "wide": 0.08}
+            "atrPct": {"very_low": 2.0, "low": 5.5, "high": 12.0},
+            "bbWidth": {"very_tight": 0.02, "tight": 0.04, "wide": 0.08}
         },
         "multibagger": {
-            "atr_pct": {"very_low": 3.0, "low": 8.0, "high": 25.0},
-            "bb_width": {"very_tight": 0.03, "tight": 0.06, "wide": 0.12}
+            "atrPct": {"very_low": 3.0, "low": 8.0, "high": 25.0},
+            "bbWidth": {"very_tight": 0.03, "tight": 0.06, "wide": 0.12}
         }
     },
 
@@ -2499,7 +2499,7 @@ STRATEGY_ANALYZER = {
     "DEFAULT_INDICATOR_VALUES": {
         "rsi": 50,
         "rvol": 1.0,
-        "atr_pct": 1.0
+        "atrPct": 1.0
     },
     # ------------------------------------------------------------------
     # Swing Trading
@@ -2656,7 +2656,7 @@ STRATEGY_ANALYZER = {
 
     # 4️⃣ SQUEEZE DETECTION ✅ (ENHANCED)
     "SQUEEZE_DETECTION": {
-        "indicator_key": "ttm_squeeze",
+        "indicator_key": "ttmSqueeze",
         "active_token": "on",
         "check_method": "contains"
     },
@@ -2671,7 +2671,7 @@ STRATEGY_ANALYZER = {
     # 6️⃣ STAGE 2 TEMPLATE ✅
     "STAGE2_TEMPLATE": {
         "enabled": True,
-        "ma_keys": ["ma_mid", "ma_slow"],  # Price > MA50 > MA200
+        "ma_keys": ["maMid", "maSlow"],  # Price > MA50 > MA200
         "price_position": "above_all"
     },
 
@@ -2679,7 +2679,7 @@ STRATEGY_ANALYZER = {
     "TREND_STRUCTURE": {
         "bullish_alignment": {
             "enabled": True,
-            "order": ["price", "ma_fast", "ma_mid", "ma_slow"],
+            "order": ["price", "maFast", "maMid", "maSlow"],
             "operator": ">"
         }
     }
@@ -2713,8 +2713,8 @@ TRADE_ENHANCER = {
     # Pattern expiration – applicable patterns (hardcoded list)
     # ---------------------------------------------------------
     "EXPIRING_PATTERNS": [
-        "flag_pennant",
-        "three_line_strike"
+        "flagPennant",
+        "threeLineStrike"
     ],
 
     # ---------------------------------------------------------
@@ -2722,32 +2722,32 @@ TRADE_ENHANCER = {
     # ---------------------------------------------------------
     "PATTERN_ENTRY_DEFAULTS": {
 
-        "cup_handle": {
+        "cupHandle": {
             "rim_clearance": 0.99,
             "rvol_min": 1.2,
             "rvol_bonus_threshold": 2.0,
             "volume_surge_bonus": 10
         },
 
-        "darvas_box": {
+        "darvasBox": {
             "box_clearance": 1.005
         },
 
-        "minervini_stage2": {
+        "minerviniStage2": {
             "contraction_max": 1.5,
             "contraction_warning_penalty": -5
         },
 
-        "bollinger_squeeze": {
+        "bollingerSqueeze": {
             "rsi_min": 50
         },
 
-        "flag_pennant": {
+        "flagPennant": {
             "pole_length_min": 5,
             "pole_short_penalty": -5
         },
 
-        "three_line_strike": {
+        "threeLineStrike": {
             "strike_candle_body_min": 0.6
         }
     },
@@ -2756,7 +2756,7 @@ TRADE_ENHANCER = {
     # Divergence detection (local severity logic) DUPLICATE of constants.py's RSI_SLOPE_THRESH
     # ---------------------------------------------------------
     "DIVERGENCE_THRESHOLDS": {
-        "rsi_slope": {
+        "rsislope": {
             "severe": -0.08,
             "moderate": -0.03,
             "minor": 0.0
@@ -2774,15 +2774,15 @@ TRADE_ENHANCER = {
     # Supported pattern scan order
     # ---------------------------------------------------------
     "PATTERN_KEYS": [
-        "darvas_box",
-        "cup_handle",
-        "bollinger_squeeze",
-        "flag_pennant",
-        "minervini_stage2",
-        "three_line_strike",
-        "ichimoku_signals",
-        "golden_cross",
-        "double_top_bottom"
+        "darvasBox",
+        "cupHandle",
+        "bollingerSqueeze",
+        "flagPennant",
+        "minerviniStage2",
+        "threeLineStrike",
+        "ichimokuSignals",
+        "goldenCross",
+        "doubleTopBottom"
     ],
 
     # ---------------------------------------------------------
@@ -2834,15 +2834,15 @@ TRADE_ENHANCER = {
     # ---------------------------------------------------------
     "PATTERN_ROLES": {
         "momentum_confirmation": [
-            "bollinger_squeeze",
-            "three_line_strike"
+            "bollingerSqueeze",
+            "threeLineStrike"
         ],
         "trend_continuation": [
-            "minervini_stage2"
+            "minerviniStage2"
         ],
         "regime_confirmation": [
-            "ichimoku_signals",
-            "golden_cross"
+            "ichimokuSignals",
+            "goldenCross"
         ]
     },
 
@@ -2857,8 +2857,8 @@ TRADE_ENHANCER = {
     # ATR extraction fallback order (implicit priority)
     # ---------------------------------------------------------
     "ATR_FALLBACK_KEYS": [
-        "atr_dynamic",
-        "atr_14",
+        "atrDynamic",
+        "atr14",
         "atr",
         "atr14"
     ],
@@ -2867,23 +2867,23 @@ TRADE_ENHANCER = {
     # Pattern reference levels for invalidation checks (NEW)
     # ---------------------------------------------------------
     "PATTERN_REFERENCE_LEVELS": {  # ✅ ADD THIS
-        "darvas_box": "box_low",
-        "cup_handle": "handle_low",
-        "flag_pennant": "flag_low",
-        "minervini_stage2": "pivot_point",
-        "bollinger_squeeze": "bb_low",
-        "three_line_strike": "entry",
-        "ichimoku_signals": "cloud_bottom",
-        "double_top_bottom": "neckline"
+        "darvasBox": "box_low",
+        "cupHandle": "handle_low",
+        "flagPennant": "flag_low",
+        "minerviniStage2": "pivotPoint",
+        "bollingerSqueeze": "bbLow",
+        "threeLineStrike": "entry",
+        "ichimokuSignals": "cloud_bottom",
+        "doubleTopBottom": "neckline"
     },
 
     # ---------------------------------------------------------
     # MA key fallback paths (for legacy support) (NEW)
     # ---------------------------------------------------------
     "MA_KEY_FALLBACKS": {
-        "fast": ["ma_fast", "ema_20", "mafast", "ema20"],
-        "mid": ["ma_mid", "ema_50", "mamid", "ema50"],
-        "slow": ["ma_slow", "ema_200", "maslow", "ema200"]
+        "fast": ["maFast", "ema20", "mafast", "ema20"],
+        "mid": ["maMid", "ema50", "mamid", "ema50"],
+        "slow": ["maSlow", "ema200", "maslow", "ema200"]
     },
 
     # ---------------------------------------------------------
@@ -2905,7 +2905,7 @@ TRADE_ENHANCER = {
     # Pattern-specific stop loss adjustments (NEW)
     # ---------------------------------------------------------
     "PATTERN_STOP_LOSS_MULTIPLIERS": {  # ✅ ADD THIS
-        "darvas_box": 0.995  # 0.5% below box_low
+        "darvasBox": 0.995  # 0.5% below box_low
     },
 }
 
@@ -2914,7 +2914,7 @@ PATTERNS = {
     # ==================================================================
     # BOLLINGER SQUEEZE
     # ==================================================================
-    "bollinger_squeeze": {
+    "bollingerSqueeze": {
         "squeeze_threshold": 0.10,              # BB Width < 10% = squeeze
         "breakout_confirmation": 0.02,          # 2% above band
         "squeeze_score": 75,
@@ -2927,7 +2927,7 @@ PATTERNS = {
     # ==================================================================
     # CUP & HANDLE
     # ==================================================================
-    "cup_handle": {
+    "cupHandle": {
         "min_cup_len": 20,
         "max_cup_depth": 0.50,
         "min_cup_depth": 0.10,
@@ -2948,7 +2948,7 @@ PATTERNS = {
     # ==================================================================
     # DOUBLE TOP / BOTTOM
     # ==================================================================
-    "double_top_bottom": {
+    "doubleTopBottom": {
         "peak_window": 5,
         "min_history": 60,
         "window_size": 60,
@@ -2960,7 +2960,7 @@ PATTERNS = {
     # ==================================================================
     # GOLDEN / DEATH CROSS
     # ==================================================================
-    "golden_cross": {
+    "goldenCross": {
         "min_history": 200,
         "golden_cross_score": 90,
         "death_cross_score": 90,
@@ -2987,7 +2987,7 @@ PATTERNS = {
     # ==================================================================
     # DARVAS BOX
     # ==================================================================
-    "darvas_box": {
+    "darvasBox": {
         "lookback": 50,
         "box_length": 5,
         "box_lookback_multiplier": 2,
@@ -3002,7 +3002,7 @@ PATTERNS = {
     # ==================================================================
     # THREE LINE STRIKE
     # ==================================================================
-    "three_line_strike": {
+    "threeLineStrike": {
         "min_history": 5,
         "pattern_score": 90,
         "pattern_quality": 9.0
@@ -3011,7 +3011,7 @@ PATTERNS = {
     # ==================================================================
     # FLAG / PENNANT
     # ==================================================================
-    "flag_pennant": {
+    "flagPennant": {
         "pole_days": 15,
         "flag_days": 5,
         "strong_pole_threshold": 0.05,
@@ -3026,7 +3026,7 @@ PATTERNS = {
     # ==================================================================
     # ICHIMOKU SIGNALS
     # ==================================================================
-    "ichimoku_signals": {
+    "ichimokuSignals": {
         "tenkan_window": 9,
         "kijun_window": 26,
         "min_history_buffer": 2,

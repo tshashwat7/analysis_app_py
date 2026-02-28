@@ -14,14 +14,12 @@ def merge_pattern_into_indicators(indicators: Dict[str, Any], pattern_results: D
         key = f"{alias}_{horizon}" if horizon else alias
         
         # Map pattern output to UI-friendly structure
-        payload = {
+        indicators[alias] = {
             "value": result.get("quality", 0),  # Display value (0-10)
+            "found":result.get("found", False),
             "raw": result,                      # Full debug data
             "score": result.get("score", 0),    # For weighting
             "desc": result.get("desc", f"Pattern {alias.replace('_', ' ').title()} Detected"),
             "alias": key,
             "source": "Pattern"
         }
-        indicators[alias] = payload
-        if horizon:
-            indicators[f"{alias}_{horizon}"] = payload

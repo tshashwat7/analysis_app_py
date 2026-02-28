@@ -68,23 +68,23 @@ def score_short_bull_run(indicators: Dict[str, Dict[str, Any]]) -> Tuple[int, st
         reasons.append(f"⚠️ MFI {round(mfi_val,1)} > 80 → Overbought (money flow exhaustion).")
 
     # Stochastic Overbought
-    stoch_k = _to_float(indicators.get("Stoch %K", {}).get("value"))
-    stoch_d = _to_float(indicators.get("Stoch %D", {}).get("value"))
-    if stoch_k and stoch_d and stoch_k > 80 and stoch_d > 80:
+    stochK = _to_float(indicators.get("Stoch %K", {}).get("value"))
+    stochD = _to_float(indicators.get("Stoch %D", {}).get("value"))
+    if stochK and stochD and stochK > 80 and stochD > 80:
         bull_score = min(bull_score, 60)
-        reasons.append(f"⚠️ Stochastic {round(stoch_k,1)}/{round(stoch_d,1)} > 80 → Overbought, confidence capped.")
+        reasons.append(f"⚠️ Stochastic {round(stochK,1)}/{round(stochD,1)} > 80 → Overbought, confidence capped.")
 
     # ATR Volatility Veto
-    atr_pct = _to_float(indicators.get("ATR %", {}).get("value"))
-    if atr_pct and atr_pct > 5.0:
+    atrPct = _to_float(indicators.get("ATR %", {}).get("value"))
+    if atrPct and atrPct > 5.0:
         bull_score = max(0, bull_score - 20)
-        reasons.append(f"⚠️ ATR% {round(atr_pct,1)} > 5 → High volatility, -20 penalty.")
+        reasons.append(f"⚠️ ATR% {round(atrPct,1)} > 5 → High volatility, -20 penalty.")
 
     # Volatility Expansion Reward
-    bb_width = _to_float(indicators.get("BB Width", {}).get("value"))
-    if bb_width and bb_width > 6.0:
+    bbWidth = _to_float(indicators.get("BB Width", {}).get("value"))
+    if bbWidth and bbWidth > 6.0:
         bull_score = min(100, bull_score + 5)
-        reasons.append(f"✅ BB Width {round(bb_width,2)} expanding → Breakout potential (+5).")
+        reasons.append(f"✅ BB Width {round(bbWidth,2)} expanding → Breakout potential (+5).")
 
     # --- Final Signal Mapping ---
     if bull_score >= 80:

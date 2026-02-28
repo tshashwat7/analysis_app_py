@@ -1,60 +1,109 @@
 # services/indicators.py
 """
 Phase 3 Refactored (v7 - FINAL GOLD): 
-- RESTORED: ema_20_50_cross for Short Term.
-- LOGIC FIX: 'gap_percent' now correctly scores moderate gaps (0.5% - 2.0%).
+- RESTORED: ema20_50Cross for Short Term.
+- LOGIC FIX: 'gapPercent' now correctly scores moderate gaps (0.5% - 2.0%).
 - LOGIC FIX: 'ma_trend' awards partial score (7) if Short MA > Mid MA (Developing Trend).
 - ACCURACY: Uses WMA/MMA for slopes on Long Term/Multibagger horizons.
 """
 
-import logging
-from typing import Dict, Any, Callable, List, Optional, Tuple, Union
-import warnings
+
+from typing import Dict, Any, List, Optional
 import numpy as np
 from math import atan, degrees
 import pandas as pd
 import pandas_ta as ta
 import inspect
 
+import logging
 logger = logging.getLogger(__name__)
 
 # Shared helpers
 from config.constants import (
     ADX_HORIZON_CONFIG, ATR_HORIZON_CONFIG, ATR_MULTIPLIERS, CORE_TECHNICAL_SETUP_METRICS, GROWTH_WEIGHTS, MOMENTUM_WEIGHTS, 
-    QUALITY_WEIGHTS, STOCH_HORIZON_CONFIG, TECHNICAL_WEIGHTS, HORIZON_PROFILE_MAP, 
-    TECHNICAL_METRIC_MAP, VALUE_WEIGHTS
+    QUALITY_WEIGHTS, STOCH_HORIZON_CONFIG, HORIZON_PROFILE_MAP, 
+    VALUE_WEIGHTS
 )
 from services.data_fetch import (
     _safe_float,
     get_benchmark_data,
     safe_float,
     _wrap_calc,
-    get_history_for_horizon,
-    _safe_get_raw_float
+    get_history_for_horizon
 )
 from services.analyzers.pattern_analyzer import run_pattern_analysis
 
 PYTHON_LOOKBACK_MAP = {
-    "intraday": 500,    
-    "short_term": 600,  
-    "long_term": 800,   
-    "multibagger": 3000 
+    "intraday": 550,       # ~1 month
+    "short_term": 800,     # (keeps all 756 + buffer)
+    "long_term": 280,      # ~5 years weekly
+    "multibagger": 120     # 10 years monthly
 }
 
-# ========================================================
-# 🔧 INTERNAL HELPERS
-# ========================================================
+INDICATOR_MIN_ROWS = {
+    "rsi": 14,
+    "macd": 35,  # 26 (slow) + 9 (signal)
+    "ema200": 200,
+    "ema50": 50,
+    "ema20": 20,
+    "wma50": 50,
+    "wma40": 40,
+    "wma10": 10,
+    "mma12": 12,
+    "mma6": 6,
+    "adx": 14,
+    "stoch": 14,
+    "bbands": 20,
+    "obv": 20,
+    "atr": 14,
+    "ichimoku": 60,
+    "cci": 20,
+    "mfi": 14,
+    "vwap": 20,
+    "keltner": 20
+}
 
 class _Validator:
     @staticmethod
-    def require(df: pd.DataFrame, cols: List[str] = None, min_rows: int = 1):
+    def require(df: pd.DataFrame, cols: List[str] = None, 
+                min_rows: int = 1, indicator: str = None):
+        """
+        Validates DataFrame with soft-fail for insufficient data.
+        
+        Args:
+            df: DataFrame to validate
+            cols: Required column names
+            min_rows: Minimum rows required (can be overridden by indicator)
+            indicator: Name of indicator being calculated (for smart min_rows)
+        
+        Raises:
+            ValueError: Only on critical failures (empty df, missing cols, < 10 rows)
+        """
         if df is None or df.empty:
             raise ValueError("DataFrame is empty")
+        
         if cols and not set(cols).issubset(df.columns):
             raise ValueError(f"Missing required columns: {cols}")
-        if len(df) < min_rows:
-            raise ValueError(f"Insufficient data: {len(df)} < {min_rows}")
-
+        
+        # Determine actual minimum required
+        required = min_rows
+        if indicator and indicator in INDICATOR_MIN_ROWS:
+            required = max(required, INDICATOR_MIN_ROWS[indicator])
+        
+        # Soft fail: Warn but continue with limited data
+        if len(df) < required:
+            logger.warning(
+                f"{indicator or 'Calculation'}: Limited data ({len(df)} rows, "
+                f"recommended {required}). Proceeding with available data."
+            )
+            
+            # Hard fail only on critically insufficient data
+            if len(df) < 10:
+                raise ValueError(
+                    f"Critically insufficient data for {indicator or 'calculation'}: "
+                    f"{len(df)} < 10 rows"
+                )
+    
     @staticmethod
     def extract_last(series: Any, name: str = "Indicator") -> float:
         if series is None or (isinstance(series, (pd.Series, pd.DataFrame)) and series.empty):
@@ -93,7 +142,7 @@ def _safe_last_vals(series: pd.Series, n: int = 1) -> Optional[List[float]]:
 
 def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["Close"])
+        _Validator.require(df, ["Close"],min_rows=length, indicator="rsi")
         rsi_series = ta.rsi(df["Close"], length=length)
         val = _Validator.extract_last(rsi_series, "RSI")
         if val is None: return {}
@@ -113,13 +162,13 @@ def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
 
         return {
             "rsi": {"value": round(val, 2), "score": score, "desc": zone},
-            "rsi_slope": {"value": round(slope_val, 2), "score": 0, "desc": f"Slope {slope_val:.2f}"}
+            "rsislope": {"value": round(slope_val, 2), "score": 0, "desc": f"Slope {slope_val:.2f}"}
         }
     return _wrap_calc(_inner, "RSI")
 
 def compute_mfi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close", "Volume"])
+        _Validator.require(df, ["High", "Low", "Close", "Volume"], min_rows=length, indicator="mfi")
         val = _Validator.extract_last(ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=length), "MFI")
         if val is None: return {}
 
@@ -133,7 +182,7 @@ def compute_mfi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
 
 def compute_cci(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close"])
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=length, indicator="cci")
         val = _Validator.extract_last(ta.cci(df["High"], df["Low"], df["Close"], length=length), "CCI")
         if val is None: return {}
 
@@ -147,7 +196,7 @@ def compute_cci(df: pd.DataFrame, length: int = 20) -> Dict[str, Dict[str, Any]]
 def compute_adx(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict[str, Any]]:
     def _inner():
         length = ADX_HORIZON_CONFIG.get(horizon, 14)
-        _Validator.require(df, ["High", "Low", "Close"])
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=length, indicator=f"adx_{horizon}")
         adx_df = ta.adx(df["High"], df["Low"], df["Close"], length=length)
         if adx_df is None or adx_df.empty: raise ValueError("ADX empty")
 
@@ -160,8 +209,8 @@ def compute_adx(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict
         adx_val = _Validator.extract_last(adx_df[adx_col], "ADX")
         if adx_val is None: return {}
         
-        di_plus = safe_float(adx_df[di_p_col].iloc[-1]) if di_p_col else None
-        di_minus = safe_float(adx_df[di_m_col].iloc[-1]) if di_m_col else None
+        diPlus = safe_float(adx_df[di_p_col].iloc[-1]) if di_p_col else None
+        diMinus = safe_float(adx_df[di_m_col].iloc[-1]) if di_m_col else None
 
         if adx_val < 20: score, trend = 0, "Weak / Range-bound"
         elif adx_val <= 25: score, trend = 5, "Developing / Moderate"
@@ -170,19 +219,21 @@ def compute_adx(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict
         return {
             "adx": {"value": round(adx_val, 2), 'length': length,  "raw": adx_val, "score": score, "desc": f"adx -> {adx_val:.2f}"},
             "adx_signal": {"value": trend, "score": score, "desc": f"adx_signal -> {trend}"},
-            "di_plus": {"value": round(di_plus, 2) if di_plus else None, "score": 5, "desc": f"di_plus -> {di_plus:.1f}"},
-            "di_minus": {"value": round(di_minus, 2) if di_minus else None, "score": 5, "desc": f"di_minus -> {di_minus:.1f}"},
+            "diPlus": {"value": round(diPlus, 2) if diPlus else None, "score": 5, "desc": f"diPlus -> {diPlus:.1f}"},
+            "diMinus": {"value": round(diMinus, 2) if diMinus else None, "score": 5, "desc": f"diMinus -> {diMinus:.1f}"},
         }
     return _wrap_calc(_inner, "ADX")
 
 def compute_stochastic(df: pd.DataFrame, horizon:str = "short_term") -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close"])
         # 1. Get dynamic settings
         cfg = STOCH_HORIZON_CONFIG.get(horizon, STOCH_HORIZON_CONFIG["short_term"])
         k_len = cfg["k"]
         d_len = cfg["d"]
         s_k   = cfg["smooth"]
+        _Validator.require(df, ["High", "Low", "Close"], 
+                          min_rows=max(k_len, d_len) + s_k, 
+                          indicator=f"stoch_{horizon}")
         
         # 2. Calculate using dynamic settings
         stoch_df = ta.stoch(df["High"], df["Low"], df["Close"], k=k_len, d=d_len, smooth_k=s_k)
@@ -210,9 +261,9 @@ def compute_stochastic(df: pd.DataFrame, horizon:str = "short_term") -> Dict[str
                 elif k_prev >= d_prev and k_val < d_val: cross_status, cross_score = "Bearish", 0
 
         return {
-            "stoch_k": {"value": round(k_val, 2), 'length': k_len, "score": score, "desc": f"Stoch({k_len})"},
-            "stoch_d": {"value": round(d_val, 2), 'length': d_len, "score": score, "desc": f"Stoch({d_len})"},
-            "stoch_cross": {"value": cross_status, "score": cross_score},
+            "stochK": {"value": round(k_val, 2), 'length': k_len, "score": score, "desc": f"Stoch({k_len})"},
+            "stochD": {"value": round(d_val, 2), 'length': d_len, "score": score, "desc": f"Stoch({d_len})"},
+            "stochCross": {"value": cross_status, "score": cross_score},
         }
     return _wrap_calc(_inner, "Stochastic")
 
@@ -258,16 +309,16 @@ def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
 
         return {
             "macd": {"value": round(macd_val, 2), "score": score, "desc": f"macd -> {macd_val:.2f}"},
-            "macd_cross": {"value": cross, "score": score, "desc": f"macd_cross -> {cross}"},
-            "macd_hist_z": {"value": round(hist_z, 4), "score": hist_score, "desc": "MACD Hist Z-Score"},
-            "macd_histogram": {"value": round(hist_val, 3), "score": hist_strength, "desc": f"Hist {hist_val:.3f}"},
-            "prev_macd_histogram": {"value": round(prev_hist_val, 3), "score": 0, "desc": "Prev Hist"}
+            "macdCross": {"value": cross, "score": score, "desc": f"macdCross -> {cross}"},
+            "macdHistZ": {"value": round(hist_z, 4), "score": hist_score, "desc": "MACD Hist Z-Score"},
+            "macdhistogram": {"value": round(hist_val, 3), "score": hist_strength, "desc": f"Hist {hist_val:.3f}"},
+            "prevmacdhistogram": {"value": round(prev_hist_val, 3), "score": 0, "desc": "Prev Hist"}
         }
     return _wrap_calc(_inner, "MACD")
 
 def compute_vwap(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close", "Volume"])
+        _Validator.require(df, ["High", "Low", "Close", "Volume"], min_rows=20, indicator="vwap")
         vwap_val = _Validator.extract_last(ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]), "VWAP")
         if vwap_val is None: return {}
         price = _Validator.extract_last(df["Close"], "Close")
@@ -278,13 +329,13 @@ def compute_vwap(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
 
         return {
             "vwap": {"value": round(vwap_val, 2), "score": score, "desc": f"vwap -> {vwap_val:.1f}"}, 
-            "vwap_bias": {"value": bias, "score": score, "desc": f"vwap_bias -> {bias}"}
+            "vwapBias": {"value": bias, "score": score, "desc": f"vwapBias -> {bias}"}
         }
     return _wrap_calc(_inner, "VWAP")
 
 def compute_bollinger_bands(df: pd.DataFrame, length: int = 20, std_dev: float = 2.0) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["Close"])
+        _Validator.require(df, ["Close"], min_rows=length, indicator="bbands")
         bb = ta.bbands(df["Close"], length=length, std=std_dev)
         if bb is None: raise ValueError("BB failed")
         
@@ -313,18 +364,18 @@ def compute_bollinger_bands(df: pd.DataFrame, length: int = 20, std_dev: float =
             pct_b = (price - lower) / (upper - lower)
         
         return {
-            "bb_high": {"value": round(upper, 2), "score": 0, "desc": f"bb_high -> {upper:.2f}"},
-            "bb_mid": {"value": round(mid, 2), "score": 0, "desc": f"bb_mid -> {mid:.2f}"},
-            "bb_low": {"value": round(lower, 2), "score": score, "desc": band},
-            "bb_width": {"value": round(bb_width_val, 2), "raw": bb_width_val, "score": width_score, "desc": width_desc},
-            "bb_percent_b": {"value": round(pct_b, 3), "score": 10 if pct_b < 0.2 else 0 if pct_b > 0.8 else 5, "desc": f"bb_percent_b -> {pct_b:.3f}"}
+            "bbHigh": {"value": round(upper, 2), "score": 0, "desc": f"bbHigh -> {upper:.2f}"},
+            "bbMid": {"value": round(mid, 2), "score": 0, "desc": f"bbMid -> {mid:.2f}"},
+            "bbLow": {"value": round(lower, 2), "score": score, "desc": band},
+            "bbWidth": {"value": round(bb_width_val, 2), "raw": bb_width_val, "score": width_score, "desc": width_desc},
+            "bbpercentb": {"value": round(pct_b, 3), "score": 10 if pct_b < 0.2 else 0 if pct_b > 0.8 else 5, "desc": f"bbpercentb -> {pct_b:.3f}"}
         }
     return _wrap_calc(_inner, "Bollinger Bands")
 
 
 def compute_rvol(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["Volume"])
+        _Validator.require(df, ["Volume"], min_rows=30, indicator="rvol")
         vol = df["Volume"]
         today = safe_float(vol.iloc[-1])
         avg = safe_float(vol.tail(20).mean())
@@ -337,13 +388,14 @@ def compute_rvol(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         score = 10 if rvol > 1.5 else 0 if rvol < 0.8 else 5
         return {
             "rvol": {"value": round(rvol, 2), "score": score, "desc": f"rvol -> {rvol:.2f}"},
+            "volume": {"value": round(today, 2), "score": score, "desc": f"volume today -> {today:.2f}"},
             "avg_volume_30Days": {"value": round(avg_30days, 2),"raw": avg_30days,"alias": "Avg Volume (20D)","desc": f"20-period average volume: {int(avg_30days)}"}
         }
     return _wrap_calc(_inner, "RVOL")
 
 def compute_obv_divergence(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["Close", "Volume"])
+        _Validator.require(df, ["Close", "Volume"], min_rows=20, indicator="obv")
         obv = ta.obv(df["Close"], df["Volume"])
         if obv is None or len(obv) < 5: raise ValueError("OBV data insufficient")
         
@@ -354,12 +406,12 @@ def compute_obv_divergence(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         elif p_chg * o_chg < 0: sig, score = "Diverging", 0
         else: sig, score = "Neutral", 5
         
-        return {"obv_div": {"value": sig, "score": score, "desc": f"obv_div -> {sig}"}}
+        return {"obvDiv": {"value": sig, "score": score, "desc": f"obvDiv -> {sig}"}}
     return _wrap_calc(_inner, "OBV Divergence")
 
 def compute_vpt(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["Close", "Volume"])
+        _Validator.require(df, ["Close", "Volume"], min_rows=20, indicator="vpt")
         vpt = ta.pvt(df["Close"], df["Volume"])
         curr = _Validator.extract_last(vpt, "VPT")
         prev = safe_float(vpt.iloc[-5]) if len(vpt) >= 5 else curr
@@ -373,7 +425,7 @@ def compute_vpt(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
 
 def compute_volume_spike(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["Volume"])
+        _Validator.require(df, ["Volume"],  min_rows=20, indicator="volume_spike")
         today = safe_float(df["Volume"].iloc[-1])
         avg = safe_float(df["Volume"].tail(20).mean())
         if not avg: raise ValueError("Zero avg volume")
@@ -384,8 +436,8 @@ def compute_volume_spike(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         else: sig, score = "Normal", 5
         
         return {
-            "vol_spike_ratio": {"value": round(ratio, 2), "score": score, "desc": f"vol_spike_ratio -> {ratio:.2f}"},
-            "vol_spike_signal": {"value": sig, "score": score, "desc": f"vol_spike_signal -> {sig}"}
+            "volSpikeRatio": {"value": round(ratio, 2), "score": score, "desc": f"volSpikeRatio -> {ratio:.2f}"},
+            "volSpikeSignal": {"value": sig, "score": score, "desc": f"volSpikeSignal -> {sig}"}
         }
     return _wrap_calc(_inner, "Volume Spike")
 # // not needed now
@@ -403,8 +455,8 @@ def compute_atr(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         else: score = 0
         
         return {
-            "atr_14": {"value": round(atr, 2), "score": score, "desc": f"atr_14 -> {atr:.2f}"},
-            "atr_pct": {"value": round(pct, 2), "score": score, "desc": f"{pct:.2f}%"}
+            "atr14": {"value": round(atr, 2), "score": score, "desc": f"atr14 -> {atr:.2f}"},
+            "atrPct": {"value": round(pct, 2), "score": score, "desc": f"{pct:.2f}%"}
         }
     return _wrap_calc(_inner, "ATR")
 
@@ -413,7 +465,7 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
     def _inner():
         length = ATR_HORIZON_CONFIG.get(horizon, 14)
 
-        _Validator.require(df, ["High", "Low", "Close"])
+        _Validator.require(df, ["High", "Low", "Close"],min_rows=length, indicator=f"atr_{horizon}")
 
         atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=length)
         atr_val = _Validator.extract_last(atr_series, f"ATR_{length}")
@@ -436,12 +488,12 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
         elif pct <= 5.0: score = 5
         else: score = 0
 
-        atr_sma_ratio = 0.0
+        atrSmaRatio = 0.0
         if sma_val and sma_val > 0:
-            atr_sma_ratio = atr_val / sma_val
+            atrSmaRatio = atr_val / sma_val
 
         return {
-            "atr_dynamic": {
+            "atrDynamic": {
                 "value": round(atr_val, 2),
                 "length": length,               # Metadata for UI/Debug
                 "score": score,
@@ -449,16 +501,16 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
                 "desc": f"ATR({length}) = {atr_val:.2f}",
                 "source": "technical"
             },
-            "atr_pct": {
+            "atrPct": {
                 "value": round(pct, 2),
                 "score": score,
                 "desc": f"Volatility {pct:.2f}%",
                 "source": "technical"
             },
-            "atr_sma_ratio": {
-                "value": round(atr_sma_ratio, 4),
+            "atrSmaRatio": {
+                "value": round(atrSmaRatio, 4),
                 "score": 0, # Usually just a filter, not a scorer
-                "desc": f"ATR/SMA Ratio: {atr_sma_ratio:.4f}"
+                "desc": f"ATR/SMA Ratio: {atrSmaRatio:.4f}"
             }
         }
     return _wrap_calc(_inner, "Dynamic ATR")
@@ -466,6 +518,8 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
 def compute_dynamic_sl(df: pd.DataFrame, price: float, horizon: str = "short_term"):
     def _inner():
         length = ATR_HORIZON_CONFIG.get(horizon, 14)
+        _Validator.require(df, ["High", "Low", "Close"], 
+                          min_rows=length, indicator=f"sl_atr_{horizon}")
         mult_cfg = ATR_MULTIPLIERS.get(horizon, {"sl": 2.0})
         # Handle case where mult_cfg is a float or dict (safety check)
         multiplier = mult_cfg.get("sl", 2.0) if isinstance(mult_cfg, dict) else 2.0
@@ -483,13 +537,13 @@ def compute_dynamic_sl(df: pd.DataFrame, price: float, horizon: str = "short_ter
         risk_pct = ((price - sl_price) / price) * 100
 
         return {
-            "sl_atr_dynamic": {
+            "slAtrDynamic": {
                 "value": round(sl_price, 2),
                 "alias": f"SL ({multiplier}x ATR{length})", # Clear Label
                 "desc": f"Stop Loss using ATR({length})",
                 "source": "technical"
             },
-            "risk_per_share_pct": {
+            "riskPerSharePct": {
                 "value": round(risk_pct, 2),
                 "desc": f"Risk {risk_pct:.1f}%",
                 "source": "technical"
@@ -500,7 +554,7 @@ def compute_dynamic_sl(df: pd.DataFrame, price: float, horizon: str = "short_ter
 def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3.0) -> Dict[str, Dict[str, Any]]:
     def _inner():
         # 1. Keep your Validators
-        _Validator.require(df, ["High", "Low", "Close"])
+        _Validator.require(df, ["High", "Low", "Close"],  min_rows=length, indicator="supertrend")
         try:
             st = ta.supertrend(df["High"], df["Low"], df["Close"], length=length, multiplier=multiplier)
         except Exception as e:
@@ -536,15 +590,15 @@ def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3
             sig, score = "Bearish", 0
         
         return {
-            "supertrend_signal": { "value": sig, "score": score, "desc": f"ST ({length},{multiplier}) {sig}"},
-            "supertrend_value": {"value": st_level_val, "score": 0, "desc": f"Level {st_level_val}","alias": "SuperTrend Value"},
+            "supertrendSignal": { "value": sig, "score": score, "desc": f"ST ({length},{multiplier}) {sig}"},
+            "supertrendValue": {"value": st_level_val, "score": 0, "desc": f"Level {st_level_val}","alias": "SuperTrend Value"},
             "prev_supertrend": {"value": prev_trend_val if prev_trend_val is not None else 0, "score": 0}
         }
     return _wrap_calc(_inner, "SuperTrend")
 
 def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close"])
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=2, indicator="price_action")
         high = df["High"].iloc[-1]
         low = df["Low"].iloc[-1]
         close = df["Close"].iloc[-1]
@@ -556,17 +610,18 @@ def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         elif pos >= 0.5: sig, score = "Moderate Close", 5
         else: sig, score = "Weak Close", 0
         
-        return {"price_action": {"value": round(pos*100, 1), "score": score, "signal": sig, "desc": f"price_action -> {round(pos*100, 1)}"}}
+        return {"priceAction": {"value": round(pos*100, 1), "score": score, "signal": sig, "desc": f"priceAction -> {round(pos*100, 1)}"}}
     return _wrap_calc(_inner, "Price Action")
 
 def compute_price_vs_base_ma(df: pd.DataFrame, close, price, horizon: str = "short_term"):
-    """Returns price_vs_primary_trend_pct (Renamed from compute_200dma)"""
+    """Returns priceVsPrimaryTrendPct (Renamed from compute_200dma)"""
     lens = {"intraday": 200, "short_term": 200, "long_term": 50, "multibagger": 12}
     types = {"intraday": "EMA", "short_term": "EMA", "long_term": "WMA", "multibagger": "MMA"}
     L = lens.get(horizon, 200)
     T = types.get(horizon, "EMA")
     
     def _inner():
+        _Validator.require(df, ["Close"], min_rows=L, indicator=f"price_vs_ma_{horizon}")
         sma = _Validator.extract_last(ta.sma(close, length=L), f"{L}{T}")
         if not sma: return {}
         diff = ((price - sma) / sma) * 100
@@ -574,8 +629,8 @@ def compute_price_vs_base_ma(df: pd.DataFrame, close, price, horizon: str = "sho
         desc = "Above" if diff > 0 else "Below"
         
         return {
-            "price_vs_primary_trend_pct": {"value": round(diff, 2), "score": score, "desc": f"{desc} {T}{L} ({diff:.1f}%)", "alias": f"Price vs {T}{L}"},
-            f"price_vs_{L}{T.lower()}_pct": {"value": round(diff, 2), "score": score} # Legacy
+            "priceVsPrimaryTrendPct": {"value": round(diff, 2), "score": score, "desc": f"{desc} {T}{L} ({diff:.1f}%)", "alias": f"Price vs {T}{L}"},
+            f"priceVs{L}{T.lower()}Pct": {"value": round(diff, 2), "score": score} # Legacy
         }
     return _wrap_calc(_inner, "Price vs Trend")
 
@@ -594,7 +649,10 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
         }.get(horizon, {"type": "EMA", "l_s": 20, "l_l": 50})
         
         # 2. Dynamic Lookback
+        max_length = max(cfg["l_s"], cfg["l_l"])
         lookback = {"intraday": 5, "short_term": 10, "long_term": 10, "multibagger": 10}.get(horizon, 10)
+        
+        _Validator.require(df, ["Close"], min_rows=max_length + lookback, indicator=f"ma_slope_{horizon}")
         
         fn = ta.ema if cfg["type"] == "EMA" else ta.sma 
         prefix = "ema" if cfg["type"] == "EMA" else "wma" if cfg["type"] == "WMA" else "mma"
@@ -627,22 +685,22 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
         score = 10 if ang_s > 20 else 7 if ang_s > 5 else 0
         
         return {
-            "ma_fast_slope": {
+            "maFastSlope": {
                 "value": round(ang_s, 2), "raw": ang_s, "score": score, 
                 "desc": f"{ang_s:.1f}°", "alias": f"{prefix.upper()} Slope"
             },
-            "ma_slow_slope": {
+            "maSlowSlope": {
                 "value": round(ang_l, 2), "raw": ang_l, "score": 0, 
                 "desc": f"{ang_l:.1f}°", "alias": f"{prefix.upper()} Slow Slope"
             },
             # Legacy keys for safety
-            f"{prefix}_{cfg['l_s']}_slope": {"value": round(ang_s, 2), "score": score},
-            f"{prefix}_{cfg['l_l']}_slope": {"value": round(ang_l, 2), "score": 0}
+            f"{prefix}{cfg['l_s']}Slope": {"value": round(ang_s, 2), "score": score},
+            f"{prefix}{cfg['l_l']}Slope": {"value": round(ang_l, 2), "score": 0}
         }
     return _wrap_calc(_inner, "MA Slopes")
 
 def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = "short_term"):
-    """Returns ma_cross_signal"""
+    """Returns maCrossSignal"""
     cfg = {
         "intraday":    {"l": (20, 50), "t": "EMA", "p": "ema"},
         "short_term":  {"l": (20, 50), "t": "EMA", "p": "ema"},
@@ -655,6 +713,9 @@ def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = 
     prefix = cfg["p"]
 
     def _inner():
+        _Validator.require(df, ["Close"], 
+                          min_rows=max(s_len, l_len) + 2,  # +2 for prev values
+                          indicator=f"ma_cross_{horizon}")
         s_ma = fn(close, length=s_len)
         l_ma = fn(close, length=l_len)
         vals_s = _safe_last_vals(s_ma, 2)
@@ -673,15 +734,15 @@ def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = 
             val, desc = -1, "Bearish Cross"
             
         return {
-            "ma_cross_signal": {"value": val, "score": score, "desc": desc, "alias": f"{prefix.upper()} Cross"},
-            f"{prefix}_{s_len}_{l_len}_cross": {"value": val, "score": score} # Legacy
+            "maCrossSignal": {"value": val, "score": score, "desc": desc, "alias": f"{prefix.upper()} Cross"},
+            f"{prefix}{s_len}{l_len}cross": {"value": val, "score": score} # Legacy
         }
     return _wrap_calc(_inner, "MA Cross")
 
 def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
     """
     Calculates Trend Alignment using Horizon-Specific Physics.
-    Returns: ma_fast, ma_mid, ma_slow, ma_trend_signal
+    Returns: maFast, maMid, maSlow, maTrendSignal
     """
     cfg = {
         "intraday":    {"l": (20, 50, 200), "t": "EMA", "p": "ema"},
@@ -695,7 +756,7 @@ def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
     pre = cfg["p"]
 
     def _inner():
-        _Validator.require(df, ["Close"])
+        _Validator.require(df, ["Close"], min_rows=max(l_s, l_m, l_l), indicator=f"ma_trend_{horizon}")
         
         s_val = _Validator.extract_last(fn(df["Close"], length=l_s), "MA Fast")
         m_val = _Validator.extract_last(fn(df["Close"], length=l_m), "MA Mid")
@@ -710,16 +771,16 @@ def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
             
         return {
             # ✅ STANDARDIZED KEYS
-            "ma_fast": {"value": round(s_val, 2), "score": 0, "desc": f"{pre.upper()}({l_s})", "length": l_s, "type": cfg["t"], "alias": f"{pre.upper()} Fast"},
-            "ma_mid":  {"value": round(m_val, 2), "score": 0, "desc": f"{pre.upper()}({l_m})", "length": l_m, "type": cfg["t"], "alias": f"{pre.upper()} Mid"},
-            "ma_slow": {"value": round(l_val, 2) if l_val else None, "score": 0, "desc": f"{pre.upper()}({l_l})" if l_val else "N/A", "length": l_l, "type": cfg["t"], "alias": f"{pre.upper()} Slow"},
-            "ma_trend_signal": {"value": val, "score": score, "desc": desc, "alias": "MA Trend Alignment"},
+            "maFast": {"value": round(s_val, 2), "score": 0, "desc": f"{pre.upper()}({l_s})", "length": l_s, "type": cfg["t"], "alias": f"{pre.upper()} Fast"},
+            "maMid":  {"value": round(m_val, 2), "score": 0, "desc": f"{pre.upper()}({l_m})", "length": l_m, "type": cfg["t"], "alias": f"{pre.upper()} Mid"},
+            "maSlow": {"value": round(l_val, 2) if l_val else None, "score": 0, "desc": f"{pre.upper()}({l_l})" if l_val else "N/A", "length": l_l, "type": cfg["t"], "alias": f"{pre.upper()} Slow"},
+            "maTrendSignal": {"value": val, "score": score, "desc": desc, "alias": "MA Trend Alignment"},
             
             # Legacy
-            f"{pre}_{l_s}": {"value": round(s_val, 2), "score": 0},
-            f"{pre}_{l_m}": {"value": round(m_val, 2), "score": 0},
-            f"{pre}_{l_l}": {"value": round(l_val, 2) if l_val else None, "score": 0},
-            f"{pre}_{l_s}_{l_m}_{l_l}_trend": {"value": val, "score": score}
+            f"{pre}{l_s}": {"value": round(s_val, 2), "score": 0},
+            f"{pre}{l_m}": {"value": round(m_val, 2), "score": 0},
+            f"{pre}{l_l}": {"value": round(l_val, 2) if l_val else None, "score": 0},
+            f"{pre}{l_s}{l_m}{l_l}Trend": {"value": val, "score": score}
         }
     return _wrap_calc(_inner, f"{pre.upper()} Trend")
 
@@ -736,19 +797,19 @@ def compute_pivot_points(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         r3, s3 = pp + 1.000 * rng, pp - 1.000 * rng
         
         return {
-            "pivot_point":  {"value": round(pp, 2), "score": 0},
-            "resistance_1": {"value": round(r1, 2), "score": 0},
-            "resistance_2": {"value": round(r2, 2), "score": 0},
-            "resistance_3": {"value": round(r3, 2), "score": 0},
-            "support_1":    {"value": round(s1, 2), "score": 0},
-            "support_2":    {"value": round(s2, 2), "score": 0},
-            "support_3":    {"value": round(s3, 2), "score": 0},
+            "pivotPoint":  {"value": round(pp, 2), "score": 0},
+            "resistance1": {"value": round(r1, 2), "score": 0},
+            "resistance2": {"value": round(r2, 2), "score": 0},
+            "resistance3": {"value": round(r3, 2), "score": 0},
+            "support1":    {"value": round(s1, 2), "score": 0},
+            "support2":    {"value": round(s2, 2), "score": 0},
+            "support3":    {"value": round(s3, 2), "score": 0},
         }
     return _wrap_calc(_inner, "Pivot Levels")
 
 def compute_keltner_squeeze(df: pd.DataFrame, bb_len=20, kc_len=20) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close"])
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=max(bb_len, kc_len), indicator="keltner")
         # BB
         bb = ta.bbands(df["Close"], length=bb_len, std=2.0)
         u_col = next(c for c in bb.columns if "u" in c.lower())
@@ -770,9 +831,9 @@ def compute_keltner_squeeze(df: pd.DataFrame, bb_len=20, kc_len=20) -> Dict[str,
 
         sqz = (bb_u < kc_u_val) and (bb_l > kc_l_val)
         return {
-            "ttm_squeeze": {"value": "Squeeze On" if sqz else "Off", "score": 10 if sqz else 5, "desc": f"ttm_squeeze -> {'On' if sqz else 'Off'}"},
-            "kc_upper": {"value": round(kc_u_val, 2), "score": 0, "desc": f"kc_upper -> {kc_u_val:.2f}"},
-            "kc_lower": {"value": round(kc_l_val, 2), "score": 0, "desc": f"kc_lower -> {kc_l_val:.2f}"}
+            "ttmSqueeze": {"value": "Squeeze On" if sqz else "Off", "score": 10 if sqz else 5, "desc": f"ttmSqueeze -> {'On' if sqz else 'Off'}"},
+            "kcUpper": {"value": round(kc_u_val, 2), "score": 0, "desc": f"kcUpper -> {kc_u_val:.2f}"},
+            "kcLower": {"value": round(kc_l_val, 2), "score": 0, "desc": f"kcLower -> {kc_l_val:.2f}"}
         }
     return _wrap_calc(_inner, "TTM Squeeze")
 
@@ -824,19 +885,20 @@ def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]
             sig, score = "Mild Bearish", 3
         
         return {
-            "ichi_cloud": {"value": sig, "score": score, "desc": f"Cloud: {sig}"},
-            "ichi_span_a": {"value": round(sa, 2), "score": 0},
-            "ichi_span_b": {"value": round(sb, 2), "score": 0},
-            "ichi_tenkan": {"value": round(tk, 2), "score": 0, "desc": "Conversion Line"},
-            "ichi_kijun":  {"value": round(kj, 2), "score": 0, "desc": "Base Line"},
+            "ichiCloud": {"value": sig, "score": score, "desc": f"Cloud: {sig}"},
+            "ichiSpanA": {"value": round(sa, 2), "score": 0},
+            "ichiSpanB": {"value": round(sb, 2), "score": 0},
+            "ichiTenkan": {"value": round(tk, 2), "score": 0, "desc": "Conversion Line"},
+            "ichiKijun":  {"value": round(kj, 2), "score": 0, "desc": "Base Line"},
         }
     return _wrap_calc(_inner, "Ichimoku")
 
 def compute_nifty_trend_score(benchmark_df: pd.DataFrame):
     def _inner():
-        if benchmark_df is None or benchmark_df.empty: return {"nifty_trend_score": {"value": None, "score": None}}
+        if benchmark_df is None or benchmark_df.empty: return {"niftyTrendScore": {"value": None, "score": None}}
+        _Validator.require(benchmark_df, ["Close"], min_rows=200, indicator="nifty_trend")
         close = benchmark_df["Close"].dropna()
-        if len(close) < 20: return {"nifty_trend_score": {"value": None, "score": None}}
+        if len(close) < 20: return {"niftyTrendScore": {"value": None, "score": None}}
         
         cur = close.iloc[-1]
         ema50 = safe_float(ta.ema(close, 50).iloc[-1])
@@ -852,41 +914,50 @@ def compute_nifty_trend_score(benchmark_df: pd.DataFrame):
             if cur > ema50: sig, score = "Uptrend (Weak)", 7
             else: sig, score = "Downtrend", 3
         else:
-            return {"nifty_trend_score": {"value": None, "score": None}}
+            return {"niftyTrendScore": {"value": None, "score": None}}
             
-        return {"nifty_trend_score": {"value": round(diff, 2), "score": score, "desc": sig}}
+        return {"niftyTrendScore": {"value": round(diff, 2), "score": score, "desc": sig}}
     return _wrap_calc(_inner, "NIFTY Trend")
 
 def compute_relative_strength(symbol, df, benchmark_df, horizon="short_term"):
+    """
+    Calculates Alpha vs Nifty.
+    Horizon-Aware Lookbacks:- Intraday: 20 candles (5 hours) - Short Term: 20 days (1 month) - Long Term/Multibagger: 52 bars (1 year)
+    """
     def _inner():
-        _Validator.require(df, ["Close"])
-        _Validator.require(benchmark_df, ["Close"])
+        lookback = {"intraday": 20, "short_term": 20, "long_term": 52,
+                   "multibagger": 52}.get(horizon, 20)
         
-        lookback = {"intraday": 20, "long_term": 52}.get(horizon, 20)
+        _Validator.require(df, ["Close"], min_rows=lookback, 
+                          indicator=f"rel_strength_{horizon}")
+        _Validator.require(benchmark_df, ["Close"], min_rows=lookback, 
+                          indicator=f"benchmark_{horizon}")
         
+        # 1. Map lookback to horizon
+        lookback = {"intraday": 20, "short_term": 20, "long_term": 52,"multibagger": 52}.get(horizon, 20)
+        
+        if len(df) < lookback or len(benchmark_df) < lookback:
+            logger.debug(f"Not enough data for Relative Strength: {len(df)} vs {lookback} required")
+            return {}
+
         s_now, s_old = df["Close"].iloc[-1], df["Close"].iloc[-lookback]
         b_now, b_old = benchmark_df["Close"].iloc[-1], benchmark_df["Close"].iloc[-lookback]
         
-        s_ret = (s_now/s_old - 1) * 100
-        b_ret = (b_now/b_old - 1) * 100
-        rs = s_ret - b_ret
+        # 2. Calculate percentage returns
+        s_ret = (s_now / s_old - 1) * 100
+        b_ret = (b_now / b_old - 1) * 100
+        rs = s_ret - b_ret # Alpha
         
-        score = 10 if rs > 0 else 0
-        return {"rel_strength_nifty": {"value": round(rs, 2), "score": score, "desc": f"Alpha {rs:.1f}%"}}
+        return {
+            "relStrengthNifty": {"raw": round(rs, 2),"value": round(rs, 2),"alias": "Relative Strength (Alpha)","desc": f"{horizon.title()} Alpha: {rs:.1f}%"}}
     return _wrap_calc(_inner, "RS vs Nifty")
 
 def compute_entry_price(df, price):
     def _inner():
         mid = ta.sma(df["Close"], 20).iloc[-1]
         confirm = mid * 1.005
-        return {"entry_confirm": {"value": round(confirm, 2), "score": 10 if price > confirm else 5}}
+        return {"entryConfirm": {"value": round(confirm, 2), "score": 10 if price > confirm else 5}}
     return _wrap_calc(_inner, "Entry")
-
-def compute_atr_sl(df, indicators, high, low, close, price):
-    def _inner():
-        atr = ta.atr(high, low, close, 14).iloc[-1]
-        return {"sl_2x_atr": {"value": round(price - 2*atr, 2), "score": 0}}
-    return _wrap_calc(_inner, "SL")
 
 def compute_gap_percent(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
@@ -902,11 +973,12 @@ def compute_gap_percent(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         elif gap < -0.5: score, desc = 3, "Moderate Gap Down"
         else: score, desc = 5, "No Significant Gap"
 
-        return {"gap_percent": {"value": round(gap, 2), "score": score, "desc": f"gap_percent -> {gap:.2f}"}}
+        return {"gapPercent": {"value": round(gap, 2), "score": score, "desc": f"gapPercent -> {gap:.2f}"}}
     return _wrap_calc(_inner, "Gap")
 
 def compute_psar(df: pd.DataFrame):
     def _inner():
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=20, indicator="psar")
         psar = ta.psar(df["High"], df["Low"], df["Close"])
         r_col = next((c for c in psar.columns if "r" in c.lower()), None)
         val_col = next((c for c in psar.columns if c != r_col), None)
@@ -919,58 +991,66 @@ def compute_psar(df: pd.DataFrame):
         if pd.isna(level): level = df["Close"].iloc[-1] 
         
         return {
-            "psar_trend": {"value": sig, "score": score, "desc": f"psar_trend -> {sig}"},
-            "psar_level": {"value": round(level, 2), "score": 0, "desc": f"psar_level -> {level:.2f}"}
+            "psarTrend": {"value": sig, "score": score, "desc": f"psarTrend -> {sig}"},
+            "psarLevel": {"value": round(level, 2), "score": 0, "desc": f"psarLevel -> {level:.2f}"}
         }
     return _wrap_calc(_inner, "PSAR")
 
 def compute_true_range(df):
     def _inner():
+        _Validator.require(df, ["High", "Low", "Close"], 
+                          min_rows=2, indicator="true_range")
         tr = ta.true_range(df["High"], df["Low"], df["Close"]).iloc[-1]
         pct = (tr / df["Close"].iloc[-1]) * 100
-        return {"true_range": {"value": round(tr, 2), "score": 0}, "true_range_pct": {"value": round(pct, 2), "score": 5}}
+        return {"trueRange": {"value": round(tr, 2), "score": 0}, "trueRangePct": {"value": round(pct, 2), "score": 5}}
     return _wrap_calc(_inner, "TR")
 
 def compute_historical_volatility(df, periods=(10, 20)):
     def _inner():
+        max_period = max(periods)
+        _Validator.require(df, ["Close"], min_rows=max_period, 
+                          indicator="historical_vol")
         ret = np.log(df["Close"] / df["Close"].shift(1))
         res = {}
         for p in periods:
             hv = ret.tail(p).std() * np.sqrt(252) * 100
-            res[f"hv_{p}"] = {"value": round(hv, 2), "score": 10 if hv < 20 else 5}
+            res[f"hv{p}"] = {"value": round(hv, 2), "score": 10 if hv < 20 else 5}
         return res
     return _wrap_calc(_inner, "HV")
 
 def compute_short_ma_cross(df):
     def _inner():
+        _Validator.require(df, ["Close"], min_rows=20, indicator="short_ma_cross")
         e5 = ta.ema(df["Close"], 5).iloc[-1]
         e20 = ta.ema(df["Close"], 20).iloc[-1]
-        return {"short_ma_cross": {"value": "Bull" if e5 > e20 else "Bear", "score": 10 if e5 > e20 else 0}}
+        return {"shortMaCross": {"value": "Bull" if e5 > e20 else "Bear", "score": 10 if e5 > e20 else 0}}
     return _wrap_calc(_inner, "Short MA Cross")
 
 def compute_vol_trend(df):
     def _inner():
+        _Validator.require(df, ["Volume"], min_rows=50, indicator="vol_trend")
         v = df["Volume"]
         trend = "Rising" if v.iloc[-1] > v.tail(50).mean() * 1.2 else "Neutral"
-        return {"vol_trend": {"value": trend, "score": 10 if trend == "Rising" else 5}}
+        return {"volTrend": {"value": trend, "score": 10 if trend == "Rising" else 5}}
     return _wrap_calc(_inner, "Vol Trend")
 
 def compute_reg_slope(df):
     def _inner():
+        _Validator.require(df, ["Close"], min_rows=20, indicator="regSlope")
         y = df["Close"].tail(20).values
         x = np.arange(len(y))
         slope = degrees(atan(np.polyfit(x, y, 1)[0]))
-        return {"reg_slope": {"value": round(slope, 2), "score": 10 if slope > 2 else 0}}
+        return {"regSlope": {"value": round(slope, 2), "score": 10 if slope > 2 else 0}}
     return _wrap_calc(_inner, "Reg Slope")
 
-def compute_wick_rejection(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+def compute_wick_rejection(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict[str, Any]]:
     """
     Calculates the 'Upper Wick Ratio' to detect Bull Traps.
     Ratio = Upper Wick / Candle Body.
     > 2.0 implies the market rejected higher prices (Shooting Star-like).
     """
     def _inner():
-        _Validator.require(df, ["Open", "High", "Close", "Low"])
+        _Validator.require(df, ["Open", "High", "Close", "Low"], min_rows=2, indicator="wick_rejection")
         
         open_p = df["Open"].iloc[-1]
         close_p = df["Close"].iloc[-1]
@@ -992,7 +1072,7 @@ def compute_wick_rejection(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         else: sig, score = "Solid Close", 10
         
         return {
-            "wick_rejection": {
+            "wickRejection": {
                 "value": safe_float(round(ratio, 2)), 
                 "score": score, 
                 "desc": f"Wick/Body Ratio: {ratio:.1f} ({sig})"
@@ -1002,85 +1082,186 @@ def compute_wick_rejection(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
 
 def compute_cmf(df: pd.DataFrame, length: int = 20):
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close", "Volume"])
+        _Validator.require(df, ["High", "Low", "Close", "Volume"],min_rows=length, indicator="cmf")
         cmf = ta.cmf(df["High"], df["Low"], df["Close"], df["Volume"], length=length)
         val = _Validator.extract_last(cmf, "CMF")
         if val is None: return {}
         
         desc = "Bullish" if val > 0.05 else "Bearish" if val < -0.05 else "Neutral"
         score = 10 if val > 0.1 else 7 if val > 0 else 3
-        return {"cmf_signal": {"value": round(val, 3), "score": score, "desc": desc}}
+        return {"cmfSignal": {"value": round(val, 3), "score": score, "desc": desc}}
     return _wrap_calc(_inner, "CMF")
 
-def compute_technical_score(indicators: Dict[str, Dict[str, Any]], weights=None) -> int:
-    if not indicators: return 0
-    weights = dict(weights or TECHNICAL_WEIGHTS)
-    score, weight_sum = 0.0, 0.0
+def compute_52w_position(df: pd.DataFrame, horizon: str = "short_term") -> Dict[str, Dict[str, Any]]:
+    """
+    Calculates distance from 52-week high.
+    Horizon-Aware: Uses 252 days for Short-Term/Daily and 52 weeks for Long-Term/Weekly.
+    """
+    def _inner():
+        # 1. Determine lookback based on horizon
+        # 252 days for daily (Short Term), 52 weeks for weekly (Long Term)
+        lookback = 52 if horizon in ["long_term", "multibagger"] else 252
+        
+        _Validator.require(df, ["High", "Close"], min_rows=lookback)
+        
+        current_price = df["Close"].iloc[-1]
+        high_period = df["High"].tail(lookback).max()
+        
+        if not high_period: return {}
+        
+        # Position as % of Period High (e.g., 98.5 means 1.5% below high)
+        pos_pct = (current_price / high_period) * 100
+        
+        return {
+            "position52w": {
+                "raw": round(pos_pct, 2),
+                "value": round(pos_pct, 2),
+                "alias": "52W Position %",
+                "desc": f"{pos_pct:.1f}% of 52W High",
+                "source": "technical"
+            }
+        }
+    return _wrap_calc(_inner, "52W Position")
+
+def compute_composite_scores(indicators: Dict, horizon: str = "short_term") -> Dict:
+    """
+    Compute composite scores using config-based weighted scoring.
+    
+    Uses COMPOSITE_SCORING_CONFIG from technical_score_config.py
+    to calculate trendStrength, momentumStrength, volatilityQuality.
+    """
+    from config.technical_score_config import compute_all_composites
     
     try:
-        adx = indicators.get("adx", {}).get("raw", 0)
-        if adx > 25: weights.update({"macd_cross": 1.5, "rsi": 0.8})
-        elif adx < 20: weights.update({"rsi": 1.2, "stoch_k": 1.2})
-    except: pass
+        composites = compute_all_composites(indicators, horizon)
+        return composites
+    except Exception as e:
+        logger.error(f"Composite scoring failed for {horizon}: {e}")
+        
+        # Fallback to legacy averaging (temporary safety net)
+        return _compute_composites_legacy(indicators, horizon)
 
-    for k, w in weights.items():
-        item = indicators.get(k, {})
-        s = item.get("score")
-        if s is not None:
-            score += s * w
-            weight_sum += 10 * w
-            
-    return round(score / weight_sum * 100, 1) if weight_sum > 0 else 0
+def _compute_composites_legacy(indicators: Dict, horizon: str = "short_term") -> Dict:
+    """
+    Compute composite scores by averaging existing metric scores.
+    NO custom thresholds needed - reuses scores from compute_rsi(), compute_adx(), etc.
+    """
+    def _avg_scores(metric_keys: list) -> float:
+        """Average score from existing indicators."""
+        scores = []
+        for key in metric_keys:
+            metric = indicators.get(key, {})
+            score = metric.get("score")
+            if score is not None:
+                scores.append(float(score))
+        return round(sum(scores) / len(scores), 2) if scores else 0.0
+    
+    # Horizon-specific metric lists (matches your HORIZON_METRIC_INCLUSION)
+    trend_metrics = {
+        "intraday": ["maFastSlope", "maTrendSignal", "supertrendSignal"],
+        "short_term": ["adx", "maFastSlope", "maTrendSignal", "supertrendSignal"],
+        "long_term": ["adx", "maTrendSignal"],
+        "multibagger": ["maTrendSignal"]
+    }
+    
+    momentum_metrics = {
+        "intraday": ["rsi", "rsislope", "macd", "stochK"],
+        "short_term": ["rsi", "rsislope", "macd", "stochK"],
+        "long_term": ["rsi", "macd"],
+        "multibagger": ["rsi"]
+    }
+    
+    volatility_metrics = {
+        "intraday": ["atrPct", "bbWidth"],
+        "short_term": ["atrPct", "bbWidth"],
+        "long_term": ["atrPct"],
+        "multibagger": []  # No volatility for multibagger
+    }
+    
+    # Get metrics for this horizon
+    trend_keys = trend_metrics.get(horizon, trend_metrics["short_term"])
+    momentum_keys = momentum_metrics.get(horizon, momentum_metrics["short_term"])
+    volatility_keys = volatility_metrics.get(horizon, volatility_metrics["short_term"])
+    
+    # Compute composites
+    trend_score = _avg_scores(trend_keys)
+    momentum_score = _avg_scores(momentum_keys)
+    volatility_score = _avg_scores(volatility_keys)
+    
+    return {
+        "trendStrength": {
+            "value": trend_score,
+            "score": trend_score,
+            "desc": f"Trend Composite",
+            "alias": "Trend Strength",
+            "source": "composite"
+        },
+        "momentumStrength": {
+            "value": momentum_score,
+            "score": momentum_score,
+            "desc": f"Momentum Composite",
+            "alias": "Momentum Strength",
+            "source": "composite"
+        },
+        "volatilityQuality": {
+            "value": volatility_score,
+            "score": volatility_score,
+            "desc": f"Volatility Composite",
+            "alias": "Volatility Quality",
+            "source": "composite"
+        }
+    }
 
 INDICATOR_METRIC_MAP = {
     "rsi": {"func": compute_rsi, "horizon": "default"},
     "mfi": {"func": compute_mfi, "horizon": "default"},
     "adx": {"func": compute_adx, "horizon": "default"},
     "cci": {"func": compute_cci, "horizon": "short_term"},
-    "stoch_k": {"func": compute_stochastic, "horizon": "default"},
+    "stochK": {"func": compute_stochastic, "horizon": "default"},
     "macd": {"func": compute_macd, "horizon": "default"},
     "vwap": {"func": compute_vwap, "horizon": "intraday"},
-    "bb_high": {"func": compute_bollinger_bands, "horizon": "default"},
+    "bbHigh": {"func": compute_bollinger_bands, "horizon": "default"},
     "rvol": {"func": compute_rvol, "horizon": "default"},
-    "obv_div": {"func": compute_obv_divergence, "horizon": "default"},
-    # "atr_14": {"func": compute_atr, "horizon": "default"},
-    # "sl_2x_atr": {"func": compute_atr_sl, "horizon": "default"},
-    "atr_dynamic": {"func": compute_dynamic_atr, "horizon": "default"},
-    "sl_atr_dynamic": {"func": compute_dynamic_sl, "horizon": "default"},
+    "obvDiv": {"func": compute_obv_divergence, "horizon": "default"},
+    # "atr14": {"func": compute_atr, "horizon": "default"},
+    # "sl2xAtr": {"func": compute_atr_sl, "horizon": "default"},
+    "atrDynamic": {"func": compute_dynamic_atr, "horizon": "default"},
+    "slAtrDynamic": {"func": compute_dynamic_sl, "horizon": "default"},
 
-    "supertrend_signal": {"func": compute_supertrend, "horizon": "short_term"},
-    "psar_trend": {"func": compute_psar, "horizon": "short_term"},
-    "ichi_cloud": {"func": compute_ichimoku, "horizon": "long_term"},
-    "price_action": {"func": compute_price_action, "horizon": "default"},
-    "entry_confirm": {"func": compute_entry_price, "horizon": "default"},
-    "nifty_trend_score": {"func": compute_nifty_trend_score, "horizon": "long_term"},
-    "gap_percent": {"func": compute_gap_percent, "horizon": "long_term"},
-    "rel_strength_nifty": {"func": compute_relative_strength, "horizon": "long_term"},
+    "supertrendSignal": {"func": compute_supertrend, "horizon": "short_term"},
+    "psarTrend": {"func": compute_psar, "horizon": "short_term"},
+    "ichiCloud": {"func": compute_ichimoku, "horizon": "long_term"},
+    "priceAction": {"func": compute_price_action, "horizon": "default"},
+    "entryConfirm": {"func": compute_entry_price, "horizon": "default"},
+    "niftyTrendScore": {"func": compute_nifty_trend_score, "horizon": "long_term"},
+    "gapPercent": {"func": compute_gap_percent, "horizon": "long_term"},
+    "relStrengthNifty": {"func": compute_relative_strength, "horizon": "default"},
     # Consolidated Trend + Components
 
-    "ma_trend_signal": {"func": compute_dynamic_ma_trend, "horizon": "default"},
-    "ma_cross_signal": {"func": compute_dynamic_ma_cross, "horizon": "default"},
-    "price_vs_primary_trend_pct": {"func": compute_price_vs_base_ma, "horizon": "default"},
-    "ma_fast_slope": {"func": compute_ema_slope, "horizon": "default"},
+    "maTrendSignal": {"func": compute_dynamic_ma_trend, "horizon": "default"},
+    "maCrossSignal": {"func": compute_dynamic_ma_cross, "horizon": "default"},
+    "priceVsPrimaryTrendPct": {"func": compute_price_vs_base_ma, "horizon": "default"},
+    "maFastSlope": {"func": compute_ema_slope, "horizon": "default"},
 
-    # "ma_trend_setup": {"func": compute_dynamic_ma_trend, "horizon": "default"},
-    # "ma_cross_setup": {"func": compute_dynamic_ma_cross, "horizon": "short_term"},
-    # "price_vs_200dma_pct": {"func": compute_200dma, "horizon": "default"},
+    # "maTrendSetup": {"func": compute_dynamic_ma_trend, "horizon": "default"},
+    # "maCrossSetup": {"func": compute_dynamic_ma_cross, "horizon": "short_term"},
+    # "priceVsMaSlowPct": {"func": compute_200dma, "horizon": "default"},
     # "ma_slopes": {"func": compute_ema_slope, "horizon": "default"},
 
-    "pivot_point": {"func": compute_pivot_points, "horizon": "short_term"},
-    "ttm_squeeze": {"func": compute_keltner_squeeze, "horizon": "short_term"},
-    "true_range": {"func": compute_true_range, "horizon": "default"},
-    "hv_10": {"func": compute_historical_volatility, "horizon": "short_term"},
-    "short_ma_cross": {"func": compute_short_ma_cross, "horizon": "default"},
-    "vol_trend": {"func": compute_vol_trend, "horizon": "default"},
-    "reg_slope": {"func": compute_reg_slope, "horizon": "default"},
-    "vol_spike_ratio": {"func": compute_volume_spike, "horizon": "default"},
+    "pivotPoint": {"func": compute_pivot_points, "horizon": "short_term"},
+    "ttmSqueeze": {"func": compute_keltner_squeeze, "horizon": "short_term"},
+    "trueRange": {"func": compute_true_range, "horizon": "default"},
+    "hv10": {"func": compute_historical_volatility, "horizon": "short_term"},
+    "shortMaCross": {"func": compute_short_ma_cross, "horizon": "default"},
+    "volTrend": {"func": compute_vol_trend, "horizon": "default"},
+    "regSlope": {"func": compute_reg_slope, "horizon": "default"},
+    "volSpikeRatio": {"func": compute_volume_spike, "horizon": "default"},
     "vpt": {"func": compute_vpt, "horizon": "default"},
-    "cmf_signal": {"func": compute_cmf, "horizon": "short_term"},
-    "vwap_bias": {"func": compute_vwap, "horizon": "intraday"},
-    "bb_percent_b": {"func": compute_bollinger_bands, "horizon": "default"},
-    "wick_rejection": {"func": compute_wick_rejection, "horizon": "default"},
+    "cmfSignal": {"func": compute_cmf, "horizon": "short_term"},
+    "vwapBias": {"func": compute_vwap, "horizon": "intraday"},
+    "bbpercentb": {"func": compute_bollinger_bands, "horizon": "default"},
+    "wickRejection": {"func": compute_wick_rejection, "horizon": "default"},
+    "position52w": {"func": compute_52w_position, "horizon": "default"}
 }
 
 def compute_indicators(
@@ -1105,16 +1286,16 @@ def compute_indicators(
     # 🚨 RESTORED LEGACY DENSITY: Force crucial structure metrics
     # This matches the legacy "calculate everything" approach for completeness
     ALWAYS_CALC = {
-        "macd", "adx", "rsi", "ma_fast_slope", "cmf_signal", # Changed ma_slopes -> ma_fast_slope
-        "obv_div", "price_vs_primary_trend_pct", "gap_percent", "ma_trend_signal", # Changed ma_trend_setup -> ma_trend_signal
-        "supertrend_signal", "psar_trend", "ttm_squeeze", "bb_width", 
-        "bb_percent_b", "vol_spike_ratio", "pivot_point",
-        "ma_cross_signal", # Changed ma_cross_setup -> ma_cross_signal
-        "wick_rejection", "atr_dynamic", "sl_atr_dynamic","ichi_cloud","true_range","hv_10","stoch_k", "stoch_d"
+        "macd", "adx", "rsi", "maFastSlope", "cmfSignal", # Changed ma_slopes -> maFastSlope
+        "obvDiv", "priceVsPrimaryTrendPct", "gapPercent", "maTrendSignal", # Changed maTrendSetup -> maTrendSignal
+        "supertrendSignal", "psarTrend", "ttmSqueeze", "bbWidth", 
+        "bbpercentb", "volSpikeRatio", "pivotPoint",
+        "maCrossSignal", # Changed maCrossSetup -> maCrossSignal
+        "wickRejection", "atrDynamic", "slAtrDynamic","ichiCloud","trueRange","hv10","stochK", "stochD","position52w","relStrengthNifty"
     }
     raw_metrics.update(ALWAYS_CALC)
     
-    PRIORITY = ["rsi", "macd", "ma_trend_signal", "pivot_point"]
+    PRIORITY = ["rsi", "macd", "maTrendSignal", "pivotPoint"]
     ordered = [m for m in PRIORITY if m in raw_metrics] + [m for m in raw_metrics if m not in PRIORITY]
     
     required_horizons = {horizon}
@@ -1145,6 +1326,7 @@ def compute_indicators(
     except: pass
 
     indicators = {}
+    detectedPatterns = {}
     
     if horizon in dfs_cache:
         try:
@@ -1185,13 +1367,13 @@ def compute_indicators(
         if metric in done_flags: continue
         
         # Special Bundle Handling
-        if metric == "ma_trend_signal":
-            done_flags.update(["ma_fast", "ma_mid", "ma_slow", "ma_trend_signal"])
-            done_flags.update(["ema_20", "ema_50", "ema_200", "wma_10", "wma_40", "wma_50", "mma_6", "mma_12"])
+        if metric == "maTrendSignal":
+            done_flags.update(["maFast", "maMid", "maSlow", "maTrendSignal"])
+            done_flags.update(["ema20", "ema50", "ema200", "wma10", "wma40", "wma50", "mma6", "mma12"])
             
-        elif metric == "ma_fast_slope":
-            done_flags.update(["ma_fast_slope", "ma_slow_slope"])
-            done_flags.update(["ema_20_slope", "ema_50_slope", "wma_50_slope", "mma_12_slope"])
+        elif metric == "maFastSlope":
+            done_flags.update(["maFastSlope", "maSlowSlope"])
+            done_flags.update(["ema20Slope", "ema50Slope", "wma50Slope", "mma12Slope"])
 
         fn = meta["func"]
         h_req = meta.get("horizon", "default")
@@ -1221,6 +1403,44 @@ def compute_indicators(
         except Exception as e:
             logger.debug(f"[{symbol}] Metric {metric} failed: {e}")
 
+    # --- Derived Metrics Calculation ---
+    try:
+        # 1. DI Spread
+        di_p = indicators.get("diPlus", {}).get("value")
+        di_m = indicators.get("diMinus", {}).get("value")
+        if di_p is not None and di_m is not None:
+            indicators["diSpread"] = {"value": round(di_p - di_m, 2), "score": 0}
+
+        # 2. HV Trend
+        hv10 = indicators.get("hv10", {}).get("value")
+        hv20 = indicators.get("hv20", {}).get("value")
+        if hv10 and hv20:
+            hv_val = "declining" if hv10 < hv20 else "rising" if hv10 > (hv20 * 1.05) else "stable"
+            indicators["hvTrend"] = {"value": hv_val, "score": 0}
+
+        # 3. True Range Consistency
+        tr = indicators.get("trueRange", {}).get("value")
+        atr_pct = indicators.get("atrPct", {}).get("value")
+        if tr and atr_pct and atr_pct > 0:
+            tr_ratio = tr / atr_pct
+            indicators["trueRangeConsistency"] = {"value": round(tr_ratio, 3), "score": 0}
+        
+        # 4. slDistance
+        current_price = indicators.get('price', {}).get('value')
+        sl_price = indicators.get('slAtrDynamic', {}).get('value')
+
+        if current_price and sl_price:
+            slDistance = abs(current_price - sl_price) / current_price * 100
+            indicators['slDistance'] = {
+                'value': slDistance,
+                'desc': f'SL Distance: {slDistance:.2f}%',
+                'alias': 'Stop Loss Distance (%)',
+                'source': 'technical',
+                'score': 0
+            }
+
+    except Exception as e:
+        logger.debug(f"Derived metrics calculation failed: {e}")
     try:
         # =========================================================
         # NEW: PATTERN INJECTION
@@ -1234,134 +1454,135 @@ def compute_indicators(
                 # 1. Detect Patterns
                 # This function internally calls 'detect' on all patterns 
                 # AND calls 'merge_pattern_into_indicators' to update the dict.
-                patterns = run_pattern_analysis(df_for_patterns, indicators, horizon=horizon)
-                indicators.update(patterns)
+                detectedPatterns = run_pattern_analysis(df_for_patterns, indicators, horizon=horizon)
+
+                # indicators.update(patterns)
             except Exception as e:
                 logger.error(f"[{symbol}] Pattern detection failed for {horizon}: {e}")
 
         # =========================================================
-        indicators["technical_score"] = {"value": compute_technical_score(indicators), "score": 0}
+        indicators.update(compute_composite_scores(indicators, horizon))
+        # indicators["technicalScore"] = {"value": compute_technical_score(indicators, horizon), "score": 0}
         indicators["Horizon"] = {"value": horizon, "score": 0}
     except: pass
-
-    return indicators
+    return indicators, detectedPatterns
 
 # Legacy Key (Hardcoded),Dynamic Key (Replacement),Why?
 """
 indicators_keys = {
     'intraday': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
-        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
-        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'ema_20', 'ema_50', 'ema_200',
-        'ema_20_50_200_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
-        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'rvol','avg_volume_30Days', 'obv_div',
-        'psar_trend', 'psar_level', 'vol_spike_ratio', 'vol_spike_signal', 'hv_10', 'hv_20',
-        'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid', 'bb_low', 'bb_width',
-        'bb_percent_b', 'gap_percent', 'wick_rejection', 'supertrend_signal', 'supertrend_value',
-        'prev_supertrend', 'ichi_cloud', 'ichi_span_a', 'ichi_span_b', 'ichi_tenkan',
-        'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower', 'adx', 'adx_signal', 'di_plus',
-        'di_minus', 'nifty_trend_score', 'atr_dynamic', 'atr_pct', 'atr_sma_ratio',
-        'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal', 'ema_20_50_cross',
-        'ma_fast_slope', 'ma_slow_slope', 'ema_20_slope', 'ema_50_slope', 'true_range',
-        'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_200ema_pct', 'price_action',
-        'cmf_signal', 'bollinger_squeeze', 'bollinger_squeeze_intraday', 'ichimoku_signals',
-        'ichimoku_signals_intraday', 'golden_cross', 'golden_cross_intraday', 'double_top_bottom',
-        'double_top_bottom_intraday', 'technical_score', 'Horizon'
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'ema20', 'ema50', 'ema200',
+        'ema_20_50_200_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','volume','avg_volume_30Days', 'obvDiv',
+        'psarTrend', 'psarLevel', 'volSpikeRatio', 'volSpikeSignal', 'hv10', 'hv20',
+        'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid', 'bbLow', 'bbWidth',
+        'bbpercentb', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
+        'prev_supertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
+        'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower', 'adx', 'adx_signal', 'diPlus',
+        'diMinus', 'niftyTrendScore', 'atrDynamic', 'atrPct', 'atrSmaRatio',
+        'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal', 'ema20_50Cross',
+        'maFastSlope', 'maSlowSlope', 'ema20Slope', 'ema50Slope', 'trueRange',
+        'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_200ema_pct', 'priceAction',
+        'cmfSignal', 'bollingerSqueeze', 'bollinger_squeeze_intraday', 'ichimokuSignals',
+        'ichimoku_signals_intraday', 'goldenCross', 'golden_cross_intraday', 'doubleTopBottom',
+        'double_top_bottom_intraday', 'technicalScore', 'Horizon','diSpread','hvTrend','trueRangeConsistency','trendStrength','momentumStrength'.'volatilityQuality'
     ],
     'short_term': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
-        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
-        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'ema_20', 'ema_50', 'ema_200',
-        'ema_20_50_200_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
-        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'obv_div', 'rvol','avg_volume_30Days',
-        'psar_trend', 'psar_level', 'hv_10', 'hv_20', 'vol_spike_ratio', 'vol_spike_signal',
-        'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid', 'bb_low', 'bb_width',
-        'bb_percent_b', 'gap_percent', 'wick_rejection', 'supertrend_signal', 'supertrend_value',
-        'prev_supertrend', 'ichi_cloud', 'ichi_span_a', 'ichi_span_b', 'ichi_tenkan',
-        'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower', 'adx', 'adx_signal', 'di_plus',
-        'di_minus', 'nifty_trend_score', 'atr_dynamic', 'atr_pct', 'atr_sma_ratio',
-        'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal', 'ema_20_50_cross',
-        'ma_fast_slope', 'ma_slow_slope', 'ema_20_slope', 'ema_50_slope', 'true_range',
-        'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_200ema_pct', 'price_action',
-        'cmf_signal', 'bollinger_squeeze', 'bollinger_squeeze_short_term', 'minervini_stage2',
-        'minervini_stage2_short_term', 'ichimoku_signals', 'ichimoku_signals_short_term',
-        'technical_score', 'Horizon'
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'ema20', 'ema50', 'ema200',
+        'ema_20_50_200_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'obvDiv', 'rvol','avg_volume_30Days',
+        'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
+        'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid', 'bbLow', 'bbWidth',
+        'bbpercentb', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
+        'prev_supertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
+        'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower', 'adx', 'adx_signal', 'diPlus',
+        'diMinus', 'niftyTrendScore', 'atrDynamic', 'atrPct', 'atrSmaRatio',
+        'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal', 'ema20_50Cross',
+        'maFastSlope', 'maSlowSlope', 'ema20Slope', 'ema50Slope', 'trueRange',
+        'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_200ema_pct', 'priceAction',
+        'cmfSignal', 'bollingerSqueeze', 'bollinger_squeeze_short_term', 'minerviniStage2',
+        'minervini_stage2_short_term', 'ichimokuSignals', 'ichimoku_signals_short_term',
+        'technicalScore', 'Horizon'
     ],
     'long_term': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
-        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
-        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'wma_10', 'wma_40', 'wma_50',
-        'wma_10_40_50_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
-        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'rvol','avg_volume_30Days', 'obv_div',
-        'psar_trend', 'psar_level', 'hv_10', 'hv_20', 'vol_spike_ratio', 'vol_spike_signal',
-        'rel_strength_nifty', 'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid',
-        'bb_low', 'bb_width', 'bb_percent_b', 'gap_percent', 'wick_rejection',
-        'supertrend_signal', 'supertrend_value', 'prev_supertrend', 'ichi_cloud', 'ichi_span_a',
-        'ichi_span_b', 'ichi_tenkan', 'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower',
-        'adx', 'adx_signal', 'di_plus', 'di_minus', 'nifty_trend_score', 'atr_dynamic',
-        'atr_pct', 'atr_sma_ratio', 'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal',
-        'wma_10_40_cross', 'ma_fast_slope', 'ma_slow_slope', 'wma_20_slope', 'wma_50_slope',
-        'true_range', 'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_50wma_pct',
-        'price_action', 'cmf_signal', 'flag_pennant', 'flag_pennant_long_term', 'cup_handle',
-        'cup_handle_long_term', 'ichimoku_signals', 'ichimoku_signals_long_term',
-        'technical_score', 'Horizon'
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'wma10', 'wma40', 'wma50',
+        'wma_10_40_50_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','avg_volume_30Days', 'obvDiv',
+        'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
+        'relStrengthNifty', 'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid',
+        'bbLow', 'bbWidth', 'bbpercentb', 'gapPercent', 'wickRejection',
+        'supertrendSignal', 'supertrendValue', 'prev_supertrend', 'ichiCloud', 'ichiSpanA',
+        'ichiSpanB', 'ichiTenkan', 'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower',
+        'adx', 'adx_signal', 'diPlus', 'diMinus', 'niftyTrendScore', 'atrDynamic',
+        'atrPct', 'atrSmaRatio', 'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal',
+        'wma_10_40_cross', 'maFastSlope', 'maSlowSlope', 'wma_20_slope', 'wma50Slope',
+        'trueRange', 'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_50wma_pct',
+        'priceAction', 'cmfSignal', 'flagPennant', 'flag_pennant_long_term', 'cupHandle',
+        'cup_handle_long_term', 'ichimokuSignals', 'ichimoku_signals_long_term',
+        'technicalScore', 'Horizon'
     ],
     'multibagger': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsi_slope',
-        'macd', 'macd_cross', 'macd_hist_z', 'macd_histogram', 'prev_macd_histogram',
-        'ma_fast', 'ma_mid', 'ma_slow', 'ma_trend_signal', 'mma_6', 'mma_12',
-        'mma_6_12_12_trend', 'pivot_point', 'resistance_1', 'resistance_2', 'resistance_3',
-        'support_1', 'support_2', 'support_3', 'vwap', 'vwap_bias', 'rvol', 'avg_volume_30Days', 'obv_div',
-        'psar_trend', 'psar_level', 'hv_10', 'hv_20', 'vol_spike_ratio', 'vol_spike_signal',
-        'rel_strength_nifty', 'stoch_k', 'stoch_d', 'stoch_cross', 'bb_high', 'bb_mid',
-        'bb_low', 'bb_width', 'bb_percent_b', 'gap_percent', 'wick_rejection',
-        'supertrend_signal', 'supertrend_value', 'prev_supertrend', 'ichi_cloud', 'ichi_span_a',
-        'ichi_span_b', 'ichi_tenkan', 'ichi_kijun', 'ttm_squeeze', 'kc_upper', 'kc_lower',
-        'adx', 'adx_signal', 'di_plus', 'di_minus', 'nifty_trend_score', 'atr_dynamic',
-        'atr_pct', 'atr_sma_ratio', 'sl_atr_dynamic', 'risk_per_share_pct', 'ma_cross_signal',
-        'mma_6_12_cross', 'ma_fast_slope', 'ma_slow_slope', 'mma_20_slope', 'mma_50_slope',
-        'true_range', 'true_range_pct', 'price_vs_primary_trend_pct', 'price_vs_12mma_pct',
-        'price_action', 'cmf_signal', 'ichimoku_signals', 'ichimoku_signals_multibagger',
-        'technical_score', 'Horizon'
+        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'mma6', 'mma12',
+        'mma_6_12_12_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol', 'avg_volume_30Days', 'obvDiv',
+        'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
+        'relStrengthNifty', 'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid',
+        'bbLow', 'bbWidth', 'bbpercentb', 'gapPercent', 'wickRejection',
+        'supertrendSignal', 'supertrendValue', 'prev_supertrend', 'ichiCloud', 'ichiSpanA',
+        'ichiSpanB', 'ichiTenkan', 'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower',
+        'adx', 'adx_signal', 'diPlus', 'diMinus', 'niftyTrendScore', 'atrDynamic',
+        'atrPct', 'atrSmaRatio', 'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal',
+        'mma_6_12_cross', 'maFastSlope', 'maSlowSlope', 'mma_20_slope', 'mma_50_slope',
+        'trueRange', 'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_12mma_pct',
+        'priceAction', 'cmfSignal', 'ichimokuSignals', 'ichimoku_signals_multibagger',
+        'technicalScore', 'Horizon'
     ]
 }
 # Generic to Legacy mapping with descriptions
 generic_to_legacy = {
     # Moving Average System
-    'ma_fast_slope': {
-        'legacy_keys': ['ema_20_slope', 'wma_20_slope', 'mma_20_slope'],
+    'maFastSlope': {
+        'legacy_keys': ['ema20Slope', 'wma_20_slope', 'mma_20_slope'],
         'description': 'The velocity/angle of the fast moving average (short-term trend momentum)',
         'horizons': {
-            'intraday': 'ema_20_slope',
-            'short_term': 'ema_20_slope', 
+            'intraday': 'ema20Slope',
+            'short_term': 'ema20Slope', 
             'long_term': 'wma_20_slope',
             'multibagger': 'mma_20_slope'
         }
     },
     
-    'ma_slow_slope': {
-        'legacy_keys': ['ema_50_slope', 'wma_50_slope', 'mma_50_slope'],
+    'maSlowSlope': {
+        'legacy_keys': ['ema50Slope', 'wma50Slope', 'mma_50_slope'],
         'description': 'The velocity/angle of the slow moving average (long-term trend momentum)',
         'horizons': {
-            'intraday': 'ema_50_slope',
-            'short_term': 'ema_50_slope',
-            'long_term': 'wma_50_slope',
+            'intraday': 'ema50Slope',
+            'short_term': 'ema50Slope',
+            'long_term': 'wma50Slope',
             'multibagger': 'mma_50_slope'
         }
     },
     
-    'ma_cross_signal': {
-        'legacy_keys': ['ema_20_50_cross', 'wma_10_40_cross', 'mma_6_12_cross'],
+    'maCrossSignal': {
+        'legacy_keys': ['ema20_50Cross', 'wma_10_40_cross', 'mma_6_12_cross'],
         'description': 'Fast/Slow MA crossover signal (1=bullish, -1=bearish, 0=neutral)',
         'horizons': {
-            'intraday': 'ema_20_50_cross',
-            'short_term': 'ema_20_50_cross',
+            'intraday': 'ema20_50Cross',
+            'short_term': 'ema20_50Cross',
             'long_term': 'wma_10_40_cross',
             'multibagger': 'mma_6_12_cross'
         }
     },
     
-    'ma_trend_signal': {
+    'maTrendSignal': {
         'legacy_keys': ['ema_20_50_200_trend', 'wma_10_40_50_trend', 'mma_6_12_12_trend'],
         'description': 'Overall MA trend alignment (1=strong uptrend, -1=strong downtrend)',
         'horizons': {
@@ -1372,7 +1593,7 @@ generic_to_legacy = {
         }
     },
     
-    'price_vs_primary_trend_pct': {
+    'priceVsPrimaryTrendPct': {
         'legacy_keys': ['price_vs_200ema_pct', 'price_vs_50wma_pct', 'price_vs_12mma_pct'],
         'description': 'Price distance from primary trend MA (% above/below)',
         'horizons': {
@@ -1383,41 +1604,41 @@ generic_to_legacy = {
         }
     },
     
-    'ma_fast': {
-        'legacy_keys': ['ema_20', 'wma_10', 'mma_6'],
+    'maFast': {
+        'legacy_keys': ['ema20', 'wma10', 'mma6'],
         'description': 'Fast moving average value',
         'horizons': {
-            'intraday': 'ema_20',
-            'short_term': 'ema_20',
-            'long_term': 'wma_10',
-            'multibagger': 'mma_6'
+            'intraday': 'ema20',
+            'short_term': 'ema20',
+            'long_term': 'wma10',
+            'multibagger': 'mma6'
         }
     },
     
-    'ma_mid': {
-        'legacy_keys': ['ema_50', 'wma_40', 'mma_12'],
+    'maMid': {
+        'legacy_keys': ['ema50', 'wma40', 'mma12'],
         'description': 'Medium moving average value',
         'horizons': {
-            'intraday': 'ema_50',
-            'short_term': 'ema_50',
-            'long_term': 'wma_40',
-            'multibagger': 'mma_12'
+            'intraday': 'ema50',
+            'short_term': 'ema50',
+            'long_term': 'wma40',
+            'multibagger': 'mma12'
         }
     },
     
-    'ma_slow': {
-        'legacy_keys': ['ema_200', 'wma_50', 'mma_12'],
+    'maSlow': {
+        'legacy_keys': ['ema200', 'wma50', 'mma12'],
         'description': 'Slow/primary trend moving average value',
         'horizons': {
-            'intraday': 'ema_200',
-            'short_term': 'ema_200',
-            'long_term': 'wma_50',
-            'multibagger': 'mma_12'
+            'intraday': 'ema200',
+            'short_term': 'ema200',
+            'long_term': 'wma50',
+            'multibagger': 'mma12'
         }
     },
     
     # Pattern Recognition
-    'bollinger_squeeze': {
+    'bollingerSqueeze': {
         'legacy_keys': ['bollinger_squeeze_intraday', 'bollinger_squeeze_short_term'],
         'description': 'Volatility squeeze pattern (consolidation before breakout)',
         'horizons': {
@@ -1426,7 +1647,7 @@ generic_to_legacy = {
         }
     },
     
-    'ichimoku_signals': {
+    'ichimokuSignals': {
         'legacy_keys': ['ichimoku_signals_intraday', 'ichimoku_signals_short_term', 
                        'ichimoku_signals_long_term', 'ichimoku_signals_multibagger'],
         'description': 'Ichimoku cloud signals (price vs cloud position)',
@@ -1439,8 +1660,8 @@ generic_to_legacy = {
     },
     
     # Fundamentals
-    'profit_growth_3y': {
-        'legacy_keys': ['eps_growth_3y'],
+    'profitGrowth3y': {
+        'legacy_keys': ['epsGrowth3y'],
         'description': '3-year profit/EPS CAGR growth rate',
         'note': 'Both represent the same metric'
     }
@@ -1449,39 +1670,39 @@ generic_to_legacy = {
 # Duplicate mappings: Keys with identical values across horizons
 duplicate_mappings = {
     # Moving Average Slopes
-    'ma_fast_slope': ['ema_20_slope', 'wma_20_slope', 'mma_20_slope'],
-    'ma_slow_slope': ['ema_50_slope', 'wma_50_slope', 'mma_50_slope'],
+    'maFastSlope': ['ema20Slope', 'wma_20_slope', 'mma_20_slope'],
+    'maSlowSlope': ['ema50Slope', 'wma50Slope', 'mma_50_slope'],
     
     # Moving Average Crossovers
-    'ma_cross_signal': ['ema_20_50_cross', 'wma_10_40_cross', 'mma_6_12_cross'],
+    'maCrossSignal': ['ema20_50Cross', 'wma_10_40_cross', 'mma_6_12_cross'],
     
     # Moving Average Trend Signals
-    'ma_trend_signal': ['ema_20_50_200_trend', 'wma_10_40_50_trend', 'mma_6_12_12_trend'],
+    'maTrendSignal': ['ema_20_50_200_trend', 'wma_10_40_50_trend', 'mma_6_12_12_trend'],
     
     # Price vs Primary Trend
-    'price_vs_primary_trend_pct': ['price_vs_200ema_pct', 'price_vs_50wma_pct', 'price_vs_12mma_pct'],
+    'priceVsPrimaryTrendPct': ['price_vs_200ema_pct', 'price_vs_50wma_pct', 'price_vs_12mma_pct'],
     
     # Moving Averages (Fast)
-    'ma_fast': ['ema_20', 'wma_10', 'mma_6'],
+    'maFast': ['ema20', 'wma10', 'mma6'],
     
     # Moving Averages (Mid)
-    'ma_mid': ['ema_50', 'wma_40', 'mma_12'],
+    'maMid': ['ema50', 'wma40', 'mma12'],
     
     # Moving Averages (Slow)
-    'ma_slow': ['ema_200', 'wma_50', 'mma_12'],  # Note: mma_12 appears in both mid and slow
+    'maSlow': ['ema200', 'wma50', 'mma12'],  # Note: mma12 appears in both mid and slow
     
     # Pattern duplicates (horizon-specific)
-    'bollinger_squeeze': ['bollinger_squeeze_intraday', 'bollinger_squeeze_short_term'],
-    'ichimoku_signals': ['ichimoku_signals_intraday', 'ichimoku_signals_short_term', 
+    'bollingerSqueeze': ['bollinger_squeeze_intraday', 'bollinger_squeeze_short_term'],
+    'ichimokuSignals': ['ichimoku_signals_intraday', 'ichimoku_signals_short_term', 
                          'ichimoku_signals_long_term', 'ichimoku_signals_multibagger'],
-    'golden_cross': ['golden_cross_intraday'],
-    'double_top_bottom': ['double_top_bottom_intraday'],
-    'minervini_stage2': ['minervini_stage2_short_term'],
-    'flag_pennant': ['flag_pennant_long_term'],
-    'cup_handle': ['cup_handle_long_term'],
+    'goldenCross': ['golden_cross_intraday'],
+    'doubleTopBottom': ['double_top_bottom_intraday'],
+    'minerviniStage2': ['minervini_stage2_short_term'],
+    'flagPennant': ['flag_pennant_long_term'],
+    'cupHandle': ['cup_handle_long_term'],
     
     # Growth metrics (fundamentals)
-    'profit_growth_3y': ['eps_growth_3y'],  # Both represent 3Y profit/EPS CAGR
+    'profitGrowth3y': ['epsGrowth3y'],  # Both represent 3Y profit/EPS CAGR
 }
 # ========================================
 # 🎯 CANONICAL GENERIC KEYS
@@ -1489,67 +1710,67 @@ duplicate_mappings = {
 
 GENERIC_KEYS = {
     # === Moving Average System ===
-    'ma_fast': {
+    'maFast': {
         'legacy': {
-            'intraday': 'ema_20',
-            'short_term': 'ema_20', 
-            'long_term': 'wma_10',
-            'multibagger': 'mma_6'
+            'intraday': 'ema20',
+            'short_term': 'ema20', 
+            'long_term': 'wma10',
+            'multibagger': 'mma6'
         },
         'description': 'Fast moving average value (horizon-aware)'
     },
     
-    'ma_mid': {
+    'maMid': {
         'legacy': {
-            'intraday': 'ema_50',
-            'short_term': 'ema_50',
-            'long_term': 'wma_40',
-            'multibagger': 'mma_12'
+            'intraday': 'ema50',
+            'short_term': 'ema50',
+            'long_term': 'wma40',
+            'multibagger': 'mma12'
         },
         'description': 'Medium moving average value'
     },
     
-    'ma_slow': {
+    'maSlow': {
         'legacy': {
-            'intraday': 'ema_200',
-            'short_term': 'ema_200',
-            'long_term': 'wma_50',
-            'multibagger': 'mma_12'  # Same as ma_mid for multibagger
+            'intraday': 'ema200',
+            'short_term': 'ema200',
+            'long_term': 'wma50',
+            'multibagger': 'mma12'  # Same as maMid for multibagger
         },
         'description': 'Slow/primary trend moving average'
     },
     
-    'ma_fast_slope': {
+    'maFastSlope': {
         'legacy': {
-            'intraday': 'ema_20_slope',
-            'short_term': 'ema_20_slope',
-            'long_term': 'wma_20_slope',  # NOT wma_10_slope!
-            'multibagger': 'mma_20_slope'  # NOT mma_6_slope!
+            'intraday': 'ema20Slope',
+            'short_term': 'ema20Slope',
+            'long_term': 'wma10Slope',  
+            'multibagger': 'mma6Slope'  
         },
         'description': 'Fast MA velocity (trend momentum)'
     },
     
-    'ma_slow_slope': {
+    'maSlowSlope': {
         'legacy': {
-            'intraday': 'ema_50_slope',
-            'short_term': 'ema_50_slope',
-            'long_term': 'wma_50_slope',
+            'intraday': 'ema50Slope',
+            'short_term': 'ema50Slope',
+            'long_term': 'wma50Slope',
             'multibagger': 'mma_50_slope'
         },
         'description': 'Slow MA velocity (long-term momentum)'
     },
     
-    'ma_cross_signal': {
+    'maCrossSignal': {
         'legacy': {
-            'intraday': 'ema_20_50_cross',
-            'short_term': 'ema_20_50_cross',
+            'intraday': 'ema20_50Cross',
+            'short_term': 'ema20_50Cross',
             'long_term': 'wma_10_40_cross',
             'multibagger': 'mma_6_12_cross'
         },
         'description': 'Fast/Slow MA crossover (1=bull, -1=bear)'
     },
     
-    'ma_trend_signal': {
+    'maTrendSignal': {
         'legacy': {
             'intraday': 'ema_20_50_200_trend',
             'short_term': 'ema_20_50_200_trend',
@@ -1559,7 +1780,7 @@ GENERIC_KEYS = {
         'description': 'Overall MA alignment (1=strong up, -1=strong down)'
     },
     
-    'price_vs_primary_trend_pct': {
+    'priceVsPrimaryTrendPct': {
         'legacy': {
             'intraday': 'price_vs_200ema_pct',
             'short_term': 'price_vs_200ema_pct',
@@ -1570,57 +1791,38 @@ GENERIC_KEYS = {
     },
     
     # === Volatility & Risk ===
-    'atr_dynamic': {
+    'atrDynamic': {
         'legacy': None,  # No legacy key, always was generic
         'description': 'Horizon-aware ATR value'
     },
     
-    'sl_atr_dynamic': {
+    'slAtrDynamic': {
         'legacy': None,
         'description': 'Dynamic stop loss based on ATR'
     },
     
     # === Oscillators (Always Generic) ===
     'rsi': {'legacy': None},
-    'rsi_slope': {'legacy': None},
+    'rsislope': {'legacy': None},
     'macd': {'legacy': None},
-    'macd_cross': {'legacy': None},
-    'macd_histogram': {'legacy': None},
+    'macdCross': {'legacy': None},
+    'macdhistogram': {'legacy': None},
     'adx': {'legacy': None},
-    'stoch_k': {'legacy': None},
-    'stoch_d': {'legacy': None},
-    'stoch_cross': {'legacy': None},
+    'stochK': {'legacy': None},
+    'stochD': {'legacy': None},
+    'stochCross': {'legacy': None},
     
     # === Volume ===
     'rvol': {'legacy': None},
-    'vol_spike_ratio': {'legacy': None},
-    'vol_spike_signal': {'legacy': None},
-    'obv_div': {'legacy': None},
+    'volSpikeRatio': {'legacy': None},
+    'volSpikeSignal': {'legacy': None},
+    'obvDiv': {'legacy': None},
     
     # === Trend ===
-    'supertrend_signal': {'legacy': None},
-    'psar_trend': {'legacy': None},
-    'ichi_cloud': {'legacy': None},
-    'nifty_trend_score': {'legacy': None},
-    
-    # === Patterns (Horizon-Suffixed) ===
-    'bollinger_squeeze': {
-        'legacy': {
-            'intraday': 'bollinger_squeeze_intraday',
-            'short_term': 'bollinger_squeeze_short_term',
-            'long_term': 'bollinger_squeeze',  # Base key
-            'multibagger': 'bollinger_squeeze'
-        }
-    },
-    
-    'ichimoku_signals': {
-        'legacy': {
-            'intraday': 'ichimoku_signals_intraday',
-            'short_term': 'ichimoku_signals_short_term',
-            'long_term': 'ichimoku_signals_long_term',
-            'multibagger': 'ichimoku_signals_multibagger'
-        }
-    },
+    'supertrendSignal': {'legacy': None},
+    'psarTrend': {'legacy': None},
+    'ichiCloud': {'legacy': None},
+    'niftyTrendScore': {'legacy': None},
 }
 
 """

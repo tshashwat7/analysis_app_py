@@ -45,7 +45,11 @@ def get_breakdown_state(
     """
     try:
         db = SessionLocal()
-        symbol_str = symbol.get('value') or ""
+        # symbol_str = symbol.get('value') or ""
+        if isinstance(symbol, dict):
+            symbol_str = symbol.get('value') or ""
+        else:
+            symbol_str = symbol
         
         state = db.query(PatternBreakdownState).filter(
             PatternBreakdownState.symbol == symbol_str,
@@ -86,10 +90,14 @@ def save_breakdown_state(
     try:
         db = SessionLocal()
         now = get_current_utc()
-        
+        # ✅ Normalize symbol
+        if isinstance(symbol, dict):
+            symbol_str = symbol.get('value') or ""
+        else:
+            symbol_str = symbol
         # Upsert logic
         state = db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.symbol == symbol,
+            PatternBreakdownState.symbol == symbol_str,
             PatternBreakdownState.pattern_name == pattern_name,
             PatternBreakdownState.horizon == horizon
         ).first()
@@ -101,7 +109,7 @@ def save_breakdown_state(
         else:
             # Create new
             state = PatternBreakdownState(
-                symbol=symbol,
+                symbol=symbol_str,
                 pattern_name=pattern_name,
                 horizon=horizon,
                 started_at=now,
@@ -114,7 +122,7 @@ def save_breakdown_state(
             db.add(state)
         
         db.commit()
-        logger.debug(f"Breakdown state saved: {pattern_name} on {symbol} (count={state.candle_count})")
+        logger.debug(f"Breakdown state saved: {pattern_name} on {symbol_str} (count={state.candle_count})")
         return True
     
     except Exception as e:

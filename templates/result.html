@@ -131,6 +131,39 @@
       border-top: 1px solid #e5e7eb;
     }
 
+    /* Score Driver Accordions */
+    .driver-accordion .accordion-button {
+      padding: 6px 10px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #6b7280;
+      background: #f9fafb;
+      box-shadow: none;
+    }
+
+    .driver-accordion .accordion-button:not(.collapsed) {
+      color: #2563eb;
+      background: #eff6ff;
+    }
+
+    .driver-accordion .accordion-button::after {
+      width: 0.85rem;
+      height: 0.85rem;
+      background-size: 0.85rem;
+    }
+
+    .driver-accordion .accordion-body {
+      padding: 10px;
+      font-size: 0.82rem;
+      color: #374151;
+      background: #fff;
+    }
+
+    .driver-accordion .accordion-item {
+      border: none;
+      border-top: 1px solid #f3f4f6;
+    }
+
     /* PDF Export Helpers */
     @media print {
       body {
@@ -157,13 +190,14 @@
 
         <div>
           <div class="d-flex align-items-baseline gap-2">
-            <h2 class="mb-0 fw-bold">{{fundamentals.get('name') | default('-')}}</h2> <h3>- ({{ symbol }})</h3>
+            <h2 class="mb-0 fw-bold">{{fundamentals.get('name') | default('-')}}</h2>
+            <h3>- ({{ symbol }})</h3>
             <span class="fs-4 fw-light text-secondary">₹{{ indicators.get('price', {}).get('value') | default('N/A')
               }}</span>
           </div>
           <div class="text-muted small mt-1">
             Index: <b>{{ current_index | upper }}</b> |
-            52W H/L: {{ fundamentals.get('52w_high') | default('-') }} / {{ fundamentals.get('52w_low') | default('-')
+            52W H/L: {{ fundamentals.get('high52w') | default('-') }} / {{ fundamentals.get('low52w') | default('-')
             }}
           </div>
         </div>
@@ -172,10 +206,7 @@
         </button>
         <div class="btn-group shadow-sm" role="group">
           {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
-          {# Use .get() if available, or check if key exists to avoid attribute errors #}
-          {% if full_report.profiles and pname in full_report.profiles %}
-          {% set profile_data = full_report.profiles[pname] %}
-          {% set p_score = profile_data.final_score | default(0) %}
+          {% set p_score = all_horizon_scores.get(pname) if all_horizon_scores else None %}
 
           {% set is_active = (selected_horizon == pname) %}
 
@@ -183,11 +214,12 @@
             class="btn btn-sm {{ 'btn-primary fw-bold' if is_active else 'btn-light text-secondary border' }}"
             style="min-width: 100px;">
             {{ pname | replace('_', ' ') | title }}
+            {% if p_score is not none %}
             <span class="badge {{ 'bg-white text-primary' if is_active else 'bg-secondary text-white' }} ms-1">
               {{ p_score | round(1) }}
             </span>
+            {% endif %}
           </a>
-          {% endif %}
           {% endfor %}
         </div>
 
@@ -203,11 +235,6 @@
               <div class="d-flex justify-content-between small text-muted mb-1">
                 <span>Conf.</span><span>{{ confidence }}%</span>
               </div>
-              <div class="confidence-track">
-                <div class="confidence-fill"
-                  style="width: {{ confidence }}%; background: {{ '#22c55e' if confidence > 60 else '#ef4444' }};">
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -219,52 +246,299 @@
     <div class="alert alert-danger">{{ error }}</div>
     {% else %}
 
+    {# ── EXECUTION CONFLICT BANNER ──────────────────────────────────────────
+       Shows when the best-fit profile scored BUY (score ≥ 7) but the actual
+       trade plan returned HOLD due to real-time gate failures (RR, confidence,
+       execution block).  Also shows when another horizon has a better signal.
+    #}
+    {% set tr = trade_recommendation %}
+    {% set prof_cat     = profile_report.category | default('HOLD') %}
+    {% set trade_sig    = tr.trade_signal | default('HOLD') %}
+    {% set sig_ctx      = tr.signal_context | default({}) %}
+    {% set best_fit_h   = best_fit_horizon | default(selected_horizon) %}
+    {% set conflict     = (prof_cat == 'BUY' and trade_sig == 'HOLD') %}
+
+    {# Find an alt horizon that has trade_signal == BUY #}
+    {% set ns = namespace(alt_horizon='', alt_score=0) %}
+    {% for h in ['short_term', 'intraday', 'long_term', 'multibagger'] %}
+      {% if h != selected_horizon %}
+        {% set hp = full_report.profiles.get(h, {}) if full_report.profiles is defined else {} %}
+        {% if hp.get('category') == 'BUY' and hp.get('can_trade') %}
+          {% if ns.alt_horizon == '' %}
+            {% set ns.alt_horizon = h %}
+            {% set ns.alt_score   = hp.get('final_score', 0) %}
+          {% endif %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+
+    {% if conflict %}
+    <div class="alert mb-3 d-flex align-items-start gap-3"
+         style="background:#fefce8;border-left:5px solid #f59e0b;border-radius:10px;padding:14px 18px;">
+      <i class="bi bi-exclamation-triangle-fill text-warning fs-4 mt-1 flex-shrink-0"></i>
+      <div class="flex-grow-1">
+        <div class="fw-bold" style="color:#92400e;">
+          Profile Qualified ✅ — Execution Blocked ⛔
+        </div>
+        <div class="small mt-1" style="color:#78350f;">
+          The <b>{{ selected_horizon | replace('_',' ') | title }}</b> profile scored
+          <b>{{ profile_report.final_score | default(0) | round(1) }}/10</b> (BUY eligible),
+          but the trade plan returned <b>HOLD</b> because:
+          {% set status = tr.status | default('') %}
+          {% if status == 'BLOCKED' %}
+            real-time execution gates failed
+            {% if sig_ctx.rr_t1 is defined %}
+              (R:R T1 = {{ sig_ctx.rr_t1 | round(2) }})
+            {% endif %}.
+          {% elif status == 'LOW_CONFIDENCE' %}
+            confidence <b>{{ sig_ctx.confidence | default(tr.final_confidence) }}%</b>
+            is below the minimum tradeable threshold.
+          {% else %}
+            direction is <b>{{ sig_ctx.direction | default('neutral') }}</b> — no actionable bias.
+          {% endif %}
+        </div>
+        {% if tr.block_reason %}
+        <div class="small mt-1 text-muted">
+          <i class="bi bi-info-circle me-1"></i>{{ tr.block_reason }}
+        </div>
+        {% endif %}
+        {% if ns.alt_horizon %}
+        <div class="mt-2">
+          <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ ns.alt_horizon }}"
+             class="btn btn-sm btn-success">
+            <i class="bi bi-arrow-right-circle me-1"></i>
+            Better execution fit: {{ ns.alt_horizon | replace('_',' ') | title }}
+            (score {{ ns.alt_score | round(1) }})
+          </a>
+        </div>
+        {% endif %}
+      </div>
+      {# Mini signal context pill #}
+      <div class="text-end flex-shrink-0" style="min-width:90px;">
+        <div class="badge bg-warning text-dark mb-1 d-block">Profile: BUY</div>
+        <div class="badge bg-secondary d-block">Signal: HOLD</div>
+        {% if sig_ctx.rr_t1 is defined %}
+        <div class="text-muted mt-1" style="font-size:0.65rem;">R:R {{ sig_ctx.rr_t1 | round(2) }}</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+    {# ── END CONFLICT BANNER ─────────────────────────────────────────────── #}
+
     <div class="row g-3 mb-3">
 
       <div class="col-md-5">
         <div class="card h-100 p-3">
-          <h5 class="section-title"><i class="bi bi-diagram-3-fill me-2"></i> Strategy Fit (The "Why")</h5>
+          <h5 class="section-title">
+            <i class="bi bi-diagram-3-fill me-2"></i>
+            Strategy Fit
+            <span class="badge bg-light text-dark border ms-2">{{ selected_horizon | upper }}</span>
+          </h5>
 
-          {% set strat = strategy_report %}
-          {% set summary = strat.summary %}
+          {# NEW MAPPING: Data is now in profile_report.strategy #}
+          {% set strat_data = profile_report.strategy %}
 
-          {% if summary and summary.best_strategy %}
-          <div class="mb-3">
-            <span class="text-muted small">Top Strategy:</span>
-            <span class="fw-bold text-primary">{{ summary.best_strategy | replace('_', ' ') | title }}</span>
-            <span class="badge bg-light text-dark border ms-1">{{ summary.best_score }}/100</span>
+          {% if strat_data and strat_data.best %}
+          {% set best = strat_data.best %}
+
+          <div class="mb-3 p-3 bg-light rounded">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <div>
+                <span class="text-muted small">Winning Strategy:</span>
+                <h6 class="fw-bold text-primary mb-0">
+                  {{ best.strategy | replace('_', ' ') | title }}
+                </h6>
+              </div>
+              {# weighted_score is now 0-100 — safe to show as % #}
+              <span class="badge bg-primary fs-6">{{ best.weighted_score | round(1) }}%</span>
+            </div>
+
+            {# Three-metric sub-bar: DNA Fit / Setup Quality / Horizon Adj #}
+            {% set bd = best.breakdown if best.breakdown is defined else None %}
+            {% if bd %}
+            <div class="d-flex gap-2 mt-2 mb-1">
+              <div class="flex-fill text-center p-1 rounded" style="background:#e0f2fe;">
+                <div class="fw-bold text-primary" style="font-size:0.85rem;">{{ bd.dna_fit_score | default(bd.base_score) | round(0) | int }}%</div>
+                <div style="font-size:0.65rem;color:#0369a1;">DNA Fit</div>
+              </div>
+              <div class="flex-fill text-center p-1 rounded" style="background:#dcfce7;">
+                <div class="fw-bold text-success" style="font-size:0.85rem;">{{ bd.setup_quality_score | default(0) | round(0) | int }}%</div>
+                <div style="font-size:0.65rem;color:#166534;">Setup Now</div>
+              </div>
+              <div class="flex-fill text-center p-1 rounded" style="background:#fef9c3;">
+                <div class="fw-bold text-warning" style="font-size:0.85rem;">{{ best.horizon_multiplier | default(1.0) }}x</div>
+                <div style="font-size:0.65rem;color:#854d0e;">Horizon</div>
+              </div>
+            </div>
+            {% endif %}
+
+            <div class="small text-muted mt-1">
+              {{ best.description }}
+            </div>
           </div>
 
-          <div style="max-height: 200px; overflow-y: auto; padding-right: 5px;">
-            {% for s_name in ['swing', 'day_trading', 'trend_following', 'momentum', 'value', 'position_trading'] %}
-            {% set s_data = strat[s_name] %}
-            {% if s_data and s_data.fit %}
-            <div class="strat-fit">
-              <div class="d-flex justify-content-between">
-                <strong>
-                  {% if 'swing' in s_name %}🌊{% elif 'day' in s_name %}⚡{% elif 'trend' in s_name %}📈{% elif
-                  'momentum' in s_name %}🚀{% elif 'value' in s_name %}💰{% endif %}
-                  {{ s_name | replace('_', ' ') | title }}
-                </strong>
-                <span class="small fw-bold">{{ s_data.score }}</span>
-              </div>
-              {% if s_data.reasons %}
-              <div class="small text-muted mt-1">Make sure: {{ s_data.reasons[0] }}</div>
-              {% endif %}
-            </div>
-            {% endif %}
-            {% endfor %}
+          <div class="small text-muted mb-2">
+            <strong>All Strategies Evaluated:</strong>
+          </div>
 
-            {% if not summary.all_fits %}
-            <div class="text-center text-muted small py-4">
-              No specific strategy fits this stock well right now.
+          <div style="max-height: 250px; overflow-y: auto;">
+            {# NEW MAPPING: Iterate over 'ranked' list #}
+            {% for candidate in strat_data.ranked %}
+            {# weighted_score is now 0-100 so threshold comparison is valid #}
+            {% set passes = candidate.weighted_score >= candidate.fit_threshold %}
+
+            <div class="strat-fit mb-2 p-2 rounded {{ 'bg-success-subtle' if passes else 'bg-light' }}">
+              <div class="d-flex justify-content-between align-items-start">
+                <div class="flex-grow-1">
+                  <strong class="{{ 'text-success' if passes }}">
+                    {{ candidate.name | replace('_', ' ') | title }}
+                    {% if passes %}
+                    <i class="bi bi-check-circle-fill text-success ms-1"></i>
+                    {% endif %}
+                  </strong>
+                  <div class="small text-muted mt-1" style="font-size: 0.75rem;">
+                    {{ candidate.description }}
+                  </div>
+
+                  {# Per-candidate mini sub-scores if breakdown available #}
+                  {% set cbd = candidate.breakdown if candidate.breakdown is defined else None %}
+                  {% if cbd %}
+                  <div class="d-flex gap-2 mt-1">
+                    <span class="badge bg-light text-primary border" style="font-size:0.65rem;">
+                      DNA {{ cbd.dna_fit_score | default(cbd.base_score) | round(0) | int }}%
+                    </span>
+                    <span class="badge bg-light text-success border" style="font-size:0.65rem;">
+                      Setup {{ cbd.setup_quality_score | default(0) | round(0) | int }}%
+                    </span>
+                  </div>
+                  {% endif %}
+                </div>
+
+                <div class="text-end ms-3">
+                  {# Score is now a true 0-100 percentage #}
+                  <span class="badge {{ 'bg-success' if passes else 'bg-secondary' }}">
+                    {{ candidate.weighted_score | round(0) | int }}%
+                  </span>
+                  <div class="text-muted mt-1" style="font-size:0.65rem;">
+                    min {{ candidate.fit_threshold }}%
+                  </div>
+                </div>
+              </div>
             </div>
-            {% endif %}
+            {% endfor %}
           </div>
 
           {% else %}
-          <div class="text-muted small">Strategy Engine data unavailable.</div>
+          <div class="alert alert-warning mt-2 mb-0">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            Strategy analysis unavailable for this horizon.
+          </div>
           {% endif %}
+
+          {% if summaries.confidence_narrative or summaries.setup_explanation or summaries.strategy_explanation %}
+          <div class="accordion driver-accordion mt-3" id="accordionStrategyFit">
+            {% if summaries.confidence_narrative %}
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseConfidence">
+                  <i class="bi bi-speedometer2 me-2"></i> Why this confidence?
+                </button>
+              </h2>
+              <div id="collapseConfidence" class="accordion-collapse collapse" data-bs-parent="#accordionStrategyFit">
+                <div class="accordion-body">{{ summaries.confidence_narrative | safe }}</div>
+              </div>
+            </div>
+            {% endif %}
+            {% if summaries.setup_explanation or summaries.strategy_explanation %}
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseContext">
+                  <i class="bi bi-lightbulb me-2"></i> Context & Strategy
+                </button>
+              </h2>
+              <div id="collapseContext" class="accordion-collapse collapse" data-bs-parent="#accordionStrategyFit">
+                <div class="accordion-body">
+                  {% if profile_report.eval_ctx %}
+
+                  <!-- Strategy Explanations -->
+                  {% if summaries.setup_explanation %}
+                  <div class="mb-3">
+                    <strong>Setup Context:</strong><br>
+                    {{ summaries.setup_explanation }}
+                  </div>
+                  {% endif %}
+                  {% if summaries.strategy_explanation %}
+                  <div class="mb-3">
+                    <strong>Strategy Approach:</strong><br>
+                    {{ summaries.strategy_explanation }}
+                  </div>
+                  {% endif %}
+
+                  <!-- All Strategies Table -->
+                  <h6 class="mt-3 border-bottom pb-2">Evaluated Strategies</h6>
+                  <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                    <table class="table table-sm table-hover mb-0" style="font-size: 0.8rem;">
+                      <thead class="table-light">
+                        <tr>
+                          <th>Strategy</th>
+                          <th title="DNA Fit: how many fit_indicators pass">DNA</th>
+                          <th title="Setup Quality: how many scoring_rules match right now">Setup</th>
+                          <th title="Horizon-adjusted final score (0-100)">Score</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for strat in profile_report.eval_ctx.strategy.all_strategies %}
+                        {% set is_qualified = strat.weighted_score >= strat.fit_threshold %}
+                        {% set bd = strat.breakdown if strat.breakdown is defined else None %}
+                        <tr class="{{ 'table-success-subtle' if is_qualified else '' }}">
+                          <td>
+                            <strong>{{ strat.name | replace('_', ' ') | title }}</strong>
+                            {% if strat.rejection_reasons %}
+                            <div class="text-danger small fst-italic mt-1">
+                              {{ strat.rejection_reasons[0].reason }}
+                            </div>
+                            {% endif %}
+                          </td>
+                          <td class="text-center">
+                            {% if bd %}
+                              <span class="text-primary fw-bold">{{ bd.dna_fit_score | default(bd.base_score) | round(0) | int }}%</span>
+                            {% else %}
+                              <span class="text-muted">-</span>
+                            {% endif %}
+                          </td>
+                          <td class="text-center">
+                            {% if bd %}
+                              <span class="text-success fw-bold">{{ bd.setup_quality_score | default(0) | round(0) | int }}%</span>
+                            {% else %}
+                              <span class="text-muted">-</span>
+                            {% endif %}
+                          </td>
+                          <td class="text-center fw-bold">{{ strat.weighted_score | round(0) | int }}%</td>
+                          <td>
+                            {% if is_qualified %}
+                            <span class="badge bg-success">Qualified</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Rejected</span>
+                            {% endif %}
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% else %}
+                  <div class="text-muted">Details unavailable.</div>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
         </div>
       </div>
 
@@ -274,30 +548,72 @@
           <div class="table-responsive">
             <table class="table table-custom table-hover mb-0">
               <tbody>
-                {% for key, score in profile_report.metric_details|dictsort(false, 'value')|reverse %}
-                {% if loop.index <= 5 %} <tr>
-                  <td>{{ key | replace('_', ' ') | title }}</td>
-                  <td
-                    class="text-end fw-bold {{ 'text-success' if score >= 7 else ('text-danger' if score <= 3 else 'text-muted') }}">
-                    {{ score }}
-                  </td>
-                  </tr>
+                {# metric_details can be a list [{metric, score}] OR a dict {metric: score} #}
+                {% if profile_report.metric_details %}
+                  {% if profile_report.metric_details is mapping %}
+                    {# Dict path (legacy) #}
+                    {% for key, score in profile_report.metric_details.items() | sort(attribute=1, reverse=True) %}
+                    {% if loop.index <= 5 %}
+                    <tr>
+                      <td>{{ key | replace('_', ' ') | title }}</td>
+                      <td class="text-end fw-bold {{ 'text-success' if score >= 7 else ('text-danger' if score <= 3 else 'text-muted') }}">{{ score }}</td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                  {% else %}
+                    {# List path: [{metric: str, score: float, ...}] #}
+                    {% for item in profile_report.metric_details | sort(attribute='score', reverse=True) %}
+                    {% if loop.index <= 5 %}
+                    <tr>
+                      <td>{{ item.metric | default(item.name) | replace('_', ' ') | title }}</td>
+                      <td class="text-end fw-bold {{ 'text-success' if item.score >= 7 else ('text-danger' if item.score <= 3 else 'text-muted') }}">{{ item.score | round(1) }}</td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
                   {% endif %}
-                  {% endfor %}
+                {% else %}
+                  <tr>
+                    <td colspan="2" class="text-muted">No metric details available</td>
+                  </tr>
+                {% endif %}
               </tbody>
             </table>
           </div>
 
-          {% if profile_report.applied_penalties %}
+          {# NEW MAPPING: applied_penalties is in trade_recommendation OR profile_report #}
+          {% set penalties = trade_recommendation.penalties_applied or profile_report.applied_penalties %}
+          {% if penalties %}
           <div class="mt-2 pt-2 border-top">
             <small class="text-danger fw-bold">⚠️ Drag Factors:</small>
             <ul class="mb-0 ps-3 small text-muted">
-              {% for p in profile_report.applied_penalties %}
-              <li>{{ p.metric | replace('_', ' ') }}: -{{ (p.penalty * 10) | round(1) }}</li>
+              {% for p in penalties %}
+              {# Context log shows p is a dict: {'reason': '...'} or just a string #}
+              {% if p is mapping %}
+              <li>{{ p.reason }}</li>
+              {% else %}
+              <li>{{ p }}</li>
+              {% endif %}
               {% endfor %}
             </ul>
           </div>
           {% endif %}
+
+          {% if summaries.scoring_breakdown %}
+          <div class="accordion driver-accordion mt-3" id="accordionDrivers">
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseScoring">
+                  <i class="bi bi-bar-chart me-2"></i> Why these scores?
+                </button>
+              </h2>
+              <div id="collapseScoring" class="accordion-collapse collapse" data-bs-parent="#accordionDrivers">
+                <div class="accordion-body">{{ summaries.scoring_breakdown | safe }}</div>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
         </div>
       </div>
 
@@ -305,18 +621,20 @@
         <div class="card h-100 p-3 text-center d-flex flex-column justify-content-center">
           <h5 class="text-muted small mb-2">SETUP SIGNAL</h5>
           {% set tr = trade_recommendation %}
+
+          {# NEW MAPPING: Use 'trade_signal' for the main Buy/Sell/Hold text #}
+          {% set ts = tr.trade_signal | default('HOLD') %}
           <h3
-            class="fw-bold {{ 'text-success' if 'BUY' in tr.signal else ('text-danger' if 'SHORT' in tr.signal else 'text-muted') }}">
-            {{ tr.signal | replace('_', ' ') }}
+            class="fw-bold {{ 'text-success' if 'BUY' in ts else ('text-danger' if 'SHORT' in ts else 'text-muted') }}">
+            {{ ts }}
           </h3>
 
-          {% if tr.setup_type != 'GENERIC' %}
+          {# NEW MAPPING: Use 'signal' for the specific setup type name #}
           <div class="mt-2">
             <span class="badge bg-light text-dark border">
-              ⚡ {{ tr.setup_type | replace('_', ' ') }}
+              ⚡ {{ tr.signal | default('GENERIC') | replace('_', ' ') }}
             </span>
           </div>
-          {% endif %}
 
           <div class="mt-3 small text-muted">
             {{ tr.reason | truncate(60) }}
@@ -325,29 +643,92 @@
           <button id="viewFlowchart" class="btn btn-outline-primary btn-sm mt-3 w-100">
             <i class="bi bi-diagram-2"></i> Logic Flow
           </button>
+
+          {% if summaries.gate_validation %}
+          <div class="accordion driver-accordion mt-2" id="accordionSignal">
+            <div class="accordion-item">
+              <h2 class="accordion-header">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseGate">
+                  <i class="bi bi-shield-check me-2"></i> Gate status
+                </button>
+              </h2>
+              <div id="collapseGate" class="accordion-collapse collapse" data-bs-parent="#accordionSignal">
+                <div class="accordion-body">
+                  {% if profile_report.eval_ctx %}
+                  <div class="row g-2">
+                    <div class="col-12">
+                      <h6 class="border-bottom pb-1 small text-muted text-uppercase">Structural Gates</h6>
+                      <ul class="list-group list-group-flush small mb-3">
+                        {% for gate_name, result in profile_report.eval_ctx.structural_gates.by_gate.items() %}
+                        <li
+                          class="list-group-item d-flex justify-content-between align-items-center px-0 py-1 border-0">
+                          <span>{{ gate_name | replace('_', ' ') | title }}</span>
+                          <span>
+                            {% if result.status == 'passed' %}
+                            <i class="bi bi-check-circle-fill text-success" title="Passed"></i>
+                            {% elif result.status == 'skipped' %}
+                            <i class="bi bi-dash-circle text-muted" title="Skipped"></i>
+                            {% else %}
+                            <span class="badge bg-danger rounded-pill" title="{{ result.reason }}">Failed</span>
+                            {% endif %}
+                          </span>
+                        </li>
+                        {% endfor %}
+                      </ul>
+
+                      <h6 class="border-bottom pb-1 small text-muted text-uppercase">Opportunity Gates</h6>
+                      <ul class="list-group list-group-flush small mb-0">
+                        {% for gate_name, result in profile_report.eval_ctx.opportunity_gates.gates.items() %}
+                        <li
+                          class="list-group-item d-flex justify-content-between align-items-center px-0 py-1 border-0">
+                          <span>{{ gate_name | replace('_', ' ') | title }}</span>
+                          <span>
+                            {% if result.status == 'passed' %}
+                            <i class="bi bi-check-circle-fill text-success" title="Passed"></i>
+                            {% elif result.status == 'skipped' %}
+                            <i class="bi bi-dash-circle text-muted" title="Skipped"></i>
+                            {% else %}
+                            <span class="badge bg-danger rounded-pill" title="{{ result.reason }}">Failed</span>
+                            {% endif %}
+                          </span>
+                        </li>
+                        {% endfor %}
+                      </ul>
+                    </div>
+                  </div>
+                  {% else %}
+                  {{ summaries.gate_validation | safe }}
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
         </div>
       </div>
 
     </div>
 
     <div class="card mb-3">
-        <div class="card-header">
-            <h5 class="mb-0">
-                {{ summaries.patterns | safe }} 
-                </h5>
-        </div>
-        
-        <div class="card-body">
-            
-            <div class="alert alert-light border-start border-4 border-primary">
-                <strong>Analysis:</strong> {{ summaries.trade | safe }}
-                </div>
+      <div class="card-header">
+        <h5 class="mb-0">
+          {{ summaries.patterns | safe }}
+        </h5>
+      </div>
 
-            <div class="alert alert-light border-start border-4 border-success mt-2">
-                <strong>Score Drivers:</strong> {{ summaries.score | safe }}
-                </div>
+      <div class="card-body">
 
+        <div class="alert alert-light border-start border-4 border-primary">
+          <strong>Analysis:</strong> {{ summaries.trade | safe }}
         </div>
+
+        <div class="alert alert-light border-start border-4 border-success mt-2">
+          <strong>Score Drivers:</strong> {{ summaries.score | safe }}
+        </div>
+
+      </div>
     </div>
 
     <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0"
@@ -406,33 +787,34 @@
 
               <div class="text-center border-end pe-3">
                 <div class="exec-label">Target 1</div>
-                <div class="fw-bold text-success">{{ "₹" ~ tr.targets["t1"] if tr.targets.get("t1") else '-' }}</div>
+                <div class="fw-bold text-success">{{ "₹" ~ tr.get("targets", {}).get("t1") if tr.get("targets",
+                  {}).get("t1") else '-' }}</div>
+                {# ✅ NEW: profit % to T1 #}
+                {% if tr.entry and tr.get("targets", {}).get("t1") and tr.entry > 0 %}
+                <div class="small {{ 'text-success' if ((tr.get('targets', {}).get('t1') - tr.entry) / tr.entry * 100) > 0 else 'text-danger' }}">
+                  {{ "%.1f" | format(((tr.get("targets", {}).get("t1") - tr.entry) / tr.entry * 100)) }}%
+                </div>
+                {% endif %}
               </div>
 
               <div class="text-center border-end pe-3">
                 <div class="exec-label">Target 2</div>
-                <div class="fw-bold text-success">{{ "₹" ~ tr.targets["t2"] if tr.targets.get("t2") else '-' }}</div>
+                <div class="fw-bold text-success">{{ "₹" ~ tr.get("targets", {}).get("t2") if tr.get("targets",
+                  {}).get("t2") else '-' }}</div>
+                {# ✅ NEW: profit % to T2 #}
+                {% if tr.entry and tr.get("targets", {}).get("t2") and tr.entry > 0 %}
+                <div class="small {{ 'text-success' if ((tr.get('targets', {}).get('t2') - tr.entry) / tr.entry * 100) > 0 else 'text-danger' }}">
+                  {{ "%.1f" | format(((tr.get("targets", {}).get("t2") - tr.entry) / tr.entry * 100)) }}%
+                </div>
+                {% endif %}
               </div>
 
               <div class="stat-item">
-                  <div class="label">EST. HOLD</div>
-                  <div class="value">
-                      {% if trade_recommendation.est_time is mapping %}
-                          <div style="display: flex; flex-direction: column; gap: 2px; font-size: 0.85em;">
-                              <div style="display: flex; justify-content: space-between;">
-                                  <span><span style="color: #888;">T1:</span> {{ trade_recommendation.est_time.t1_estimate }}</span>
-                                  {% if trade_recommendation.est_time.confidence.t1 == 'High' %}
-                                      <span title="High Confidence" style="color: #00C853;">●</span>
-                                  {% endif %}
-                              </div>
-                              <div style="display: flex; justify-content: space-between;">
-                                  <span><span style="color: #888;">T2:</span> {{ trade_recommendation.est_time.t2_estimate }}</span>
-                              </div>
-                          </div>
-                      {% else %}
-                          {{ trade_recommendation.est_time }}
-                      {% endif %}
-                  </div>
+                <div class="label">EST. HOLD</div>
+                <div class="value">
+                  {# NEW MAPPING: Check est_time_str #}
+                  {{ trade_recommendation.est_time_str | default('-') }}
+                </div>
               </div>
               <div class="text-center">
                 <div class="exec-label">R:R Ratio</div>
@@ -490,19 +872,54 @@
             </div>
             {% endif %}
           </div>
+
+          <!-- Trade Plan & RR Accordions (full-width below the 2 columns) -->
+          {% if summaries.trade_plan or summaries.rr_explanation %}
+          <div class="col-12 px-4 pb-3">
+            <div class="accordion driver-accordion" id="accordionTradePlan">
+              {% if summaries.trade_plan %}
+              <div class="accordion-item">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#collapseTradePlan">
+                    <i class="bi bi-clipboard-check me-2"></i> Why this plan?
+                  </button>
+                </h2>
+                <div id="collapseTradePlan" class="accordion-collapse collapse" data-bs-parent="#accordionTradePlan">
+                  <div class="accordion-body">{{ summaries.trade_plan | safe }}</div>
+                </div>
+              </div>
+              {% endif %}
+              {% if summaries.rr_explanation %}
+              <div class="accordion-item">
+                <h2 class="accordion-header">
+                  <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#collapseRR">
+                    <i class="bi bi-calculator me-2"></i> Risk/Reward breakdown
+                  </button>
+                </h2>
+                <div id="collapseRR" class="accordion-collapse collapse" data-bs-parent="#accordionTradePlan">
+                  <div class="accordion-body">{{ summaries.rr_explanation | safe }}</div>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% endif %}
+
         </div>
       </div>
     </div>
 
-<div class="card mb-3 p-3 mt-3 shadow-sm border-0">
+    <div class="card mb-3 p-3 mt-3 shadow-sm border-0">
       <h5 class="section-title text-uppercase text-secondary small fw-bold border-bottom pb-2">
         <i class="bi bi-radar me-2"></i> Pattern Radar
       </h5>
 
       {% set pattern_keys = [
-      'golden_cross', 'double_top_bottom', 'cup_handle',
-      'darvas_box', 'flag_pennant', 'minervini_stage2',
-      'bollinger_squeeze', 'three_line_strike', 'ichimoku_signals'
+      'goldenCross', 'doubleTopBottom', 'cupHandle',
+      'darvasBox', 'flagPennant', 'minerviniStage2',
+      'bollingerSqueeze', 'threeLineStrike', 'ichimokuSignals'
       ] %}
 
       {% set ns = namespace(found=false) %}
@@ -525,9 +942,9 @@
             <span class="badge bg-white text-dark border">{{ score }}%</span>
           </div>
 
-          {% if pat.meta %}
+          {% if pat.raw.meta %}
           <div class="d-flex flex-wrap gap-1 mt-1 mb-2">
-            {% for k, v in pat.meta.items() %}
+            {% for k, v in pat.raw.meta.items() %}
             {% if k not in ['signal', 'type'] %}
             <span class="badge bg-white text-secondary border fw-normal" style="font-size: 0.65rem;">
               {{ k|replace('_', ' ') }}: <b>{{ v }}</b>
@@ -538,12 +955,14 @@
           {% endif %}
 
           {% if summaries.pattern_details and key in summaries.pattern_details %}
-          <div class="small text-muted border-top pt-2 mt-1" style="font-size: 0.8rem; background: #fff; padding: 6px; border-radius: 4px;">
-             <div><strong class="text-secondary">What:</strong> {{ summaries.pattern_details[key].what }}</div>
-             <div class="mt-1"><strong class="text-primary">Implies:</strong> {{ summaries.pattern_details[key].implies }}</div>
+          <div class="small text-muted border-top pt-2 mt-1"
+            style="font-size: 0.8rem; background: #fff; padding: 6px; border-radius: 4px;">
+            <div><strong class="text-secondary">What:</strong> {{ summaries.pattern_details[key].what }}</div>
+            <div class="mt-1"><strong class="text-primary">Implies:</strong> {{ summaries.pattern_details[key].implies
+              }}</div>
           </div>
           {% endif %}
-          
+
         </div>
         {% endif %}
         {% endfor %}
@@ -555,6 +974,23 @@
         </div>
         {% endif %}
       </div>
+
+      {% if summaries.opportunity_narrative %}
+      <div class="accordion driver-accordion mt-3" id="accordionPatterns">
+        <div class="accordion-item">
+          <h2 class="accordion-header">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+              data-bs-target="#collapseOpportunity">
+              <i class="bi bi-graph-up-arrow me-2"></i> Opportunity assessment
+            </button>
+          </h2>
+          <div id="collapseOpportunity" class="accordion-collapse collapse" data-bs-parent="#accordionPatterns">
+            <div class="accordion-body">{{ summaries.opportunity_narrative | safe }}</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
     </div>
 
     <div class="card mb-3 border-primary border-2 border-top-0 border-end-0 border-bottom-0"
@@ -696,7 +1132,7 @@
         <div class="col-4 col-md-3">
           <label class="small text-muted fw-bold mb-0" style="font-size: 0.7rem;">RISK (₹)</label>
           <div class="input-group input-group-sm">
-            <input type="number" id="riskInput" class="form-control fw-bold" value="2000" step="500"
+            <input type="number" id="riskInput" class="form-control fw-bold" value="500" step="500"
               oninput="calcSize()">
           </div>
         </div>

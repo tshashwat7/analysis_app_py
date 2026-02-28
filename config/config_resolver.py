@@ -1,1869 +1,4212 @@
-# config/config_resolver.py
+# config/config_resolver_v6.py
 """
-Fixed ConfigResolver with Correct Path Resolution
-Now properly handles horizon-first lookup with global fallback.
+Configuration Resolver v6.0 - Refactored with Proper Layer Separation
+=====================================================================
+ARCHITECTURE CHANGES:
+✅ No direct access to raw configs (master_config, setup_pattern_matrix, etc.)
+✅ All config queries go through query_optimized_extractor
+✅ Pure decision-making logic (no data extraction)
+✅ Clean separation of concerns
+
+Layer Flow:
+    Raw Configs (confidence_config.py, master_config.py, etc.)
+        ↓
+    config_extractor.py (extracts sections)
+        ↓
+    query_optimized_extractor.py (provides queries)
+        ↓
+    config_resolver.py (makes decisions) ← YOU ARE HERE
+        ↓
+    Your Application (signal_engine, etc.)
+
+Author: Quantitative Trading System
+Version: 6.0 - Fully Refactored
 """
 
-from typing import Any, Dict, Optional, List, Tuple, Union
-from copy import deepcopy
+from typing import Dict, Any, List, Optional, Tuple, Union
+from datetime import datetime, time
 import logging
-import ast
-import operator
 import re
+import numbers
+from config.logger_config import (
+    METRICS,
+    SafeDict,
+    log_failures,
+    log_resolver_context_quality,
+    track_performance
+)
+from config.master_config import GATE_METRIC_REGISTRY
+from config.fundamental_score_config import compute_fundamental_score
+from services.data_fetch import _get_val, _safe_float, _safe_get_raw_float, ensure_numeric
+from config.technical_score_config import calculate_dynamic_score, compute_technical_score
 
-from services.data_fetch import _get_val, _safe_get_raw_float
+MIN_FIT_SCORE = 10.0
 logger = logging.getLogger(__name__)
 
-from config.master_config import MASTER_CONFIG
 
-class ConfigResolver:
-    """Smart configuration resolver with horizon-aware inheritance."""
-    
-    def __init__(self, horizon: str = "short_term", master_config: Dict = None, indicators: Dict = None, fundamentals: Dict = None):
-        self.horizon = horizon
-        self.indicators = indicators or {}
-        self.fundamentals = fundamentals or {}
-        self.config = master_config or MASTER_CONFIG
-        self._cache = {}
-        
-        valid_horizons = ["intraday", "short_term", "long_term", "multibagger"]
-        if horizon not in valid_horizons:
-            logger.warning(f"Invalid horizon '{horizon}', falling back to 'short_term'")
-            self.horizon = "short_term"
-        
-        self._horizon_config = self.config.get("horizons", {}).get(self.horizon, {})
-        self._global_config = self.config.get("global", {})
-    
-    def get(self, path: str, default: Any = None) -> Any:
-        """
-        Get config value with smart horizon-first inheritance.
-        
-        Resolution Order:
-        1. horizons.{horizon}.{path}
-        2. global.{path}
-        3. default
-        """
-        cache_key = f"{self.horizon}:{path}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        
-        # 1. Try horizon-specific first
-        value = self._get_nested(self._horizon_config, path)
-        
-        # 2. Fallback to global
-        if value is None:
-            value = self._get_nested(self._global_config, path)
-        
-        # 3. Use default
-        if value is None:
-            value = default
-        
-        self._cache[cache_key] = value
-        return value
-    
-    def get_section(self, section: str, merge_global: bool = True) -> Dict:
-        """
-        Get entire config section with optional global merge.
-        Auto-unwraps standard containers like 'rules', 'penalties', etc.
-        """
-        if merge_global:
-            # Start with global, then overlay horizon-specific
-            result = deepcopy(self._global_config.get(section, {}))
-            horizon_section = self._horizon_config.get(section, {})
-            result.update(horizon_section)
-        else:
-            result = self._horizon_config.get(section, {})
-        
-        # Auto-unwrap standard containers
-        wrappers = ['rules', 'penalties', 'enhancements', 'gates', 'bonuses', 'conditions']
-        for key in wrappers:
-            if isinstance(result, dict) and key in result and isinstance(result[key], dict):
-                logger.debug(f"[{self.horizon}] get_section({section}): auto-unwrapped '{key}'")
-                return result[key]
-        
-        return result
+# ============================================================================
+# SAFE CONDITION EVALUATOR (Embedded - No External Dependencies)
+# ============================================================================
 
-    def get_setup_metadata(self, setup_name: str) -> Dict[str, Any]:
-        """
-        Fetches setup-specific parameters (like RSI ranges or volume requirements).
-        Standardizes lookups to ensure 'QUALITY_ACCUMULATION' matches 'accumulation'.
-        """
-        all_metadata = self.get("calculation_engine.setup_classification", {})
-        
-        # Try exact match, then try lowercase (to handle legacy keys like 'accumulation')
-        metadata = all_metadata.get(setup_name) or all_metadata.get(setup_name.lower(), {})
-        
-        return metadata
-
+class ConditionEvaluator:
+    """
+    Enhanced condition evaluator supporting:
+    - Numeric/string comparisons
+    - Math functions (abs, min, max, round)
+    - Nested dict value extraction
+    - Logical operators (AND/OR)
+    """
     
-    def get_many(self, paths: List[str], defaults: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Get multiple config values at once.
-        Performance helper for batch retrieval.
-        """
-        defaults = defaults or {}
-        return {
-            path: self.get(path, default=defaults.get(path))
-            for path in paths
-        }
+    OPERATORS = {
+        ">=": lambda a, b: a >= b,
+        "<=": lambda a, b: a <= b,
+        ">": lambda a, b: a > b,
+        "<": lambda a, b: a < b,
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+    }
     
-    # ============================================================
-    # FIXED: Calculation Engine Accessors
-    # ============================================================
+    # Math functions available in conditions
+    MATH_FUNCTIONS = {
+        "abs": abs,
+        "min": min,
+        "max": max,
+        "round": round,
+    }
     
-    def get_setup_rules(self) -> Dict[str, Any]:
-        """Get setup rules with horizon-specific priority overrides applied."""
-        
-        # Fetch base rules
-        rules = deepcopy(self.get("calculation_engine.setup_classification.rules", {}))
-        
-        # ✅ Ensure all rules have a priority (default 50)
-        for setup_name, rule in rules.items():
-            if "priority" not in rule:
-                rule["priority"] = 50  # Default priority
-        
-        # Apply horizon-specific priority overrides
-        overrides = self.get(
-            f"calculation_engine.horizon_priority_overrides.{self.horizon}", 
-            {}
-        )
-        
-        if overrides:
-            applied_count = 0
-            
-            for setup, priority in overrides.items():
-                if setup in rules:
-                    rules[setup]["priority"] = priority
-                    applied_count += 1
-                else:
-                    logger.warning(
-                        f"[{self.horizon}] Priority override for '{setup}' ignored "
-                        f"(setup not defined in rules)"
-                    )
-            
-            logger.debug(
-                f"[{self.horizon}] Applied {applied_count}/{len(overrides)} "
-                f"priority overrides"
-            )
-        
-        return rules
-    
-    def get_pattern_priority(self) -> List[Tuple[str, str, int]]:
+    @classmethod
+    def evaluate_condition(cls, condition: str, namespace: Dict[str, Any]) -> bool:
         """
-        Get pattern priority list from calculation engine.
-        Path: global.calculation_engine.setup_classification.pattern_priority
-        """
-        priority = self.get("calculation_engine.setup_classification.pattern_priority", [])
-        return [(p["pattern"], p["setup_name"], p["min_score"]) for p in priority]
-    
-    def evaluate_setup_condition(self, setup_type: str, indicators: Dict, fundamentals: Dict = None) -> bool:
-        """
-        Evaluates setup conditions from calculation engine rules.
+        Evaluate condition with smart value extraction from nested dicts.
         
-        Args:
-            setup_type: Setup name (e.g., "MOMENTUM_BREAKOUT")
-            indicators: Technical indicators
-            fundamentals: Fundamental data (optional)
-        
-        Returns:
-            True if ALL conditions pass
+        Examples:
+            "abs(price - maFast) / maFast <= 0.05"  # Math functions
+            "ttmSqueeze == 'Squeeze On'"             # String comparison
+            "price < bbLow"                          # Numeric comparison (auto-extracts from nested)
         """
-        rules = self.get_setup_rules()
-        setup_rule = rules.get(setup_type)
-        
-        if not setup_rule:
-            logger.warning(f"[{self.horizon}] No rule found for setup: {setup_type}")
+        if not condition or not condition.strip():
             return False
         
-        conditions = setup_rule.get("conditions", [])
+        # Handle logical operators — use regex split so detection and splitting
+        # are both case-insensitive (avoids " AND " detected but not split).
+        if re.search(r'\s+and\s+', condition, flags=re.IGNORECASE):
+            parts = re.split(r'\s+and\s+', condition, flags=re.IGNORECASE)
+            return all(cls.evaluate_condition(part.strip(), namespace) for part in parts)
         
-        # handle empty conditions correctly
-        if not conditions:
-            # Empty conditions = always match (e.g., GENERIC setup)
-            logger.debug(f"[{self.horizon}] Setup {setup_type} has no conditions (auto-pass)")
-            return True  # ✅ Changed from False to True
+        if re.search(r'\s+or\s+', condition, flags=re.IGNORECASE):
+            parts = re.split(r'\s+or\s+', condition, flags=re.IGNORECASE)
+            return any(cls.evaluate_condition(part.strip(), namespace) for part in parts)
         
-        # ✅ OPTIMIZATION: Build context once, reuse for all conditions
-        eval_context = self._build_eval_context(indicators, fundamentals)
+        # Parse single comparison
+        condition = condition.strip()
+
+        # ✅ FIXED: Use regex for robust operator splitting
+        for op_str, op_func in cls.OPERATORS.items():
+            # Create regex pattern that matches operator with word boundaries
+            # Escape special regex characters in operator
+            escaped_op = re.escape(op_str)
+            pattern = rf'\s{escaped_op}\s'
+
+            match = re.search(pattern, f' {condition} ')
+            if match:
+                # Split at the matched position
+                match_pos = match.start() - 1  # Adjust for the leading space we added
+                left = condition[:match_pos].strip()
+                right = condition[match_pos + 1 + len(op_str):].strip()  # +1 to skip the space before operator
+
+                if not left or not right:
+                    continue
+
+                # Evaluate left side (may contain math expressions)
+                try:
+                    left_value = cls._evaluate_expression(left, namespace)
+                except Exception as e:
+                    return False
+                
+                # Parse right value
+                right_value = cls._parse_right_operand(right, namespace)
+                
+                if left_value is None or right_value is None:
+                    return False
+                
+                try:
+                    return cls._compare_values(left_value, right_value, op_func)
+                except (TypeError, ValueError):
+                    return False
         
-        # Evaluate all conditions (ALL must pass)
-        for cond in conditions:
-            if not self._evaluate_condition_string(
-                cond, 
-                indicators, 
-                fundamentals,
-                context=eval_context  # ✅ Pass pre-built context
-            ):
-                logger.debug(f"[{self.horizon}] Setup {setup_type} failed: '{cond}'")
+        return False
+    
+    @classmethod
+    def _evaluate_expression(cls, expr: str, namespace: Dict[str, Any]) -> Any:
+        """
+        Evaluate expression with auto-extraction from nested dicts.
+        
+        Handles:
+        - Simple variables: "price" → extracts from {"price": {"value": 954.55, ...}}
+        - Math functions: "abs(price - maFast)" → evaluates with extracted values
+        - Arithmetic: "price - maFast" → evaluates with extracted values
+        """
+        expr = expr.strip()
+        
+        # Check if expression contains functions or operators
+        has_function = any(f"{func}(" in expr for func in cls.MATH_FUNCTIONS.keys())
+        has_operator = any(op in expr for op in ['+', '-', '*', '/', '(', ')'])
+        
+        if has_function or has_operator:
+            # Build safe namespace with extracted values
+            safe_namespace = cls._build_safe_namespace(namespace)
+            
+            try:
+                result = eval(expr, {"__builtins__": {}}, safe_namespace)
+                
+                # ✅ DEBUG: Log successful evaluation
+                logger.debug(
+                    f"Expression evaluated: '{expr}' = {result:.4f} | "
+                    f"Available vars: {list(safe_namespace.keys())[:10]}"
+                )
+                
+                return result
+            except Exception as e:
+                # ✅ IMPROVED: Log detailed error
+                logger.warning(
+                    f"⚠️ eval failed in _evaluate_expression: {e} | "
+                    f"Expression: '{expr}' | "
+                    f"Namespace keys: {list(safe_namespace.keys())}"
+                )
+                return None
+        else:
+            # Simple variable lookup with auto-extraction
+            value = namespace.get(expr)
+            return cls._extract_value_from_metric(value)
+
+    @classmethod
+    def _build_safe_namespace(cls, namespace: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build safe namespace with extracted values + math functions.
+        
+        Converts:
+        {"price": {"value": 954.55, ...}} → {"price": 954.55, "abs": <function>, ...}
+        """
+        safe = {**cls.MATH_FUNCTIONS}
+        
+        for key, value in namespace.items():
+            extracted = cls._extract_value_from_metric(value)
+            if extracted is not None:
+                safe[key] = extracted
+        
+        return safe
+    
+    @classmethod
+    def _extract_value_from_metric(cls, value: Any) -> Any:
+        """
+        Extract usable value from metric (handles nested dicts).
+        
+        Extraction priority:
+        1. Simple values (int/float/str/bool) → return as-is
+        2. Nested dict with raw → extract raw (unless pattern)
+        3. Nested dict with value → extract value
+        4. Nested dict with score → extract score
+        
+        Special handling for patterns:
+        - Pattern dicts (with raw.found) are preserved for pattern detection
+        """
+        if value is None:
+            return None
+        
+        # Normalize numpy scalars → native Python float early so all
+        # downstream isinstance(x, (int, float)) checks work correctly.
+        # Must come BEFORE the bool check because np.bool_ is also a
+        # numbers.Number subclass.
+        if not isinstance(value, (bool, str)) and isinstance(value, numbers.Number):
+            return float(value)
+        
+        # Already primitive
+        if isinstance(value, (int, float, str, bool)):
+            return value
+        
+        # Nested dict
+        if isinstance(value, dict):
+            # Check if this is a pattern metric (has nested raw.found)
+            raw = value.get('raw')
+            if isinstance(raw, dict) and 'found' in raw:
+                # This is a pattern - DON'T extract nested value
+                # Return top-level 'value' or 'found' instead
+                if 'value' in value and not isinstance(value['value'], dict):
+                    return value['value']
+                if 'found' in value:
+                    return value['found']
+                return value  # Return whole dict as fallback
+            
+            # Extract from nested dict: priority raw > value > score
+            if raw is not None and not isinstance(raw, dict):
+                if isinstance(raw, str):
+                    return raw  # String metric
+                else:
+                    try:
+                        return float(raw)
+                    except (ValueError, TypeError):
+                        pass
+            
+            val = value.get('value')
+            if val is not None and not isinstance(val, dict):
+                if isinstance(val, str):
+                    return val
+                else:
+                    try:
+                        return float(val)
+                    except (ValueError, TypeError):
+                        pass
+            
+            score = value.get('score')
+            if score is not None:
+                try:
+                    return float(score)
+                except (ValueError, TypeError):
+                    pass
+        
+        return value
+    
+    @classmethod
+    def _parse_right_operand(cls, right: str, namespace: Dict[str, Any]) -> Any:
+        """Parse right side of comparison."""
+        right = right.strip()
+        
+        # String literal
+        if (right.startswith("'") and right.endswith("'")) or \
+           (right.startswith('"') and right.endswith('"')):
+            return right[1:-1]
+        
+        # Boolean
+        if right.lower() == "true":
+            return True
+        if right.lower() == "false":
+            return False
+        
+        # Variable from namespace (with auto-extraction)
+        if right in namespace:
+            return cls._extract_value_from_metric(namespace[right])
+        
+        # Numeric literal
+        try:
+            if '.' not in right:
+                return int(right)
+            return float(right)
+        except ValueError:
+            return None
+    
+    @classmethod
+    def _compare_values(cls, left: Any, right: Any, op_func) -> bool:
+        """
+        Type-aware comparison that handles mixed types gracefully.
+        
+        Rules:
+        1. Both strings → Direct string comparison
+        2. Both numeric → Numeric comparison  
+        3. String vs numeric → Try conversion, fail gracefully
+        4. Boolean → Exact match only
+        """
+        # Handle None values
+        if left is None or right is None:
+            return False
+        
+        # Both strings
+        if isinstance(left, str) and isinstance(right, str):
+            return op_func(left, right)
+        
+        # Both booleans
+        if isinstance(left, bool) and isinstance(right, bool):
+            return op_func(left, right)
+        
+        # Both numeric — use numbers.Number to catch numpy scalars (np.float64 etc.)
+        _left_num = isinstance(left, numbers.Number) and not isinstance(left, bool)
+        _right_num = isinstance(right, numbers.Number) and not isinstance(right, bool)
+        if _left_num and _right_num:
+            return op_func(float(left), float(right))
+        
+        # Mixed: try conversion
+        if isinstance(left, str) and _right_num:
+            try:
+                return op_func(float(left), float(right))
+            except (ValueError, TypeError):
                 return False
         
-        logger.debug(f"[{self.horizon}] Setup {setup_type} passed all {len(conditions)} conditions")
-        return True
+        if _left_num and isinstance(right, str):
+            try:
+                return op_func(float(left), float(right))
+            except (ValueError, TypeError):
+                return False
+        
+        # Boolean vs other
+        if isinstance(left, bool) or isinstance(right, bool):
+            return False
+        
+        return False
+    
+    @classmethod
+    def evaluate_conditions_list(cls, conditions: list, namespace: Dict[str, Any]) -> bool:
+        """Evaluate list of conditions (all must pass). Empty list = no constraints = pass."""
+        if not conditions:
+            return True  # BUG 4 FIX: vacuously true — no constraints means pass
+        return all(cls.evaluate_condition(cond, namespace) for cond in conditions)
 
-    def get_blocked_setups(self) -> List[str]:
-        """Get list of setups blocked by strategy preferences."""
-        path = f"strategy_preferences.horizon_strategy_config.{self.horizon}.blocked_setups"
-        return self.get(path, [])    
-    
-    # ============================================================
-    # FIXED: Dynamic Confidence Floor
-    # ============================================================
-    
-    def calculate_dynamic_confidence_floor(self, adx: float, setup_type: str) -> float:
+    @classmethod
+    def evaluate_gate_config(
+        cls, 
+        actual_value: Any, 
+        gate_config: Union[Dict, float, int], 
+        metric_name: str
+    ) -> Tuple[bool, Optional[str]]:
         """
-        Horizon-aware dynamic confidence floor.
-        Uses horizon-specific base_floors, then applies ADX adjustment.
+        ✅ NEW: Handles structured gate configs (Dict/Numeric).
+        Reuses cls._compare_values for consistent type safety.
         """
-        # 1. Get horizon-specific base floor (with global fallback)
-        base_floors = self.get("confidence.base_floors", {})
-        base = base_floors.get(setup_type, 55)
-        
-        # 2. Get ADX normalization params (global only)
-        norm_cfg = self.get("confidence.adx_normalization", {})
-        adx_min = norm_cfg.get("min", 10)
-        adx_max = norm_cfg.get("max", 40)
-        adj_factor = norm_cfg.get("adjustment_factor", 12)
-        
-        # 3. Normalize ADX
-        adx_val = float(adx or 0)
-        adx_norm = max(0.0, min(1.0, (adx_val - adx_min) / (adx_max - adx_min)))
-        
-        # 4. Apply adjustment
-        adjustment = adx_norm * adj_factor
-        
-        # 5. Apply horizon discount (horizon-specific)
-        horizon_discount = self.get("confidence.horizon_discount", 0)
-        
-        final_floor = base - adjustment - horizon_discount
-        return max(35.0, min(75.0, final_floor))
-    # ============================================================
-    # FIXED: Composite Score Calculation
-    # ============================================================
-    
-    def compute_composite_score(self, composite_name: str, indicators: Dict) -> Dict[str, Any]:
-        """
-        Calculates composite scores using calculation engine weights.
-        Path: global.calculation_engine.composite_weights.{composite_name}
-        """
-        weights_cfg = self.get(f"calculation_engine.composite_weights.{composite_name}", {})
-        
-        if composite_name == "trendstrength":
-            return self._compute_trend_strength(indicators, weights_cfg)
-        elif composite_name == "momentumstrength":
-            return self._compute_momentum_strength(indicators, weights_cfg)
-        elif composite_name == "volatilityquality":
-            return self._compute_volatility_quality(indicators, weights_cfg)
-        
-        return {"raw": 0, "value": 0, "score": 0, "desc": "Unknown Composite"}
-    
-    def _compute_trend_strength(self, indicators: Dict, cfg: Dict) -> Dict:
-        """Trend Strength composite calculation."""
-        adx = self._get_val(indicators, "adx")
-        slope = abs(self._get_val(indicators, "ma_fast_slope"))
-        di_spread = self._get_val(indicators, "di_plus") - self._get_val(indicators, "di_minus")
-        st_signal = str(self._get_nested(indicators, "supertrend_value.value") or "")
-        
-        # Score components
-        adx_t = cfg.get("adx", {}).get("thresholds", {})
-        adx_s = 10 if adx >= adx_t.get("strong", 25) else 7 if adx >= adx_t.get("moderate", 20) else 2
-        
-        slope_t = cfg.get("ema_slope", {}).get("thresholds", {})
-        slope_s = 10 if slope >= slope_t.get("strong", 20) else 7 if slope >= slope_t.get("moderate", 5) else 2
-        
-        di_s = 10 if di_spread >= 15 else 5
-        st_s = 10 if "Bull" in st_signal else 0
-        
-        # Apply weights
-        wa = cfg.get("adx", {}).get("weight", 0.4)
-        wb = cfg.get("ema_slope", {}).get("weight", 0.3)
-        wc = cfg.get("di_spread", {}).get("weight", 0.2)
-        wd = cfg.get("supertrend", {}).get("weight", 0.1) if st_signal else 0
-        
-        raw = (adx_s * wa) + (slope_s * wb) + (di_s * wc) + (st_s * wd)
-        score = min(10, round(raw, 2))
-        
-        return {"raw": raw, "value": score, "score": int(score), "desc": "Trend Strength"}
-    
-    def _compute_momentum_strength(self, indicators: Dict, cfg: Dict) -> Dict:
-        """Momentum Strength composite calculation."""
-        rsi = self._get_val(indicators, "rsi")
-        slope = self._get_val(indicators, "rsislope")
-        macd = self._get_val(indicators, "macdhistogram")
-        
-        rsi_t = cfg.get("rsi_value", {}).get("thresholds", {})
-        rsi_s = 8 if rsi >= rsi_t.get("strong", 60) else 5 if rsi >= rsi_t.get("neutral", 50) else 2
-        
-        slope_t = cfg.get("rsislope", {}).get("thresholds", {})
-        slope_s = 8 if slope >= slope_t.get("strong", 1.0) else 4
-        
-        macd_t = cfg.get("macd_hist", {}).get("thresholds", {})
-        macd_s = 8 if macd >= macd_t.get("strong", 0.5) else 5 if macd > 0 else 2
-        
-        w_rsi = cfg.get("rsi_value", {}).get("weight", 0.25)
-        w_slope = cfg.get("rsislope", {}).get("weight", 0.25)
-        w_macd = cfg.get("macd_hist", {}).get("weight", 0.30)
-        
-        raw = (rsi_s * w_rsi) + (slope_s * w_slope) + (macd_s * w_macd)
-        score = min(10, round(raw, 2))
-        
-        return {"raw": raw, "value": score, "score": int(score), "desc": "Momentum Strength"}
-    
-    def _compute_volatility_quality(self, indicators: Dict, cfg: Dict) -> Dict:
-        """Volatility Quality composite calculation."""
-        atr_pct = self._get_val(indicators, "atr_pct")
-        bbwidth = self._get_val(indicators, "bbwidth")
-        
-        atr_t = cfg.get("atr_pct", {}).get("thresholds", {})
-        atr_s = 10 if atr_pct <= atr_t.get("low", 1.5) else 6 if atr_pct <= atr_t.get("high", 5.0) else 2
-        
-        bb_t = cfg.get("bbwidth", {}).get("thresholds", {})
-        bb_s = 10 if bbwidth <= bb_t.get("tight", 0.01) else 6
-        
-        w_atr = cfg.get("atr_pct", {}).get("weight", 0.3)
-        w_bb = cfg.get("bbwidth", {}).get("weight", 0.25)
-        
-        raw = (atr_s * w_atr) + (bb_s * w_bb) + 3.0
-        score = min(10, round(raw, 2))
-        
-        return {"raw": raw, "value": score, "score": int(score), "desc": "Vol Quality"}
-    
-    def _normalize_volatility_bands(self) -> Dict[str, float]:
-        """
-        FIXED: Converts volatility_bands to dict format regardless of source.
-        Handles both array [min, max] and dict {min, ideal, max} formats.
-        """
-        bands = self.get("gates.volatility_bands_atr_pct", {"min": 1.0, "ideal": 2.5, "max": 12.0})
-        
-        # If it's an array, convert to dict
-        if isinstance(bands, list) and len(bands) >= 2:
-            return {
-                "min": bands[0],
-                "ideal": (bands[0] + bands[1]) / 2,  # Calculate midpoint
-                "max": bands[1]
-            }
-        
-        # If it's already a dict, ensure all keys exist
-        if isinstance(bands, dict):
-            return {
-                "min": bands.get("min", 1.0),
-                "ideal": bands.get("ideal", (bands.get("min", 1.0) + bands.get("max", 12.0)) / 2),
-                "max": bands.get("max", 12.0)
-            }
-        
-        # Fallback
-        return {"min": 1.0, "ideal": 2.5, "max": 12.0}
-    
-    # ============================================================
-    # FIXED: Signal Context Builder
-    # ============================================================
-    
-    def get_signal_context(self) -> Dict[str, Any]:
-        """
-        Consolidated context for Signal Engine.
-        FIXED: All paths now correctly resolve horizon-first with global fallback.
-        """
-        return {
-            "horizon": self.horizon,
-            "horizon_info": self.get_horizon_info(),
-            
-            # Primary Sections (horizon-specific)
-            "execution": self.get_execution_params(),
-            "risk": self.get_risk_params(),
-            "gates": self.get_gate_checks(),
-            
-            # Scoring (horizon-specific with global penalties)
-            "scoring": self.get_section("scoring", merge_global=False),
-            
-            # Setup Classification (from calculation engine)
-            "setup_classification": {
-                "rules": self.get_setup_rules(),
-                "pattern_priority": self.get_pattern_priority()
-            },
-            
-            # Setup Confidence (horizon-specific with global fallback)
-            "setup_confidence": self.get_section("setup_confidence", merge_global=False),
-            
-            # Enhancements (horizon-specific)
-            "enhancements": self.get_section("enhancements", merge_global=False),
-            
-            # Indicators (horizon-specific with global fallback)
-            "indicators": self.get_all_indicators(),
-            "moving_averages": self.get_section("moving_averages", merge_global=True),
-            
-            # Volatility (horizon-specific)
-            "volatility": {
-                "bands": self._normalize_volatility_bands(),
-                "scoring_thresholds": self.get("volatility.scoring_thresholds", {}),
-                "quality_mins": self.get("volatility.quality_mins", {})
-            },
-            
-            # Patterns (global calculation engine rules)
-            "patterns": {
-                "entry_rules": self._get_all_pattern_entry_rules(),
-                "invalidation_rules": self._get_all_pattern_invalidation_rules()
-            },
-            
-            # Composite Weights (global calculation engine)
-            "composite_weights": {
-                "trendstrength": self.get("calculation_engine.composite_weights.trendstrength", {}),
-                "momentumstrength": self.get("calculation_engine.composite_weights.momentumstrength", {}),
-                "volatilityquality": self.get("calculation_engine.composite_weights.volatilityquality", {})
-            },
-            
-            # Thresholds (horizon-specific with global fallback)
-            "thresholds": {
-                "volume": {
-                    "surge": self.get("volume_analysis.rvol_surge_threshold", 2.5),
-                    "drought": self.get("volume_analysis.rvol_drought_threshold", 0.7)
-                },
-                "momentum": self.get_section("momentum_thresholds", merge_global=True),
-                "trend": self.get_section("trend_thresholds", merge_global=True)
-            },
-            
-            # Confidence (horizon-specific)
-            "confidence": {
-                "floors": self.get("confidence.floors", {}),
-                "base_floors": self.get("confidence.base_floors", {}),
-                "adx_based_floors": self.get("confidence.adx_based_floors", {}),
-                "horizon_discount": self.get("confidence.horizon_discount", 0),
-                "volume_penalty": self.get("confidence.volume_penalty", {}),
-                "setup_type_overrides": self.get("confidence.setup_type_overrides", {})
-            },
-            
-            # Time Estimation (horizon-specific)
-            "time_estimation": self.get_time_estimation_params()
-        }
-    
-    # ============================================================
-    # Helper Methods
-    # ============================================================
-    
-    def get_all_indicators(self) -> Dict[str, Any]:
-        """Get all indicator configs (horizon-specific with global fallback)."""
-        return self.get_section("indicators", merge_global=True)
+        if actual_value is None:
+            return False, f"{metric_name} is Missing/None"
 
-    
+        # Normalize to min/max
+        mn, mx = None, None
+        if isinstance(gate_config, dict):
+            mn = gate_config.get("min")
+            mx = gate_config.get("max")
+        elif isinstance(gate_config, numbers.Number) and not isinstance(gate_config, bool):
+            mn = gate_config
+        
+        # Check Min
+        if mn is not None:
+            # Reuse _compare_values from your existing string evaluator!
+            if not cls._compare_values(actual_value, mn, lambda a, b: a >= b):
+                return False, f"{metric_name} {actual_value} < min {mn}"
 
+        # Check Max
+        if mx is not None:
+            if not cls._compare_values(actual_value, mx, lambda a, b: a <= b):
+                return False, f"{metric_name} {actual_value} > max {mx}"
+
+        return True, None
+# ============================================================================
+# HELPER FUNCTIONS (Minimal - Most Logic in Resolver)
+# ============================================================================
+
+# ============================================================================
+# CORE RESOLVER CLASS (v6.0 - Refactored)
+# ============================================================================
+
+class ConfigResolver:
+    """
+    Configuration Resolver v6.0 - Pure Decision-Making Logic
     
-    def get_time_estimation_params(self) -> Dict[str, Any]:
-        """Get time estimation parameters (horizon-specific)."""
-        return {
-            "candles_per_unit": self.get("time_estimation.candles_per_unit", 1),
-            "base_friction": self.get("time_estimation.base_friction", 0.8),
-            "velocity_factors": self.get("time_estimation.velocity_factors", {})
-        }
+    ARCHITECTURE:
+    ┌─────────────────────────────────────────────────────────┐
+    │ Raw Configs (confidence_config.py, master_config.py)   │
+    │              ↓                                          │
+    │ config_extractor.py (extracts & merges sections)       │
+    │              ↓                                          │
+    │ query_optimized_extractor.py (provides query methods)  │
+    │              ↓                                          │
+    │ config_resolver.py (makes decisions) ← YOU ARE HERE    │
+    │              ↓                                          │
+    │ Application (signal_engine, trade_plan_generator)      │
+    └─────────────────────────────────────────────────────────┘
     
-    def get_horizon_info(self) -> Dict[str, str]:
-        """Get metadata about current horizon."""
-        return {
-            "horizon": self.horizon,
-            "timeframe": self.get("timeframe", "1d"),
-            "description": self.get("description", ""),
-            "ma_type": self.get("moving_averages.type", "EMA")
-        }
+    DESIGN PRINCIPLES:
+    ✅ No direct access to raw configs
+    ✅ All config queries via self.extractor
+    ✅ Pure business logic (no data extraction)
+    ✅ Clean layer separation
     
-    def get_rr_multipliers(self, adx: float) -> Dict[str, float]:
-        """Get R:R multipliers based on ADX regime (horizon-specific)."""
-        adjustments = self.get("risk_management.rr_regime_adjustments", {})
-        
-        strong = adjustments.get("strong_trend", {})
-        normal = adjustments.get("normal_trend", {})
-        weak = adjustments.get("weak_trend", {})
-        
-        if adx >= strong.get("adx_min", 35):
-            return {"t1_mult": strong.get("t1_mult", 2.0), "t2_mult": strong.get("t2_mult", 4.0)}
-        elif adx >= normal.get("adx_min", 20):
-            return {"t1_mult": normal.get("t1_mult", 1.5), "t2_mult": normal.get("t2_mult", 3.0)}
-        else:
-            return {"t1_mult": weak.get("t1_mult", 1.2), "t2_mult": weak.get("t2_mult", 2.5)}
+    RESOLVER RESPONSIBILITIES:
+    - Setup classification (using extractor for rules)
+    - Strategy selection (using extractor for fit indicators)
+    - Gate validation (using extractor for thresholds)
+    - Confidence calculation (using extractor for modifiers)
+    - Execution permission (combining all validations)
     
-    def _get_all_pattern_entry_rules(self) -> Dict[str, Dict]:
-        """Get all pattern entry rules from global calculation engine."""
-        patterns = [
-            "bollinger_squeeze", "darvas_box", "cup_handle",
-            "minervini_stage2", "flag_pennant", "three_line_strike",
-            "ichimoku_signals", "golden_cross", "double_top_bottom"
-        ]
-        
-        rules = {}
-        for pattern in patterns:
-            path = f"pattern_entry_rules.{pattern}.horizons.{self.horizon}"
-            rule = self.get(path)
-            if rule:
-                rules[pattern] = rule
-        return rules
+    EXTRACTOR RESPONSIBILITIES:
+    - Config extraction from raw files
+    - Hierarchy enforcement (horizon > setup > global)
+    - Gate merging and resolution
+    - Pattern context building
+    """
     
-    def _get_all_pattern_invalidation_rules(self) -> Dict[str, Dict]:
-        """Get all pattern invalidation rules from global calculation engine."""
-        patterns = [
-            "bollinger_squeeze", "darvas_box", "cup_handle",
-            "minervini_stage2", "flag_pennant", "three_line_strike",
-            "ichimoku_signals", "golden_cross", "double_top_bottom"
-        ]
-        
-        rules = {}
-        for pattern in patterns:
-            path = f"pattern_invalidation.{pattern}"
-            rule = self.get(path)
-            if rule:
-                breakdown = rule.get("breakdown_threshold", {}).get(self.horizon, {})
-                action = rule.get("action", {}).get(self.horizon, "EXIT_ON_CLOSE")
-                if breakdown or action:
-                    rules[pattern] = {
-                        "condition": breakdown.get("condition"),
-                        "duration_candles": breakdown.get("duration_candles"),
-                        "action": action,
-                        "or_condition": breakdown.get("or_condition")
-                    }
-        return rules
     
-    def _get_val(self, data: Dict, key: str, default: float = 0.0) -> float:
-        if not data or key not in data:
-            logger.debug(f"[{self.horizon}] _get_val: missing key '{key}'")
-            return default
-        val = _safe_get_raw_float(data.get(key))
-        if val is None:
-            logger.debug(f"[{self.horizon}] _get_val: missing key '{key}'")
-            return default
-        return val
-    
-    def _get_nested(self, data: Dict, path: str) -> Any:
-        """Get value from nested dict using dot-separated path."""
-        keys = path.split('.')
-        current = data
-        
-        for key in keys:
-            if not isinstance(current, dict):
-                return None
-            current = current.get(key)
-            if current is None:
-                return None
-        
-        return current
-    
-    def _build_eval_context(self, indicators: Dict, fundamentals: Dict = None) -> Dict:
+class ConfigResolver:
+    def __init__(self, master_config: Dict, horizon: str, logger=None):
         """
-        Context builder with blacklist approach + _get_val reuse.
+        Initialize resolver with master config and horizon.
+
+        Args:
+            master_config: Complete MASTER_CONFIG dictionary
+            horizon: Target horizon (intraday, short_term, long_term, multibagger)
         """
-        ctx = {}
-        
-        # ====================================================================
-        # STAGE 1: Flatten Raw Indicators
-        # ====================================================================
-        for k in indicators.keys():
-            ctx[k] = self._get_val(indicators, k, 0)
-        
-        # ====================================================================
-        # STAGE 2: Pattern Counting
-        # ====================================================================
-        pattern_keys = [
-            "bollinger_squeeze", "cup_handle", "darvas_box", "flag_pennant", 
-            "minervini_stage2", "golden_cross", "double_top_bottom", 
-            "three_line_strike", "ichimoku_signals"
-        ]
-        
-        pattern_count = sum(
-            1 for k in pattern_keys 
-            if isinstance(indicators.get(k), dict) and indicators[k].get("found")
+        import logging
+        from config.query_optimized_extractor import QueryOptimizedExtractor
+
+        self.horizon = horizon
+        self.logger = logger or logging.getLogger(__name__)
+
+        # Initialize query extractor (our ONLY config interface)
+        self.extractor = QueryOptimizedExtractor(master_config, horizon, self.logger)
+        self.logger.info(
+            f"✅ ConfigResolver v6.0 initialized for {horizon} "
+            f"(using query extractor)"
         )
-        ctx["pattern_count"] = pattern_count
 
-        for k in pattern_keys:
-            pattern_data = indicators.get(k, {})
-            if isinstance(pattern_data, dict):
-                # Remove underscores from key names
-                clean_name = k.replace('_', '')
-                
-                # Add flattened keys
-                ctx[f'{clean_name}found'] = pattern_data.get('found', False)
-                ctx[f'{clean_name}quality'] = pattern_data.get('quality', 0)
-                ctx[f'{clean_name}score'] = pattern_data.get('score', 0)
-                
-                # Flatten meta
-                if 'meta' in pattern_data:
-                    for meta_key, meta_val in pattern_data['meta'].items():
-                        ctx[f'{clean_name}{meta_key}'] = meta_val
-        
-        # ====================================================================
-        # STAGE 3: Semantic Booleans + Safety Guards
-        # ====================================================================
-        ctx["price"] = ctx.get("price") or ctx.get("close") or 0.0
-        price = ctx["price"]
-        
-        # Division-safe MA fallbacks (ONLY generic keys)
-        ctx["ma_fast"] = ctx.get("ma_fast") or price
-        ctx["ma_mid"] = ctx.get("ma_mid") or price
-        ctx["ma_slow"] = ctx.get("ma_slow") or price
-        
-        # Consolidation detection
-        bbwidth = ctx.get("bbwidth", 999)
-        vol_qual = ctx.get("volatilityquality", 0)
-        
-        ctx["bb_width_pct"] = (bbwidth / price * 100) if price > 0 else 999
-        
-        consolidation_threshold = self.get("gates.consolidation_bb_width_threshold", 0.06)
-        ctx["is_consolidating"] = bbwidth < consolidation_threshold and vol_qual > 4.0
-        
-        # Squeeze detection
-        ttm_squeeze = ctx.get("ttm_squeeze", "")
-        ctx["is_squeeze"] = "on" in str(ttm_squeeze).lower() or bool(ttm_squeeze)
-        
-        # Trend direction (generic key)
-        trend_sig = ctx.get("ma_trend_signal") or 0
-        ctx["trend_dir"] = "up" if trend_sig > 0 else "down" if trend_sig < 0 else "neutral"
-        
-        # Market conditions
-        adx = ctx.get("adx", 0)
-        rsi = ctx.get("rsi", 50)
-        atr_pct = ctx.get("atr_pct", 0)
-        
-        ctx["is_trending"] = adx > 20
-        ctx["is_volatile"] = atr_pct > 5.0
-        ctx["is_oversold"] = rsi < 30
-        ctx["is_overbought"] = rsi > 70
-        
-        # Supertrend
-        st_val = ctx.get("supertrendsignal")
-        if isinstance(st_val, dict):
-            st_val = st_val.get("value", "")
-        ctx["is_bullish_st"] = "bull" in str(st_val).lower() if st_val else False
-        
-        # ====================================================================
-        # STAGE 4: Flatten Fundamentals (Blacklist + _get_val)
-        # ====================================================================
-        if fundamentals:
-            # ✅ Blacklist: metadata and duplicates
-            excluded_keys = {'symbol', 'name', 'website', '_meta','current_price', 'base_score', 'market_penalty', 'final_score','days_to_earnings', 'analyst_rating', 'roe_5y', 'roe_history'}
-            # Log excluded keys (debug)
-            excluded_found = [k for k in fundamentals.keys() if k in excluded_keys]
-            if excluded_found:
-                logger.debug(f"[{self.horizon}] Excluding: {excluded_found}")
-            
-            # ✅ Flatten ALL fundamentals (numeric conversion via _get_val)
-            flattened_count = 0
-            for key in fundamentals.keys():
-                if key not in excluded_keys:
-                    ctx[key] = _get_val(fundamentals, key)
-                    flattened_count += 1            
-            logger.info(
-                f"[{self.horizon}] Flattened {flattened_count} fundamentals "
-                f"({len(excluded_keys)} excluded)"
+        # Hard validation – do not run if confidence config / critical sections are missing
+        state = self.extractor.validate_extractor_state()
+        if not state.get("valid") or not state.get("has_confidence_config"):
+            msg = (
+                f"Extractor/Confidence config invalid for horizon={horizon}. "
+                f"errors={state.get('errors')}, has_conf={state.get('has_confidence_config')}"
             )
-        
-        # ====================================================================
-        # STAGE 5: Strategy Metrics from Indicators
-        # ====================================================================
-        # ✅ Relative Strength is in indicators (not fundamentals)
-        ctx['rel_strength_nifty'] = _get_val(indicators, 'rel_strength_nifty')
-        
-        # ====================================================================
-        # STAGE 6: Support/Resistance Levels
-        # ====================================================================
-        ctx["resistance_1"] = indicators.get("resistance_1", price * 1.05)
-        ctx["resistance_2"] = indicators.get("resistance_2", price * 1.10)
-        ctx["support_1"] = indicators.get("support_1", price * 0.95)
-        ctx["pivot_point"] = indicators.get("pivot_point", price)
-        
-        # ====================================================================
-        # STAGE 7: Metadata
-        # ====================================================================
-        ctx["setup_type"] = "UNKNOWN"
-        ctx["horizon"] = self.horizon
-        
-        logger.debug(
-            f"[{self.horizon}] Context: {len(ctx)} keys "
-            f"(patterns={pattern_count}, price={price:.2f}, ma_fast={ctx['ma_fast']:.2f})"
-        )
-        logger.debug(f"{self.horizon} Full context keys: {sorted(ctx.keys())}")
+            self.logger.error(msg)
+            raise RuntimeError(msg)
 
-        return ctx
-
-    def _evaluate_condition_string(
-    self, 
-    condition: str, 
-    indicators: Dict, 
-    fundamentals: Dict = None, 
-    context: Dict = None
-    ) -> bool:
+    def _flatten_indicator_data(self, data: Dict[str, Any]) -> Dict[str, float]:
         """
-        Safe condition evaluator with robust whitespace and string handling.
+        Flatten nested indicator dicts to simple numeric values.
         
-        ARCHITECTURE:
-        - Stage 0: Extract quoted strings
-        - Stage 1: Build evaluation context (if not provided)
-        - Stage 2: Fast path for simple comparisons (e.g., "rsi >= 60")
-        - Stage 3: Complex path using AST parser (e.g., "(price - ma) / ma <= 0.05")
+        Ensures extractor receives clean data that matches test expectations.
+        
+        Transforms:
+            {"rsi": {"value": 62.01, "score": 8}} → {"rsi": 62.01}
+            {"adx": 33.13} → {"adx": 33.13}
         
         Args:
-            condition: Condition string to evaluate
-            indicators: Technical indicators
-            fundamentals: Fundamental data (optional)
-            context: Pre-built context (optional, for performance)
+            data: Raw indicator/fundamental data (may have nested dicts)
         
         Returns:
-            True if condition evaluates to truthy value
+            Flattened dict with numeric values only
+        """
+        flattened = {}
+        
+        for key, value in data.items():
+            if value is None:
+                continue
+            
+            # Already numeric - use as-is
+            if isinstance(value, (int, float)):
+                flattened[key] = float(value)
+                continue
+            
+            # Nested dict - extract numeric value
+            if isinstance(value, dict):
+                # Priority: raw > value (raw has full precision; value may be
+                # display-rounded e.g. adx.value=32.96 vs adx.raw=32.96281)
+                # Score is EXCLUDED — it's a 0-10 normalized rating, not the
+                # actual metric value. Including it would silently pollute
+                # keys like analystRating or shortInterest with their score.
+                candidates = []
+                if "raw" in value:
+                    candidates.append(value["raw"])
+                if "value" in value:
+                    candidates.append(value["value"])
+                
+                for candidate in candidates:
+                    if candidate is None:
+                        continue
+                    if isinstance(candidate, (int, float)):
+                        flattened[key] = float(candidate)
+                        break
+                    try:
+                        flattened[key] = float(candidate)
+                        break
+                    except (ValueError, TypeError):
+                        continue  # Try next candidate
+                continue
+            
+            # String number - try to convert
+            if isinstance(value, str):
+                try:
+                    flattened[key] = float(value)
+                except (ValueError, TypeError):
+                    # Skip if not a valid number
+                    pass
+                continue
+        
+        return flattened
+    
+
+    # ========================================================================
+    # PHASE 1: EVALUATION CONTEXT (WHAT to trade)
+    # ========================================================================
+    
+    @log_failures(return_on_error={}, critical=False)
+    def _build_evaluation_context(
+        self,
+        symbol: str,
+        fundamentals: Dict[str, float],
+        indicators: Dict[str, float],
+        price_data: Dict[str, float],
+        detected_patterns: Optional[Dict[str, Dict]]
+    ) -> Dict[str, Any]:
+        """Build evaluation context using ONLY extractor queries."""
+        # Log input data quality
+        log_resolver_context_quality(
+            fundamentals=fundamentals,
+            indicators=indicators,
+            patterns=detected_patterns or {},
+            symbol=symbol
+        )
+        
+        safe_fund = SafeDict(fundamentals or {}, context="fundamentals", source=symbol)
+        safe_ind = SafeDict(indicators or {}, context="indicators", source=symbol)
+        safe_price = SafeDict(price_data or {}, context="price_data", source=symbol)
+        
+        overall_start = datetime.now().timestamp()
+        
+        ctx = {
+            "meta": {
+                "symbol": symbol,
+                "horizon": self.horizon,
+                "timestamp": datetime.utcnow().isoformat(),
+                "config_version": "6.0"
+            }
+        }
+        
+        # Store raw dicts
+        ctx["fundamentals"] = safe_fund.raw
+        ctx["indicators"] = safe_ind.raw
+        ctx["price_data"] = safe_price.raw
+        ctx["patterns"] = detected_patterns
+        ctx["trend"] = self._build_trend_context(ctx["indicators"])
+        ctx["momentum"] = self._build_momentum_context(ctx["indicators"])
+
+        # =====================================================================
+        # âœ… CORRECTED EXECUTION ORDER - Respects Dependencies
+        # =====================================================================
+        
+        # PHASE 1: Foundation (No Dependencies)
+        # ---------------------------------------------------------------------
+        with track_performance("calculate_scores"):
+            ctx["scoring"] = self._calculate_all_scores(ctx)
+        
+        with track_performance("build_conditions"):
+            ctx["conditions"] = self._build_conditions(ctx)
+        
+        with track_performance("detect_volume_signature"):
+            ctx["volume_signature"] = self.detect_volume_signature(safe_ind.raw)
+        
+        with track_performance("detect_divergence"):
+            ctx["divergence"] = self.detect_divergence(safe_ind.raw)
+        
+        # PHASE 2: Setup Classification (Needs: conditions, patterns)
+        # ---------------------------------------------------------------------
+        with track_performance("classify_setup"):
+            ctx["setup"] = self._classify_setup(ctx)
+        
+        # PHASE 3: Pattern Validation (Evaluate pattern validity PER SETUP, and record results.)
+        # ---------------------------------------------------------------------
+        with track_performance("validate_patterns"):
+            ctx["pattern_validation"] = self._validate_patterns(ctx)
+        
+        # PHASE 4: Strategy & Preferences (Needs: setup)
+        # ---------------------------------------------------------------------
+        with track_performance("classify_strategy"):
+            ctx["strategy"] = self._classify_strategy(ctx)
+        
+        with track_performance("apply_setup_preferences"):
+            ctx["setup_preferences"] = self._apply_setup_preferences(ctx)
+        
+        # PHASE 5: Structural Gates (Needs: setup)
+        # ---------------------------------------------------------------------
+        with track_performance("validate_structural_gates"):
+            ctx["structural_gates"] = self._validate_structural_gates(ctx)
+        
+        # PHASE 6: Execution Rules (Needs: setup, structural_gates)
+        # ---------------------------------------------------------------------
+        with track_performance("validate_execution_rules"):
+            ctx["execution_rules"] = self._validate_execution_rules(ctx)
+        
+        # PHASE 7: Confidence (Needs: setup, volume, divergence)
+        # ---------------------------------------------------------------------
+        with track_performance("calculate_confidence"):
+            ctx["confidence"] = self._calculate_confidence(ctx)
+
+        with track_performance("risk_candidates"):
+            ctx["risk_candidates"] = self._build_risk_candidates(ctx)
+        
+        # PHASE 8: Opportunity Gates (Needs: confidence - MUST BE LAST)
+        # ---------------------------------------------------------------------
+        with track_performance("validate_opportunity_gates"):
+            ctx["opportunity_gates"] = self._validate_opportunity_gates(ctx)
+
+
+        # Log overall performance
+        overall_elapsed = datetime.now().timestamp() - overall_start
+        self.logger.info(
+            f"[{symbol}] ✅ EVALUATION CONTEXT BUILT in {overall_elapsed*1000:.1f}ms"
+        )
+        METRICS.log_performance("_build_evaluation_context", overall_elapsed, threshold_ms=100)
+        
+        return ctx
+    
+    def build_evaluation_context_only(
+        self,
+        symbol: str,
+        fundamentals: Dict[str, float],
+        indicators: Dict[str, float],
+        price_data: Dict[str, float],
+        detected_patterns: Optional[Dict[str, Dict]] = None
+    ) -> Dict[str, Any]:
+        """
+        ✅ PUBLIC API: Build evaluation context (Phase 1 only).
+        
+        This is the public interface called by config_helpers.py.
+        Delegates to internal _build_evaluation_context method.
+        
+        Args:
+            symbol: Stock symbol
+            fundamentals: Fundamental metrics
+            indicators: Technical indicators
+            price_data: Price and volume data
+            detected_patterns: Optional pre-detected patterns
+        
+        Returns:
+            Complete evaluation context dict
+        
+        Usage:
+            resolver = get_resolver('short_term')
+            eval_ctx = resolver.build_evaluation_context_only(
+                symbol='RELIANCE.NS',
+                fundamentals=fund_data,
+                indicators=tech_data,
+                price_data=price_info,
+                detected_patterns=patterns
+            )
+        """
+        return self._build_evaluation_context(
+            symbol=symbol,
+            fundamentals=fundamentals,
+            indicators=indicators,
+            price_data=price_data,
+            detected_patterns=detected_patterns
+        )
+
+    def build_execution_context_from_evaluation(
+        self,
+        evaluation_ctx: Dict[str, Any],
+        capital: float
+    ) -> Dict[str, Any]:
+        """
+        ✅ PUBLIC API: Build execution context from existing evaluation context.
+        
+        This is the public interface called by config_helpers.py.
+        Delegates to internal _build_execution_context method.
+        
+        Args:
+            evaluation_ctx: Pre-built evaluation context
+            capital: Available trading capital
+        
+        Returns:
+            Complete execution context dict
+        
+        Usage:
+            exec_ctx = resolver.build_execution_context_from_evaluation(
+                evaluation_ctx=eval_ctx,
+                capital=100000
+            )
+        """
+        return self._build_execution_context(
+            evaluation_ctx=evaluation_ctx,
+            capital=capital,
+            now=None  # Time constraints handled separately
+        )
+    
+    # ========================================================================
+    # SCORING CALCULATION (Uses Extractor Methods)
+    # ========================================================================
+    def _build_trend_context(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build trend context using config-based thresholds.
+        
+        Returns dict that includes:
+        - Uses trend_thresholds.slope from config (not hardcoded slope > 0)
+        - Does NOT add confidence_boost (already handled by trend_strength_bands)
+        - Backward compatible with signal_engine/trade_enhancer
+        - returns regime/adx/slope, classification details for advanced usage
+        """        
+        adx = ensure_numeric(indicators.get("adx")) or 0
+        slope = ensure_numeric(indicators.get("regSlope")) or 0
+        
+        thresholds = self.extractor.get_trend_thresholds()
+        slope_thresholds = thresholds.get("slope", {})
+        strong_threshold = slope_thresholds.get("strong", 15.0)
+        moderate_threshold = slope_thresholds.get("moderate", 5.0)
+        
+        # Determine direction
+        if slope > 0:
+            direction = "bullish"
+        elif slope < 0:
+            direction = "bearish"
+        else:
+            direction = "neutral"
+        
+        # Classify strength using config thresholds
+        abs_slope = abs(slope)
+        
+        if abs_slope >= strong_threshold:
+            strength_class = "strong"
+            multiplier = 1.2
+        elif abs_slope >= moderate_threshold:
+            strength_class = "moderate"
+            multiplier = 1.0
+        else:
+            strength_class = "weak"
+            multiplier = 0.9
+        
+        # Determine regime using config-based classification + ADX
+        # This maintains backward compatibility while using smart thresholds
+        if adx >= 25 and direction == "bullish" and strength_class == "strong":
+            regime = "strong"
+        elif adx >= 25 and direction == "bullish" and strength_class == "moderate":
+            regime = "strong"  # ADX strength compensates for moderate slope
+        elif adx >= 15:
+            regime = "normal"
+        else:
+            regime = "weak"
+
+        return {
+            "regime": regime,
+            "adx": adx,
+            "slope": slope,
+            "classification": {
+                "strength": strength_class,      # "strong"|"moderate"|"weak"
+                "direction": direction,           # "bullish"|"bearish"|"neutral"
+                "multiplier": multiplier,         # Position sizing multiplier
+                "thresholds_used": {
+                    "strong": strong_threshold,
+                    "moderate": moderate_threshold,
+                    "horizon": self.horizon
+                }
+            },
+            "source": "config_based_classification, Confidence adjustments via trend_strength_bands (separate metric)",
+        }
+    
+    def _build_momentum_context(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build momentum context using config-based thresholds.
+    
+        Used for adaptive divergence severity determination.
+        Does NOT include confidence adjustments (handled separately).
+        """
+        from services.data_fetch import ensure_numeric
+        
+        # Get horizon-specific thresholds from config
+        thresholds = self.extractor.get_momentum_thresholds()
+        rsi_thresholds = thresholds.get("rsislope", {})
+        macd_thresholds = thresholds.get("macd", {})
+        
+        rsi_accel = rsi_thresholds.get("acceleration_floor", 0.05)
+        rsi_decel = rsi_thresholds.get("deceleration_ceiling", -0.05)
+        macd_accel = macd_thresholds.get("acceleration_floor", 0.5)
+        macd_decel = macd_thresholds.get("deceleration_ceiling", -0.5)
+        
+        # Get actual values
+        rsi_slope = ensure_numeric(indicators.get("rsislope", 0))
+        macd_hist = ensure_numeric(indicators.get("macdhistogram", 0))
+        
+        # Classify RSI momentum state
+        if rsi_slope >= rsi_accel:
+            rsi_state = "accelerating"
+        elif rsi_slope <= rsi_decel:
+            rsi_state = "decelerating"
+        else:
+            rsi_state = "neutral"
+        
+        # Classify MACD momentum state
+        if macd_hist >= macd_accel:
+            macd_state = "accelerating"
+        elif macd_hist <= macd_decel:
+            macd_state = "decelerating"
+        else:
+            macd_state = "neutral"
+        
+        # Determine severity for deceleration (adaptive thresholds)
+        severity = None
+        if rsi_state == "decelerating":
+            if rsi_slope <= rsi_decel * 3:  # 3x threshold = severe
+                severity = "severe"
+            elif rsi_slope <= rsi_decel * 1.5:  # 1.5x threshold = moderate
+                severity = "moderate"
+            else:
+                severity = "minor"
+        
+        # Combined state and warnings
+        if rsi_state == "decelerating" and macd_state == "decelerating":
+            combined_state = "bearish"
+        elif rsi_state == "accelerating" and macd_state == "accelerating":
+            combined_state = "bullish"
+        else:
+            combined_state = "neutral"
+        
+        return {
+            "rsi_state": rsi_state,
+            "rsi_slope": rsi_slope,
+            "macd_state": macd_state,
+            "macd_hist": macd_hist,
+            "combined_state": combined_state,
+            "severity": severity,
+            "thresholds_used": {
+                "rsi_accel": rsi_accel,
+                "rsi_decel": rsi_decel,
+                "macd_accel": macd_accel,
+                "macd_decel": macd_decel,
+                "horizon": self.horizon
+            }
+        }
+
+    def _calculate_all_scores(self, ctx: Dict) -> Dict:
+        """
+        Calculate scores using Extractor proxies.
+        No direct imports from score configs allowed here.
+        """
+        indicators = ctx["indicators"]
+        fundamentals = ctx["fundamentals"]
+        
+        start = datetime.now().timestamp()
+        
+        # 1. Technical Score (Via Extractor)
+        tech_result = self.extractor.get_technical_score(indicators)
+        tech_elapsed = datetime.now().timestamp() - start
+        
+        METRICS.log_score_calculation(
+            score_type="technical",
+            score=tech_result["score"],
+            breakdown=tech_result["breakdown"],
+            elapsed=tech_elapsed
+        )
+        
+        # 2. Fundamental Score (Via Extractor)
+        start = datetime.now().timestamp()
+        fund_result = self.extractor.get_fundamental_score(fundamentals)
+        category_scores = fund_result.get("category_scores", {})
+        fund_elapsed = datetime.now().timestamp() - start
+        
+        METRICS.log_score_calculation(
+            score_type="fundamental",
+            score=fund_result["score"],
+            breakdown=fund_result["breakdown"],
+            elapsed=fund_elapsed
+        )
+        
+        # 3. Hybrid Score (Uses internal method -> Extractor Proxy)
+        start = datetime.now().timestamp()
+        hybrid_metrics = self._calculate_hybrid_metrics(fundamentals, indicators)
+        hybrid_pillar = self._aggregate_hybrid_pillar(hybrid_metrics)
+        hybrid_elapsed = datetime.now().timestamp() - start
+        
+        METRICS.log_score_calculation(
+            score_type="hybrid",
+            score=hybrid_pillar["score"],
+            breakdown=hybrid_pillar["breakdown"],
+            elapsed=hybrid_elapsed
+        )
+        
+        from services.data_fetch import extract_metric_details
+        breakdown_metrics = {
+            **tech_result["breakdown"],
+            **fund_result["breakdown"],
+            **hybrid_pillar["breakdown"]
+        }
+        metric_details = extract_metric_details(breakdown_metrics)
+        
+        return {
+            "technical": tech_result,
+            "fundamental": fund_result,
+            "category_scores": category_scores,
+            "hybrid": {
+                "score": hybrid_pillar["score"],
+                "metrics": hybrid_metrics,
+                "breakdown": hybrid_pillar["breakdown"]
+            },
+            "metric_details": metric_details,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    def _calculate_hybrid_metrics(
+        self, 
+        fundamentals: Dict, 
+        indicators: Dict
+    ) -> Dict:
+        """Calculate hybrid metrics (no raw config access)."""
+        HYBRID_METRIC_REGISTRY = self.extractor.get_hybrid_metric_registry()
+
+        safe_fund = SafeDict(fundamentals, context="hybrid_fundamentals")
+        safe_ind = SafeDict(indicators, context="hybrid_indicators")
+        
+        # Extract raw values
+        roe = _get_val(safe_fund.raw, "roe") or _safe_get_raw_float(safe_fund.raw.get("roe"))
+        pe = _get_val(safe_fund.raw, "peRatio") or _safe_get_raw_float(safe_fund.raw.get("peRatio"))
+        eps_5y = _get_val(safe_fund.raw, "epsGrowth5y") or _safe_get_raw_float(safe_fund.raw.get("epsGrowth5y"))
+        q_growth = _get_val(safe_fund.raw, "quarterlyGrowth") or _safe_get_raw_float(safe_fund.raw.get("quarterlyGrowth"))
+        net_margin = _get_val(safe_fund.raw, "netProfitMargin") or _safe_get_raw_float(safe_fund.raw.get("netProfitMargin"))
+        fcf_yield = _get_val(safe_fund.raw, "fcfYield") or _safe_get_raw_float(safe_fund.raw.get("fcfYield"))
+        atr_pct = _get_val(safe_ind.raw, "atrPct") or _safe_get_raw_float(safe_ind.raw.get("atrPct"))
+        price = _get_val(safe_ind.raw, "price") or _safe_get_raw_float(safe_ind.raw.get("price"))
+        ma_slow = _get_val(safe_ind.raw, "maSlow") or _get_val(safe_ind.raw, "ema_200")
+        adx = _get_val(safe_ind.raw, "adx")
+        
+        # Calculation mapping
+        math_results = {
+            "volatilityAdjustedRoe": (roe / atr_pct) if (roe and atr_pct and atr_pct > 0) else None,
+            "priceToIntrinsicValue": (price / (price * (1 / (pe / eps_5y)))) if (price and pe and eps_5y and eps_5y > 0) else None,
+            "fcfYieldVsVolatility": (fcf_yield / max(atr_pct, 0.1)) if (fcf_yield and atr_pct) else None,
+            "trendConsistency": adx,
+            "priceVsPrimaryTrendPct": ((price / ma_slow) - 1) if (price and ma_slow) else None,
+            "fundamentalMomentum": ((q_growth + eps_5y/5) / 2) if (q_growth is not None and eps_5y is not None) else None,
+            "earningsConsistencyIndex": ((roe + net_margin) / 2) if (roe and net_margin) else None
+        }
+        
+        # Score each metric
+        hybrid_metrics = {}
+        for metric_name, raw_val in math_results.items():
+            if raw_val is None:
+                continue
+            
+            # ✅ REFACTORED: Use Extractor Proxy
+            score = self.extractor.calculate_dynamic_metric_score(
+                metric_name=metric_name,
+                value=raw_val,
+                indicators=safe_ind.raw
+            )
+            
+            hybrid_metrics[metric_name] = {
+                "raw": raw_val,
+                "value": round(raw_val, 2) if metric_name != "priceVsPrimaryTrendPct" else round(raw_val*100, 2),
+                "score": score,
+                "desc": HYBRID_METRIC_REGISTRY[metric_name]["description"],
+                "source": "hybrid"
+            }
+        
+        return hybrid_metrics
+    
+    def _aggregate_hybrid_pillar(self, hybrid_metrics: Dict) -> Dict:
+        """Aggregate hybrid metrics into single pillar score."""
+        from config.master_config import HYBRID_PILLAR_COMPOSITION
+        
+        # Get horizon-specific weights
+        weights = self.extractor.get_hybrid_pillar_composition()
+        
+        total_weighted_score = 0.0
+        total_weight = 0.0
+        breakdown = {}
+        
+        for metric_name, weight in weights.items():
+            metric_data = hybrid_metrics.get(metric_name)
+            if not metric_data:
+                continue
+            
+            score = metric_data.get('score', 0.0)
+            contribution = score * weight
+            total_weighted_score += contribution
+            total_weight += weight
+            
+            breakdown[metric_name] = {
+                "score": score,
+                "weight": weight,
+                "contribution": round(contribution, 2)
+            }
+        
+        final_score = (total_weighted_score / total_weight) if total_weight > 0 else 0.0
+        
+        return {
+            "score": round(final_score, 2),
+            "breakdown": breakdown,
+            "horizon": self.horizon,
+            "source": "hybrid_pillar"
+        }
+    
+    # ========================================================================
+    # CONDITIONS & SETUP CLASSIFICATION (Refactored)
+    # ========================================================================
+    
+    def _build_conditions(self, ctx: Dict) -> Dict[str, bool]:
+        """Pre-calculate common boolean conditions."""
+        safe_ind = SafeDict(ctx["indicators"], context="conditions_indicators")
+        safe_fund = SafeDict(ctx["fundamentals"], context="conditions_fundamentals")
+        safe_price = SafeDict(ctx["price_data"], context="conditions_price")
+        
+        try:
+            bc = {
+                # Technical
+                "bb_width_tight": ensure_numeric(safe_ind.raw.get("bbWidth", 999)) < 5.0,
+                "rsi_oversold": ensure_numeric(safe_ind.raw.get("rsi", 50)) < 35,
+                "rsi_overbought": ensure_numeric(safe_ind.raw.get("rsi", 50)) > 70,
+                "trend_strong": ensure_numeric(safe_ind.raw.get("trendStrength", 0)) >= 6.0,
+                "momentum_strong": ensure_numeric(safe_ind.raw.get("momentumStrength", 0)) >= 6.0,
+                "volatility_high_quality": ensure_numeric(safe_ind.raw.get("volatilityQuality", 0)) >= 7.0,
+                "adx_strong": ensure_numeric(safe_ind.raw.get("adx", 0)) >= 25,
+                "volume_surge": ensure_numeric(safe_ind.raw.get("rvol", 1.0)) >= 1.5,
+                "macd_bullish": ensure_numeric(safe_ind.raw.get("macdhistogram", 0)) > 0,
+                
+                # Fundamental
+                "roe_excellent": ensure_numeric(safe_fund.raw.get("roe", 0)) >= 20,
+                "roce_excellent": ensure_numeric(safe_fund.raw.get("roce", 0)) >= 25,
+                "low_debt": ensure_numeric(safe_fund.raw.get("deRatio", 999)) <= 0.5,
+                "quality_compounder": (
+                    ensure_numeric(safe_fund.raw.get("roe", 0)) >= 20 and 
+                    ensure_numeric(safe_fund.raw.get("roce", 0)) >= 25 and 
+                    ensure_numeric(safe_fund.raw.get("epsGrowth5y", 0)) >= 15
+                ),
+                
+                # Position
+                "near_52w_high": ensure_numeric(safe_price.raw.get("position52w", 0)) >= 85,
+                "deep_in_base": ensure_numeric(safe_price.raw.get("position52w", 0)) < 50,
+                
+                # MA alignment
+                "price_above_fast_ma": ensure_numeric(safe_price.raw.get("price", 0)) > ensure_numeric(safe_ind.raw.get("maFast", 0)),
+                "ma_aligned_bullish": self._check_ma_alignment(safe_price.raw, safe_ind.raw)
+            }
+        except Exception as e:
+            self.logger.debug(f"Error building conditions: {e}")
+            bc = {}
+        
+        return bc
+    
+    def _check_ma_alignment(self, price: Dict, ind: Dict) -> bool:
+        """Check if MAs are in bullish alignment."""
+        p = price.get("price", 0)
+        fast = _get_val(ind, "maFast")
+        mid = _get_val(ind, "maMid")
+        slow = _get_val(ind, "maSlow")
+        
+        if all([p, fast, mid, slow]):
+            return p > fast > mid > slow
+        return False
+    
+    def _classify_setup(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        Evaluate all qualifying setups.
+        
+        IMPORTANT:
+        - Detection & scoring only
+        - No irreversible commitment
+        - Rank by BOTH priority AND fit quality
+        """
+
+        ind = ctx["indicators"]
+        fund = ctx["fundamentals"]
+        patterns = ctx.get("patterns", {})
+
+        candidates = []
+        rejected = []
+
+        all_setups = self.extractor.get_all_setup_names()
+
+        for setup_name in all_setups:
+            # Horizon block
+            if self.extractor.is_setup_blocked_for_horizon(setup_name):
+                rejected.append({
+                    "type": setup_name,
+                    "reason": "blocked_by_horizon",
+                    "priority": 0,
+                    "fit_score": 0
+                })
+                continue
+
+            rules = self.extractor.get_setup_classification_rules(setup_name)
+            if not rules:
+                continue
+
+            pattern_rules = rules.get("pattern_detection", {})
+            fund_conditions = rules.get("fundamental_conditions", [])
+            tech_conditions = rules.get("technical_conditions", [])
+            require_fund = rules.get("require_fundamentals", False)
+
+            # Fundamentals availability check
+            if require_fund:
+                required_keys = ["roe", "roce", "deRatio"]
+                if not all(fund.get(k) is not None for k in required_keys):
+                    rejected.append({
+                        "type": setup_name,
+                        "reason": "missing_fundamentals"
+                    })
+                    continue
+
+            # Pattern detection
+            if pattern_rules and not self._evaluate_pattern_detection(
+                pattern_rules, patterns, self.horizon
+            ):
+                rejected.append({
+                    "type": setup_name,
+                    "reason": "pattern_detection_failed"
+                })
+                continue
+
+            # Fundamental conditions
+            if fund_conditions and not self._evaluate_conditions_list(
+                fund_conditions, fund, context=setup_name
+            ):
+                rejected.append({
+                    "type": setup_name,
+                    "reason": "fundamental_conditions_failed"
+                })
+                continue
+
+            # Technical conditions
+            if not self._evaluate_conditions_list(
+                tech_conditions, ind, context=setup_name
+            ):
+                rejected.append({
+                    "type": setup_name,
+                    "reason": "technical_conditions_failed"
+                })
+                continue
+
+            # Context requirements
+            meets_ctx, ctx_reason = self._validate_context_requirements_via_extractor(
+                setup_name, fund, ctx["price_data"], ind
+            )
+            if not meets_ctx:
+                rejected.append({
+                    "type": setup_name,
+                    "reason": ctx_reason or "context_validation_failed"
+                })
+                continue
+
+            # ✅ NEW: Calculate fit quality score
+            fit_score = self._calculate_setup_fit_quality(
+                setup_name, ind, fund, patterns
+            )
+
+            # ✅ BUG FIX #3: Skip setups that don't meet minimum fit quality
+            if fit_score < MIN_FIT_SCORE:
+                rejected.append({
+                    "type": setup_name,
+                    "reason": f"fit_score_too_low ({fit_score:.1f} < {MIN_FIT_SCORE})"
+                })
+                continue
+
+            priority = self.extractor.get_setup_priority(setup_name)
+
+            candidates.append({
+                "type": setup_name,
+                "priority": priority,
+                "fit_score": fit_score,
+                "require_fundamentals": require_fund
+            })
+
+        # ✅ NEW: Rank by WEIGHTED combination of priority + fit
+        for candidate in candidates:
+            # Composite score: 70% priority, 30% fit
+            candidate["composite_score"] = (
+                (candidate["priority"] * 0.7) + 
+                (candidate["fit_score"] * 0.3)
+            )
+
+        ranked = sorted(candidates, key=lambda x: x["composite_score"], reverse=True)
+
+        # ✅ BUG FIX #4: Add rejection logging for debugging
+        if self.logger.isEnabledFor(logging.DEBUG):
+            for r in rejected:
+                self.logger.debug(
+                    f"  ↳ Setup rejected: {r['type']} | reason={r['reason']}"
+                )
+            for c in ranked:
+                self.logger.debug(
+                    f"  ↳ Setup candidate: {c['type']} | priority={c['priority']} | "
+                    f"fit={c['fit_score']:.1f} | composite={c['composite_score']:.1f}"
+                )
+
+        TOP_K = 2
+        top = ranked[:TOP_K]
+
+        # Best setup
+        best = ranked[0] if ranked else None
+
+        if best:
+            setup_type = best["type"]
+            setup_patterns = self.extractor.get_setup_patterns(setup_type)
+            confidence_floor = self.extractor.get_setup_confidence_floor(setup_type)
+
+            best_setup = {
+                "type": setup_type,
+                "priority": best["priority"],
+                "fit_score": best["fit_score"],  # ✅ NEW
+                "composite_score": best["composite_score"],  # ✅ NEW
+                "confidence_floor": confidence_floor,
+                "require_fundamentals": best["require_fundamentals"],
+                "patterns_primary": setup_patterns.get("PRIMARY", []),
+                "patterns_confirming": setup_patterns.get("CONFIRMING", []),
+                "patterns_conflicting": setup_patterns.get("CONFLICTING", []),
+                "reasoning": f"Top ranked setup (priority={best['priority']}, fit={best['fit_score']:.1f})"
+            }
+            
+            # ✅ IMPROVED LOGGING
+            self.logger.info(
+                f"✅ SETUP SELECTED: {setup_type} | "
+                f"Priority={best['priority']} | Fit={best['fit_score']:.1f} | "
+                f"Composite={best['composite_score']:.1f}"
+            )
+        else:
+            best_setup = {
+                "type": "GENERIC",
+                "priority": 0,
+                "fit_score": 0,
+                "composite_score": 0,
+                "confidence_floor": 40,
+                "require_fundamentals": False,
+                "patterns_primary": [],
+                "patterns_confirming": [],
+                "patterns_conflicting": [],
+                "reasoning": "No specific setup matched"
+            }
+
+        return {
+            "best": best_setup,
+            "candidates": candidates,
+            "ranked": ranked,
+            "top": top,
+            "rejected": rejected,
+            # Backward compatibility
+            "type": best_setup["type"]
+        }
+
+    def _calculate_setup_fit_quality(
+        self,
+        setup_name: str,
+        indicators: Dict,
+        fundamentals: Dict,
+        patterns: Dict
+    ) -> float:
+        """
+        ✅ NEW: Calculate how well indicators match setup requirements.
+        
+        Returns:
+            Score from 0-100
+        """
+        rules = self.extractor.get_setup_classification_rules(setup_name)
+        if not rules:
+            return 0.0
+
+        score = 50.0  # Base score
+
+        # Check technical conditions
+        tech_conditions = rules.get("technical_conditions", [])
+        if tech_conditions:
+            passed = sum(
+                1 for cond in tech_conditions
+                if self._evaluate_conditions_list([cond], indicators, setup_name)
+            )
+            # +5 points per passed condition
+            score += (passed / len(tech_conditions)) * 30
+
+        # Check fundamental conditions
+        fund_conditions = rules.get("fundamental_conditions", [])
+        if fund_conditions:
+            passed = sum(
+                1 for cond in fund_conditions
+                if self._evaluate_conditions_list([cond], fundamentals, setup_name)
+            )
+            # +2 points per passed condition
+            score += (passed / len(fund_conditions)) * 20
+
+        return min(score, 100.0)
+    
+    def _validate_context_requirements_via_extractor(
+        self,
+        setup_name: str,
+        fundamentals: Dict,
+        price_data: Dict,
+        indicators: Optional[Dict] = None
+    ) -> Tuple[bool, str]:
+        """
+        ✅ REFACTORED: Validate context requirements using extractor.
+        
+        Previously: Direct access to PATTERN_MATRIX
+        Now: Uses self.extractor methods
+        """
+        # Get setup config via extractor
+        setup_config = self.extractor.base_extractor.get(f"setup_{setup_name}")
+        if not setup_config:
+            return True, "No context requirements"
+        
+        requirements = self.extractor.get_setup_context_requirements(setup_name)
+        if not requirements:
+            return True, "No context requirements"
+        
+        # Check market cap
+        market_cap_min = requirements.get("market_cap_min_cr")
+        if market_cap_min is not None:
+            stock_market_cap = fundamentals.get("marketCap", 0)
+            if stock_market_cap < market_cap_min:
+                return False, f"Market cap {stock_market_cap:.0f}cr < required {market_cap_min}cr"
+        
+        # Check liquidity
+        avg_volume_min = requirements.get("avg_volume_min")
+        if avg_volume_min is not None:
+            stock_volume = price_data.get("avgVolume", 0)
+            if stock_volume < avg_volume_min:
+                return False, f"Avg volume {stock_volume:.0f} < required {avg_volume_min}"
+        
+        # Check price
+        min_price = requirements.get("min_price")
+        if min_price is not None:
+            current_price = price_data.get("price", 0)
+            if current_price < min_price:
+                return False, f"Price {current_price:.2f} < required {min_price}"
+        
+        # Check fundamentals required
+        fundamental_reqs = requirements.get("fundamental", {})
+        if fundamental_reqs:
+            # Check requirement for existence
+            if fundamental_reqs.get("required", False):
+                required_keys = [k for k in fundamental_reqs.keys() if k != "required"]
+                # Use `is not None` — a legitimate 0.0 value (e.g. deRatio=0) is falsy
+                # but still means the fundamental data is present and valid.
+                if not fundamentals or not any(fundamentals.get(k) is not None for k in required_keys):
+                    return False, f"Required fundamentals missing for {setup_name}"
+            
+            # Check actual constraint thresholds
+            for fund_field, fund_value in fundamental_reqs.items():
+                if fund_field == "required" or not fundamentals:
+                    continue
+                
+                if isinstance(fund_value, dict):
+                    min_val = fund_value.get("min")
+                    max_val = fund_value.get("max")
+                    
+                    actual_val = ensure_numeric(fundamentals.get(fund_field))
+                    if actual_val is None:
+                        continue
+                    
+                    if min_val is not None and actual_val < min_val:
+                        return False, f"Fundamental {fund_field} {actual_val:.2f} < required {min_val}"
+                    
+                    if max_val is not None and actual_val > max_val:
+                        return False, f"Fundamental {fund_field} {actual_val:.2f} > max {max_val}"
+                else:
+                    actual_val = ensure_numeric(fundamentals.get(fund_field))
+                    if actual_val is None:
+                        continue
+                    
+                    if actual_val < fund_value:
+                        return False, f"Fundamental {fund_field} {actual_val:.2f} < required {fund_value}"
+        
+        # Check technical requirements
+        technical_reqs = requirements.get("technical", {})
+        if technical_reqs and indicators:
+            for tech_field, tech_value in technical_reqs.items():
+                if isinstance(tech_value, dict):
+                    min_val = tech_value.get("min")
+                    max_val = tech_value.get("max")
+                    # BUG 2 FIX: avoid `or` which discards zero values
+                    _v = ensure_numeric(indicators.get(tech_field))
+                    actual_val = _v if _v is not None else ensure_numeric(price_data.get(tech_field))
+                    
+                    # BUG 1 FIX: only fail on missing value if a constraint is actually active
+                    if actual_val is None and (min_val is not None or max_val is not None):
+                        return False, f"Missing technical indicator: {tech_field}"
+                    
+                    if actual_val is None:
+                        continue  # No constraints and no value — nothing to check
+                    
+                    if min_val is not None and actual_val < min_val:
+                        return False, f"{tech_field} {actual_val:.2f} < required {min_val}"
+                    
+                    if max_val is not None and actual_val > max_val:
+                        return False, f"{tech_field} {actual_val:.2f} > max {max_val}"
+                else:
+                    # BUG 2 FIX: avoid `or` which discards zero values
+                    _v = ensure_numeric(indicators.get(tech_field))
+                    actual_val = _v if _v is not None else ensure_numeric(price_data.get(tech_field))
+                    if actual_val is None:
+                        return False, f"Missing technical indicator: {tech_field}"
+                    
+                    if actual_val < tech_value:
+                        return False, f"{tech_field} {actual_val:.2f} < required {tech_value}"
+        
+        return True, "All context requirements met"
+    
+    def _evaluate_pattern_detection(
+        self,
+        pattern_detection_rules: Dict[str, bool],
+        patterns: Dict,
+        horizon: str
+    ) -> bool:
+        """Evaluate pattern detection requirements."""
+        if not pattern_detection_rules:
+            return True
+        
+        for pattern_name, required_found in pattern_detection_rules.items():
+            indicator_key = pattern_name
+            pattern_data = patterns.get(indicator_key)  # BUG 3/8 FIX: do not coerce dict to numeric
+            
+            if pattern_data is None:
+                if required_found:
+                    return False
+                continue
+            
+            if isinstance(pattern_data, dict):
+                raw_data = pattern_data.get("raw", pattern_data)
+                actual_found = raw_data.get("found", False)
+            elif isinstance(pattern_data, bool):
+                actual_found = pattern_data  # BUG 6 FIX: direct bool pattern value
+            else:
+                actual_found = bool(pattern_data)  # BUG 6 FIX: non-zero = found
+            
+            if actual_found != required_found:
+                return False
+        
+        return True
+    
+    def _evaluate_conditions_list(
+        self,
+        conditions: List[str],
+        namespace: Dict[str, Any],
+        context: str = ""
+    ) -> bool:
+        """Evaluate a list of conditions against a namespace."""
+        if not conditions:
+            return True
+        
+        evaluator = ConditionEvaluator
+        
+        for condition in conditions:
+            result = evaluator.evaluate_condition(condition, namespace)
+            
+            # Extract ACTUAL variables (excluding functions)
+            variables = self._extract_variables_from_condition(condition)
+            
+            # ✅ IMPROVED: Extract values properly for logging
+            var_values = {}
+            for var in variables:
+                raw_val = namespace.get(var)
+                # Extract numeric value for display
+                if isinstance(raw_val, dict):
+                    # Use explicit None checks — a legitimate 0.0 value is falsy
+                    # but still valid and must not be skipped.
+                    _v = raw_val.get("value")
+                    if _v is None:
+                        _v = raw_val.get("raw")
+                    if _v is None:
+                        _v = raw_val.get("score")
+                    var_values[var] = _v
+                else:
+                    var_values[var] = raw_val
+            
+            # ✅ IMPROVED: Calculate actual expression result for complex conditions
+            if any(func in condition for func in ['abs', 'min', 'max', 'round']):
+                # This is a math expression - try to evaluate left side
+                try:
+                    # Extract left side before comparison operator
+                    for op in ['<=', '>=', '<', '>', '==', '!=']:
+                        if f" {op} " in condition:
+                            left_expr = condition.split(op)[0].strip()
+                            left_result = evaluator._evaluate_expression(left_expr, namespace)
+                            if left_result is not None:
+                                var_values[f"COMPUTED[{left_expr}]"] = round(left_result, 4)
+                            break
+                except Exception:
+                    pass
+            
+            METRICS.log_condition_evaluation(
+                condition=condition,
+                result=result,
+                context=context,
+                variables=var_values  # ✅ Now shows computed values too
+            )
+            
+            if not result:
+                return False
+        
+        return True
+
+    def _extract_variables_from_condition(self, condition: str) -> List[str]:
+        """
+        Extract variable names from condition string.
+        
+        Excludes:
+        - Math functions (abs, min, max, round)
+        - Operators (and, or)
+        - Numeric literals
+        """
+        import re
+        
+        # Extract all word-like tokens
+        all_tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', condition)
+        
+        # Filter out math functions and operators
+        excluded = {'abs', 'min', 'max', 'round', 'and', 'or', 'true', 'false', 'True', 'False'}
+        
+        variables = [
+            token for token in all_tokens
+            if token not in excluded and not token.isdigit()
+        ]
+        
+        return variables
+
+    
+    # ========================================================================
+    # STRATEGY CLASSIFICATION (Refactored)
+    # ========================================================================
+    
+    def _classify_strategy(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        ✅ REFACTORED: Delegate to analyze_strategy_fit_v5 (DRY principle).
+        
+        Now just a thin wrapper that calls the helper with proper parameters.
         """
         try:
-            # ================================================================
-            # STAGE 0: Pre-process quoted strings
-            # ================================================================
-            clean_condition, extracted_strings = self._extract_quoted_strings(condition)
+            # ✅ Use existing helper with enhanced options
+            result = self.analyze_strategy_fit_v5(
+                ticker=ctx["meta"]["symbol"],
+                indicators=ctx["indicators"],
+                fundamentals=ctx["fundamentals"],
+                horizon=self.horizon,
+                include_rejected=True,     # ← Track all strategies
+                include_breakdown=True     # ← Get detailed breakdown
+            )
             
-            # ================================================================
-            # STAGE 1: Build Evaluation Context (if not provided)
-            # ================================================================
-            if context is not None:
-                eval_context = context  # ✅ Reuse provided context
+            # Transform to expected format (backward compatible)
+            if not result.get("all_candidates"):
+                return self._fallback_strategy_classification()
+            
+            best = result["all_candidates"][0]
+            
+            return {
+                # Best strategy (backward compatible)
+                "best": {
+                    "strategy": best["name"],
+                    "fit_score": best["fit_score"],
+                    "weighted_score": best["weighted_score"],
+                    "description": best["description"],
+                    "breakdown": best.get("breakdown", {})
+                },
+                "primary": best["name"],
+                "fit_score": best["fit_score"],
+                "weighted_score": best["weighted_score"],
+                "description": best["description"],
+                
+                # All qualified strategies (ranked)
+                "ranked": result["all_candidates"],
+                
+                # ✅ NEW: All strategies including rejected
+                "all_strategies": result["all_candidates"] + result.get("rejected", []),
+                
+                # ✅ NEW: Rejected strategies
+                "rejected": result.get("rejected", []),
+                
+                # ✅ NEW: Summary
+                "summary": result.get("summary", {
+                    "total": len(result["all_candidates"]),
+                    "qualified": len(result["all_candidates"]),
+                    "best_strategy": best["name"],
+                    "rejected": 0
+                }),
+                
+                # Metadata
+                "meta": {
+                    "enabled": result.get("summary", {}).get("total", 0),
+                    "evaluated": len(result["all_candidates"]),
+                    "rejected": len(result.get("rejected", []))
+                }
+            }
+        
+        except Exception as e:
+            self.logger.error(f"Strategy classification failed: {e}", exc_info=True)
+            return self._fallback_strategy_classification()
+        
+    def analyze_strategy_fit_v5(
+        self,
+        ticker: str,
+        indicators: Dict[str, Any],
+        fundamentals: Dict[str, Any],
+        horizon: str,
+        include_rejected: bool = False,      # ← NEW
+        include_breakdown: bool = False      # ← NEW
+    ) -> Dict[str, Any]:
+        """
+        ✅ ENHANCED: Strategy fit analysis with optional detailed breakdown.
+        
+        Args:
+            ticker: Stock symbol
+            indicators: Technical indicators
+            fundamentals: Fundamental metrics
+            horizon: Trading horizon
+            include_rejected: If True, include strategies that failed threshold
+            include_breakdown: If True, include detailed fit breakdown per strategy
+        
+        Returns:
+            {
+                "ticker": str,
+                "horizon": str,
+                "primary_strategy": str,
+                "primary_weighted_score": float,
+                "all_candidates": [...],      # Qualified strategies
+                "rejected": [...],            # NEW: Failed strategies (if include_rejected=True)
+                "summary": {                  # NEW: Summary stats
+                    "total": int,
+                    "qualified": int,
+                    "rejected": int
+                }
+            }
+        """
+        try:
+            extractor = self.extractor
+            # Get all enabled strategies
+            all_strategies = extractor.get_all_strategy_names()
+            enabled_strategies = [
+                s for s in all_strategies
+                if extractor.get_strategy_enabled_status(s)
+            ]
+            
+            all_candidates = []
+            rejected_strategies = []  # ← NEW
+            
+            for strategy_name in enabled_strategies:
+                # ✅ Calculate fit (with optional breakdown)
+                if include_breakdown:
+                    base_fit, breakdown = self._calculate_strategy_fit_via_extractor(
+                        strategy_name, indicators, fundamentals,
+                        return_breakdown=True  # ← Request breakdown
+                    )
+                else:
+                    base_fit = self._calculate_strategy_fit_via_extractor(
+                        strategy_name, indicators, fundamentals
+                    )
+                    breakdown = None
+                
+                # Get horizon multiplier
+                horizon_mult = extractor.get_strategy_horizon_multiplier(strategy_name)
+                
+                # Get strategy config
+                strategy_cfg = extractor.base_extractor.get(f"strategy_{strategy_name}")
+                fit_threshold = strategy_cfg.get("fit_threshold", 50) if strategy_cfg else 50
+                
+                # ─────────────────────────────────────────────────────────────
+                # Horizon-adjusted score — kept 0-100
+                #
+                # Old: weighted_score = base_fit * horizon_mult
+                #      → multiplier of 1.5 turns a 100 fit into 150, unbounded
+                #
+                # New: Convert the horizon_mult (range ~0.5–1.5) into a
+                #      ±15 pt bonus/penalty added to base_fit, then clamp 0-100.
+                #
+                #   mult=1.0 → neutral  → +0 pt
+                #   mult=1.5 → perfect  → +15 pt  (best horizon fit)
+                #   mult=0.7 → poor     → -9 pt
+                #   mult=0.0 → blocked  → score forced to 0 (handled below)
+                #
+                # This preserves ranking power of the horizon multiplier while
+                # keeping every score on the same 0-100 scale as fit_score.
+                # ─────────────────────────────────────────────────────────────
+                if horizon_mult == 0.0:
+                    weighted_score = 0.0  # blocked horizon — will be rejected
+                else:
+                    horizon_bonus = (horizon_mult - 1.0) * 30  # ±30pt range
+                    weighted_score = round(min(max(base_fit + horizon_bonus, 0.0), 100.0), 1)
+                
+                # Build record
+                record = {
+                    "name": strategy_name,
+                    "fit_score": round(base_fit, 1),
+                    "weighted_score": round(weighted_score, 1),
+                    "horizon_multiplier": horizon_mult,
+                    "fit_threshold": fit_threshold,
+                    "description": strategy_cfg.get("description", "") if strategy_cfg else "",
+                }
+                
+                # ✅ Add breakdown if requested
+                if include_breakdown and breakdown:
+                    record["breakdown"] = breakdown
+                
+                # ===================================================================
+                # Categorize: Qualified vs Rejected
+                # ===================================================================
+                rejection_reasons = []
+                
+                # Check 1: Horizon compatibility
+                if horizon_mult == 0.0:
+                    rejection_reasons.append({
+                        "type": "horizon_block",
+                        "reason": f"Incompatible with {horizon} horizon (multiplier=0)"
+                    })
+                
+                # Check 2: Weighted score vs threshold
+                elif weighted_score < fit_threshold:
+                    rejection_reasons.append({
+                        "type": "low_score",
+                        "reason": f"Weighted score {weighted_score:.1f} < threshold {fit_threshold}"
+                    })
+                
+                # Categorize
+                if rejection_reasons:
+                    # ✅ Only add to rejected list if requested
+                    if include_rejected:
+                        record["rejection_reasons"] = rejection_reasons
+                        rejected_strategies.append(record)
+                    # else: skip rejected strategies (backward compatible)
+                else:
+                    # Qualified
+                    all_candidates.append(record)
+            
+            # ===================================================================
+            # Sort and select best
+            # ===================================================================
+            all_candidates.sort(key=lambda x: x["weighted_score"], reverse=True)
+            
+            if all_candidates:
+                winner = all_candidates[0]
+                logger.info(
+                    f"[{ticker}][{horizon}] Best strategy: {winner['name']} "
+                    f"(fit={winner['fit_score']}, weighted={winner['weighted_score']})"
+                )
             else:
-                eval_context = self._build_eval_context(indicators, fundamentals)
+                winner = {"name": "generic", "weighted_score": 0, "fit_score": 0}
+                logger.warning(f"[{ticker}][{horizon}] No strategies matched")
             
-            # Semantic booleans already in _build_eval_context
-            """
-            bbwidth = eval_context.get("bbwidth", 999)
-            vol_qual = eval_context.get("volatilityquality", 0)
-            eval_context["is_consolidating"] = bbwidth < 0.06 and vol_qual > 4.0
-            eval_context["is_squeeze"] = bool(eval_context.get("ttm_squeeze", False))
+            # ===================================================================
+            # Build result
+            # ===================================================================
+            result = {
+                "ticker": ticker,
+                "horizon": horizon,
+                "primary_strategy": winner["name"],
+                "primary_fit_score": winner.get("fit_score", 0),
+                "primary_weighted_score": winner["weighted_score"],
+                "all_candidates": all_candidates
+            }
             
-            trend_sig = eval_context.get("ma_trend_signal", 0)
-            eval_context["trend_dir"] = "up" if trend_sig > 0 else "down" if trend_sig < 0 else "neutral"
-            """
+            # ✅ Add rejected strategies if requested
+            if include_rejected:
+                result["rejected"] = rejected_strategies
+                result["summary"] = {
+                    "total": len(all_candidates) + len(rejected_strategies),
+                    "qualified": len(all_candidates),
+                    "rejected": len(rejected_strategies)
+                }
             
-            # ================================================================
-            # STAGE 2: FAST PATH - Simple Comparisons
-            # ================================================================
-            
-            # ✅ Use regex split for robust whitespace handling
-            parts = re.split(r'\s+', clean_condition.strip())
-            
-            # Check for simple 3-part condition
-            if len(parts) == 3 and not any(c in clean_condition for c in "()+-*/"):
-                metric, op, target_raw = parts[0], parts[1], parts[2]
-                
-                # Restore original string if it was a placeholder
-                if target_raw.startswith("__STR_"):
-                    idx = int(target_raw.replace("__STR_", "").replace("__", ""))
-                    target_raw = extracted_strings[idx]
-                
-                val = eval_context.get(metric)
-                
-                if val is not None:
-                    target_str = target_raw.strip("'").strip('"').lower()
-                    
-                    # Try numeric comparison
-                    try:
-                        v_f, t_f = float(val), float(target_str)
-                        ops_map = {
-                            ">": operator.gt,
-                            "<": operator.lt,
-                            ">=": operator.ge,
-                            "<=": operator.le,
-                            "==": operator.eq,
-                            "!=": operator.ne
-                        }
-                        result = ops_map.get(op, lambda a, b: False)(v_f, t_f)
-                        logger.debug(f"[{self.horizon}] Simple: '{condition}' = {result}")
-                        return result
-                    
-                    except (ValueError, TypeError):
-                        # Boolean comparison
-                        if target_str in ("true", "false"):
-                            bool_val = bool(val) if not isinstance(val, str) else val.lower() == "true"
-                            target_bool = target_str == "true"
-                            result = bool_val == target_bool if op == "==" else bool_val != target_bool
-                            logger.debug(f"[{self.horizon}] Boolean: '{condition}' = {result}")
-                            return result
-                        
-                        # String comparison
-                        if op == "==":
-                            result = str(val).lower() == target_str
-                            logger.debug(f"[{self.horizon}] String: '{condition}' = {result}")
-                            return result
-                        
-                        if op == "!=":
-                            result = str(val).lower() != target_str
-                            logger.debug(f"[{self.horizon}] String: '{condition}' = {result}")
-                            return result
-            
-            # ================================================================
-            # STAGE 3: SAFE COMPLEX PATH (AST-based evaluation)
-            # ================================================================
-            
-            result = self._safe_eval_math_expression(clean_condition, eval_context)
-            logger.debug(f"[{self.horizon}] Complex: '{condition}' = {result}")
             return result
         
         except Exception as e:
-            logger.debug(f"[{self.horizon}] Condition '{condition}' failed: {e}")
-            return False
-
-
-    def _extract_quoted_strings(self, condition: str):
-        """
-        Extract quoted strings and replace with placeholders.
-        
-        Example:
-            Input: "status == 'Going Concern'"
-            Output: ("status == __STR_0__", ['Going Concern'])
-        """
-        strings = []
-        
-        # Match both single and double quoted strings
-        pattern = r"(['\"])([^'\"]*)\1"
-        
-        def replacer(match):
-            strings.append(match.group(2))
-            return f"__STR_{len(strings)-1}__"
-        
-        clean_condition = re.sub(pattern, replacer, condition)
-        return clean_condition, strings
-
-
-    def _safe_eval_math_expression(self, expression: str, context: Dict) -> bool:
-        """
-        Safely evaluates mathematical expressions using AST parsing.
-        
-        Supported:
-        - Arithmetic: +, -, *, /, //, %, **
-        - Functions: abs(), min(), max()
-        - Comparisons: <, >, <=, >=, ==, !=
-        - Logical: and, or, not
-        
-        NOT supported (security):
-        - Imports: __import__, exec, eval
-        - Attributes: obj.attr
-        - Function calls except whitelist
-        """
-        try:
-            # Parse expression into AST
-            tree = ast.parse(expression, mode='eval')
-            
-            # Evaluate AST with whitelist
-            result = self._eval_ast_node(tree.body, context)
-            
-            logger.debug(f"[{self.horizon}] Complex eval: '{expression}' = {result}")
-            return bool(result)
-        
-        except Exception as e:
-            logger.debug(f"[{self.horizon}] Complex eval failed: {e}")
-            return False
-
-    def _eval_ast_node(self, node, context: Dict):
-        """
-        Hardened AST evaluator with:
-        - dict.get() method call support
-        - Zero division guards
-        - Dict literal support ({})
-        - Python 3.8+ ast.Constant support
-        """
-        
-        # ========================================================================
-        # 1. CONSTANT VALUES (Numbers, Strings, Booleans)
-        # ========================================================================
-        
-        if isinstance(node, ast.Constant):  # Python 3.8+
-            return node.value
-        
-        elif isinstance(node, ast.Num):  # Legacy
-            return node.n
-        
-        elif isinstance(node, ast.Str):  # Legacy
-            return node.s
-        
-        # ========================================================================
-        # 2. VARIABLES (Context Lookup)
-        # ========================================================================
-        
-        if isinstance(node, ast.Name):
-            return context.get(node.id, 0.0)
-        
-        # ========================================================================
-        # 3. DICT LITERALS ({}, {'key': 'value'})
-        # ========================================================================
-        
-        # ✅ CRITICAL: Allows {} as default value in .get() calls
-        if isinstance(node, ast.Dict):
-            # Recursively evaluate keys and values
+            logger.error(f"[{ticker}][{horizon}] Strategy analysis failed: {e}", exc_info=True)
             return {
-                self._eval_ast_node(k, context): self._eval_ast_node(v, context)
-                for k, v in zip(node.keys, node.values)
+                "ticker": ticker,
+                "horizon": horizon,
+                "primary_strategy": "generic",
+                "primary_fit_score": 0,
+                "primary_weighted_score": 0,
+                "all_candidates": [],
+                "rejected": [] if include_rejected else None,
+                "error": str(e)
             }
+
+    def _get_enabled_strategies_via_extractor(self) -> List[str]:
+        """✅ Get enabled strategies using extractor."""
+        # ✅ REFACTORED: Use query extractor methods
+        all_strategies = self.extractor.get_all_strategy_names()
         
-        # ========================================================================
-        # 4. BINARY OPERATIONS (+, -, *, /, //, %, **)
-        # ========================================================================
+        enabled = []
+        for strategy_name in all_strategies:
+            # Check if globally enabled
+            if self.extractor.get_strategy_enabled_status(strategy_name):
+                # Check if not blocked by horizon
+                if not self.extractor.is_strategy_blocked_for_horizon(strategy_name):
+                    enabled.append(strategy_name)
         
-        if isinstance(node, ast.BinOp):
-            left = self._eval_ast_node(node.left, context)
-            right = self._eval_ast_node(node.right, context)
+        return enabled
+    
+    def _calculate_strategy_fit_via_extractor(
+        self,
+        strategy_name: str,
+        indicators: Dict,
+        fundamentals: Dict,
+        return_breakdown: bool = False  # ← ADD THIS
+    ) -> Union[float, Tuple[float, Dict]]:
+        """
+        Calculate strategy fit using extractor methods.
+        
+        Args:
+            strategy_name: Strategy to evaluate
+            indicators: Technical indicators
+            fundamentals: Fundamental metrics
+            return_breakdown: If True, return (score, breakdown) tuple
+        
+        Returns:
+            float: Just the score (default, backward compatible)
+            OR
+            Tuple[float, Dict]: (score, breakdown) if return_breakdown=True
+        """
+        # Get fit indicators via extractor
+        fit_indicators = self.extractor.get_strategy_fit_indicators(strategy_name)
+        
+        if not fit_indicators:
+            if return_breakdown:
+                return 0.0, {"error": "No fit indicators configured"}
+            return 0.0
+        
+        # ===================================================================
+        # Calculate fit with breakdown
+        # ===================================================================
+        total_weight = 0.0
+        weighted_score = 0.0
+        fit_indicator_results = {}
+        missing_indicators = []
+        
+        for indicator, params in fit_indicators.items():
+            weight = params.get("weight", 0.1)
+            min_val = params.get("min")
+            max_val = params.get("max")
+            direction = params.get("direction", "normal")
             
-            # Zero division guard
-            if isinstance(node.op, (ast.Div, ast.FloorDiv, ast.Mod)):
-                if right == 0:
-                    logger.debug(
-                        f"[{self.horizon}] AST: Zero division prevented. Returning 0.0"
-                    )
-                    return 0.0
+            # Get actual value
+            # BUG 2 FIX: avoid `or` which discards zero values
+            _iv = ensure_numeric(indicators.get(indicator))
+            raw_value = _iv if _iv is not None else ensure_numeric(fundamentals.get(indicator))
             
-            ops_map = {
-                ast.Add: operator.add,
-                ast.Sub: operator.sub,
-                ast.Mult: operator.mul,
-                ast.Div: operator.truediv,
-                ast.FloorDiv: operator.floordiv,
-                ast.Mod: operator.mod,
-                ast.Pow: operator.pow
+            if raw_value is None:
+                missing_indicators.append(indicator)
+                total_weight += weight  # ✅ Missing data = FAILED, not skipped
+                if return_breakdown:
+                    fit_indicator_results[indicator] = {
+                        "required": {"min": min_val, "max": max_val, "direction": direction},
+                        "actual": None,
+                        "passed": False,
+                        "weight": weight,
+                        "reason": "indicator_missing"
+                    }
+                continue
+            
+            # Extract numeric value — explicit None checks so 0.0 is not skipped
+            if isinstance(raw_value, dict):
+                actual = raw_value.get("value")
+                if actual is None:
+                    actual = raw_value.get("raw")
+                if actual is None:
+                    actual = raw_value.get("score")
+            else:
+                actual = raw_value
+            
+            try:
+                actual = float(actual)
+            except (ValueError, TypeError):
+                if return_breakdown:
+                    fit_indicator_results[indicator] = {
+                        "required": {"min": min_val, "max": max_val},
+                        "actual": raw_value,
+                        "passed": False,
+                        "weight": weight,
+                        "reason": "value_not_numeric"
+                    }
+                continue
+            
+            # Check threshold
+            total_weight += weight
+            threshold_met = True
+            failure_reason = None
+            
+            if direction == "invert":
+                if max_val is not None and actual > max_val:
+                    threshold_met = False
+                    failure_reason = f"actual ({actual:.2f}) > max ({max_val})"
+            else:
+                if min_val is not None and actual < min_val:
+                    threshold_met = False
+                    failure_reason = f"actual ({actual:.2f}) < min ({min_val})"
+                elif max_val is not None and actual > max_val:
+                    threshold_met = False
+                    failure_reason = f"actual ({actual:.2f}) > max ({max_val})"
+            
+            if threshold_met:
+                weighted_score += weight
+            
+            # Store breakdown
+            if return_breakdown:
+                fit_indicator_results[indicator] = {
+                    "required": {"min": min_val, "max": max_val, "direction": direction},
+                    "actual": round(actual, 2),
+                    "passed": threshold_met,
+                    "weight": weight,
+                    "contribution": weight if threshold_met else 0,
+                    "reason": "threshold_met" if threshold_met else failure_reason
+                }
+        
+        # Calculate base score
+        base_score = (weighted_score / total_weight * 100) if total_weight > 0 else 0.0
+        
+        # ===================================================================
+        # Scoring rules (bonus points)
+        # ===================================================================
+        scoring_rules = self.extractor.get_strategy_scoring_rules(strategy_name)
+        bonus_points = 0
+        scoring_rule_results = {}
+        
+        if scoring_rules:
+            evaluator = ConditionEvaluator()
+            
+            # Build namespace
+            namespace = {}
+            for key, value in {**indicators, **fundamentals}.items():
+                if isinstance(value, dict):
+                    # Explicit None checks so 0.0 values are preserved
+                    _v = value.get("value")
+                    if _v is None:
+                        _v = value.get("raw")
+                    if _v is None:
+                        _v = value.get("score")
+                    namespace[key] = _v
+                else:
+                    namespace[key] = value
+            
+            for rule_name, rule_config in scoring_rules.items():
+                condition = rule_config.get("condition", "")
+                points = rule_config.get("points", 0)
+                reason = rule_config.get("reason", "")
+                
+                matched = False
+                if condition:
+                    try:
+                        matched = evaluator.evaluate_condition(condition, namespace)
+                    except Exception as e:
+                        self.logger.debug(
+                            f"[{strategy_name}] Rule '{rule_name}' eval failed: {e}"
+                        )
+                
+                if return_breakdown:
+                    scoring_rule_results[rule_name] = {
+                        "condition": condition,
+                        "matched": matched,
+                        "points": points if matched else 0,
+                        "reason": reason
+                    }
+                
+                if matched:
+                    bonus_points += points
+        
+        # ===================================================================
+        # Normalize scoring rules to 0-100 then blend with base_score
+        #
+        # Problem solved: bonus_points were raw additive (0-155) stacked on
+        # top of base_score (0-100), producing totals like 180-225% with no
+        # defined maximum. The old min(..., 150) cap was arbitrary.
+        #
+        # Solution: Two-component blend, both on 0-100 scale:
+        #   fit_score   (65%) — "Does this stock have the right DNA?"
+        #                        Derived from fit_indicators pass/fail.
+        #   setup_score (35%) — "Is it well set up RIGHT NOW?"
+        #                        Derived from scoring_rules, normalized by the
+        #                        declared scoring_rules_max_bonus in config so
+        #                        each strategy has a known ceiling.
+        #
+        # Result: final_score is always 0-100, true percentage, comparable
+        # across strategies. Ties are honest (multiple strategies can score
+        # high if they genuinely fit — rank by score to break ties).
+        # ===================================================================
+
+        # Fetch declared max bonus from strategy config (set in strategy_matrix)
+        strategy_cfg = self.extractor.base_extractor.get(f"strategy_{strategy_name}") or {}
+        max_bonus_declared = strategy_cfg.get("scoring_rules_max_bonus")
+
+        # Fallback: derive max from the rules themselves if not declared
+        if not max_bonus_declared and scoring_rules:
+            max_bonus_declared = sum(
+                r.get("points", 0)
+                for r in scoring_rules.values()
+                if r.get("points", 0) > 0
+            )
+
+        # Normalize bonus to 0-100; clamp negatives (penalties) to floor 0
+        if max_bonus_declared and max_bonus_declared > 0:
+            # bonus_points can go negative due to penalty rules — floor at 0
+            # so penalties reduce setup_score toward 0 but don't invert it
+            rule_score_pct = max(0.0, min(bonus_points / max_bonus_declared * 100, 100.0))
+        else:
+            rule_score_pct = 0.0
+
+        # Weighted blend: 65% DNA fit + 35% current setup quality
+        # Both components are already 0-100, so final_score is always 0-100
+        final_score = round((base_score * 0.65) + (rule_score_pct * 0.35), 1)
+
+        # ===================================================================
+        # Return based on mode
+        # ===================================================================
+        if return_breakdown:
+            breakdown = {
+                # Legacy field — kept for any callers that read it
+                "base_score": round(base_score, 2),
+                # New normalized fields
+                "dna_fit_score": round(base_score, 2),          # 0-100: fit_indicators
+                "setup_quality_score": round(rule_score_pct, 2), # 0-100: scoring_rules
+                "bonus_points_raw": bonus_points,                # raw for debugging
+                "max_bonus_declared": max_bonus_declared,        # ceiling used
+                "final_score": round(final_score, 2),            # 0-100: blended
+                "fit_indicators": fit_indicator_results,
+                "scoring_rules": scoring_rule_results,
+                "missing_indicators": missing_indicators,
+                "stats": {
+                    "total_indicators": len(fit_indicators),
+                    "passed_indicators": sum(
+                        1 for r in fit_indicator_results.values() if r["passed"]
+                    ),
+                    "total_weight": round(total_weight, 3),
+                    "achieved_weight": round(weighted_score, 3),
+                    "blend_weights": {"dna_fit": 0.65, "setup_quality": 0.35}
+                }
             }
-            
-            op_func = ops_map.get(type(node.op))
-            if op_func:
-                return op_func(left, right)
-            
-            raise ValueError(f"Unsupported binary operator: {type(node.op)}")
+            return final_score, breakdown
+
+        return final_score
+    
+    def _validate_strategy_market_cap_via_extractor(
+        self,
+        strategy_name: str,
+        fundamentals: Dict,
+        price_data: Dict
+    ) -> Tuple[bool, str]:
+        """✅ Validate market cap requirements via extractor."""
+        # Get market cap requirements via extractor
+        market_cap_reqs = self.extractor.get_strategy_market_cap_requirements(strategy_name)
         
-        # ========================================================================
-        # 5. UNARY OPERATIONS (-, +, not)
-        # ========================================================================
+        if not market_cap_reqs:
+            return True, "No market cap requirements"
         
-        if isinstance(node, ast.UnaryOp):
-            operand = self._eval_ast_node(node.operand, context)
-            
-            if isinstance(node.op, ast.USub):
-                return -operand
-            if isinstance(node.op, ast.UAdd):
-                return +operand
-            if isinstance(node.op, ast.Not):
-                return not operand
-            
-            raise ValueError(f"Unsupported unary operator: {type(node.op)}")
+        stock_market_cap = _get_val(fundamentals, "marketCap")
         
-        # ========================================================================
-        # 6. COMPARISONS (<, >, <=, >=, ==, !=)
-        # ========================================================================
-        
-        if isinstance(node, ast.Compare):
-            left = self._eval_ast_node(node.left, context)
+        # Determine bracket
+        bracket = None
+        for bracket_name, bracket_config in market_cap_reqs.items():
+            min_cap = bracket_config.get("min_market_cap", 0)
+            max_cap = bracket_config.get("max_market_cap", float('inf'))
             
-            ops_map = {
-                ast.Lt: operator.lt,
-                ast.LtE: operator.le,
-                ast.Gt: operator.gt,
-                ast.GtE: operator.ge,
-                ast.Eq: operator.eq,
-                ast.NotEq: operator.ne,
-                ast.Is: operator.is_,    
-                ast.IsNot: operator.is_not
+            if min_cap <= stock_market_cap < max_cap:
+                bracket = bracket_name
+                break
+        
+        bracket_reqs = market_cap_reqs.get(bracket, {})
+        if not bracket_reqs:
+            return True, f"No requirements for {bracket}"
+        
+        # Check institutional ownership
+        min_inst_ownership = bracket_reqs.get("min_institutional_ownership_pct")
+        if min_inst_ownership is not None:
+            actual_inst = price_data.get("institutional_ownership") or \
+                        price_data.get("institutionalOwnership", 0)
+            
+            if actual_inst < min_inst_ownership:
+                return False, (
+                    f"{bracket.replace('_', ' ').title()}: "
+                    f"Institutional ownership {actual_inst:.1f}% < required {min_inst_ownership}%"
+                )
+        
+        # Check delivery percentage
+        min_delivery = bracket_reqs.get("min_delivery_pct")
+        if min_delivery is not None:
+            actual_delivery = price_data.get("delivery_pct") or \
+                            price_data.get("deliveryPct", 0)
+            
+            if actual_delivery < min_delivery:
+                return False, (
+                    f"{bracket.replace('_', ' ').title()}: "
+                    f"Delivery {actual_delivery:.1f}% < required {min_delivery}%"
+                )
+        
+        return True, f"Passes {bracket} requirements"
+    
+    def _fallback_strategy_classification(self) -> Dict[str, Any]:
+        """Fallback when no strategy qualifies."""
+        return {
+            "primary": "generic",
+            "fit_score": 0,
+            "horizon_multiplier": 1.0,
+            "weighted_score": 0,
+            "all_suggestions": [],
+            "description": "No strategy qualified",
+            "preferred_setups": [],
+            "avoid_setups": []
+        }
+    
+    # ========================================================================
+    # REMAINING METHODS - Continue in next artifact update
+    # ========================================================================
+
+    def _apply_setup_preferences(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        ✅ PHASE 4: Setup–Strategy compatibility annotation
+        No blocking, no filtering, no sizing decisions.
+        """
+
+        setup_type = ctx["setup"]["type"]
+        strategy_ctx = ctx.get("strategy", {})
+        ranked_strategies = strategy_ctx.get("ranked", [])
+
+        compatibility = {}
+        preferred_by = []
+        avoided_by = []
+        neutral_by = []
+
+        for strat in ranked_strategies:
+            strategy_name = strat["name"]
+
+            preferred = self.extractor.get_strategy_preferred_setups(strategy_name)
+            avoided = self.extractor.get_strategy_avoided_setups(strategy_name)
+
+            if setup_type in preferred:
+                relation = "preferred"
+                score = +1
+                preferred_by.append(strategy_name)
+
+            elif setup_type in avoided:
+                relation = "avoid"
+                score = -1
+                avoided_by.append(strategy_name)
+
+            else:
+                relation = "neutral"
+                score = 0
+                neutral_by.append(strategy_name)
+
+            compatibility[strategy_name] = {
+                "relation": relation,
+                "score": score,
+                "strategy_weighted_score": strat.get("weighted_score", 0),
+                "strategy_rank": ranked_strategies.index(strat) + 1
             }
-            
-            for op, comparator in zip(node.ops, node.comparators):
-                right = self._eval_ast_node(comparator, context)
-                op_func = ops_map.get(type(op))
-                
-                if not op_func:
-                    raise ValueError(f"Unsupported comparison: {type(op)}")
-                
-                if not op_func(left, right):
-                    return False
-                
-                left = right
-            
-            return True
+
+        # Aggregate signal (FACT, not decision)
+        net_alignment_score = sum(v["score"] for v in compatibility.values())
+
+        return {
+            "setup": setup_type,
+            "compatibility": compatibility,
+            "summary": {
+                "preferred_by": preferred_by,
+                "avoided_by": avoided_by,
+                "neutral_by": neutral_by,
+                "net_alignment_score": net_alignment_score,
+                "evaluated_strategies": len(ranked_strategies)
+            }
+        }
+
+    # ========================================================================
+    # GATE VALIDATION (Uses Extractor Throughout)
+    # ========================================================================
+    def _validate_structural_gates(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        PHASE 5: Structural Gate Evaluation (Standardized Logic)
+        """
+        setup_type = ctx.get("setup", {}).get("type")
         
-        # ========================================================================
-        # 7. BOOLEAN OPERATIONS (and, or)
-        # ========================================================================
-        
-        if isinstance(node, ast.BoolOp):
-            if isinstance(node.op, ast.And):
-                return all(self._eval_ast_node(val, context) for val in node.values)
-            if isinstance(node.op, ast.Or):
-                return any(self._eval_ast_node(val, context) for val in node.values)
-        
-        # ========================================================================
-        # 8. FUNCTION & METHOD CALLS
-        # ========================================================================
-        
-        if isinstance(node, ast.Call):
-            # A. Direct function calls: abs(x), min(a, b)
-            if isinstance(node.func, ast.Name):
-                func_name = node.func.id
+        # 1. Get Resolved Gates (Global -> Horizon -> Setup Override)
+        gates_map = self.extractor.get_resolved_gates("structural", setup_type)
+
+        gate_results = {}
+        violations = []
+        stats = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
+
+        for gate_name, resolved_gate in gates_map.items():
+            stats["total"] += 1
+            threshold = resolved_gate.threshold
+
+            # ── Disabled gate check ──
+            if not threshold or (threshold.get("min") is None and threshold.get("max") is None):
+                gate_results[gate_name] = {
+                    "status": "skipped", "reason": "disabled", 
+                    "required": None, "actual": None, "source": resolved_gate.source
+                }
+                stats["skipped"] += 1
+                continue
+
+            # 2. Get Data
+            actual = self._resolve_gate_value_from_context(gate_name, ctx)
+
+            # ── Missing metric ──
+            if actual is None:
+                gate_meta = GATE_METRIC_REGISTRY.get(gate_name, {})
+
+                is_optional = gate_meta.get("optional", False)
                 
-                allowed_funcs = {
-                    "abs": abs,
-                    "min": min,
-                    "max": max,
-                    "round": round,
-                    "int": int,
-                    "float": float,
-                    "len": len,
-                    "bool": bool,
-                    "str": str
+                status = "skipped" if is_optional else "failed"
+                reason = "optional_missing" if is_optional else "metric_missing"
+                
+                gate_results[gate_name] = {
+                    "status": status, "reason": reason,
+                    "required": threshold, "actual": None, "source": resolved_gate.source
                 }
                 
-                if func_name not in allowed_funcs:
-                    raise ValueError(f"Function '{func_name}' not allowed")
-                
-                args = [self._eval_ast_node(arg, context) for arg in node.args]
-                return allowed_funcs[func_name](*args)
-            
-            # B. Method calls: dict.get('key', default)
-            elif isinstance(node.func, ast.Attribute):
-                obj = self._eval_ast_node(node.func.value, context)
-                method_name = node.func.attr
-                
-                if method_name == "get" and isinstance(obj, dict):
-                    args = [self._eval_ast_node(arg, context) for arg in node.args]
-                    return obj.get(*args)
-                
-                raise ValueError(f"Method '{method_name}' not allowed on {type(obj)}")
-            
-            raise ValueError(f"Unsupported call type: {type(node.func)}")
-        
-        # ========================================================================
-        # 9. SUBSCRIPT ACCESS (dict['key'], list[0])
-        # ========================================================================
-        
-        if isinstance(node, ast.Subscript):
-            obj = self._eval_ast_node(node.value, context)
-            
-            # Handle different Python versions
-            if isinstance(node.slice, ast.Index):  # Python 3.8 and below
-                key = self._eval_ast_node(node.slice.value, context)
-            else:  # Python 3.9+
-                key = self._eval_ast_node(node.slice, context)
-            
-            if isinstance(obj, (dict, list, tuple)):
-                try:
-                    return obj[key]
-                except (KeyError, IndexError, TypeError):
-                    return None
-            
-            raise ValueError(f"Subscript access not allowed on {type(obj)}")
-        
-        # ========================================================================
-        # UNSUPPORTED NODE
-        # ========================================================================
-        
-        raise ValueError(f"Unsupported AST node: {type(node).__name__}")
-    
-    def clear_cache(self):
-        """Clear the resolution cache."""
-        self._cache.clear()
-    
-    # ============================================================
-    # CRITICAL MISSING METHODS (Category A - Actively Used)
-    # ============================================================
-    
-    def clamp_sl_distance(self, risk: float, price: float) -> float:
-        """
-        Enforces min/max SL distance limits (horizon-specific).
-        Used by: calculate_execution_plan()
-        """
-        limits = self.get("risk_management.atr_sl_limits", {})
-        
-        max_pct = limits.get("max_percent", 0.05)
-        min_pct = limits.get("min_percent", 0.01)
-        
-        max_risk = price * max_pct
-        min_risk = price * min_pct
-        
-        return max(min_risk, min(risk, max_risk))
-    
-    def detect_divergence(self, indicators: Dict) -> Dict:
-        """
-        Config-driven divergence detection.
-        Used by: detect_divergence_via_slopes()
-        """
-        rsislope = self._get_val(indicators, "rsislope")
-        price = self._get_val(indicators, "price")
-        prev_price = self._get_val(indicators, "prev_close", price)
-        
-        # Get thresholds from momentum config (horizon-specific with global fallback)
-        thresh = self.get("momentum_thresholds.rsislope.deceleration_ceiling", -0.05)
-        
-        # Get penalty from calculation engine (global)
-        penalty = self.get("calculation_engine.divergence_detection.confidence_penalties.bearish_divergence", 0.70)
-        
-        # Bearish divergence: Price rising but RSI falling
-        if price > prev_price and rsislope < thresh:
-            return {
-                'divergence_type': 'bearish',
-                'confidence_factor': penalty,
-                'warning': f"Bearish Divergence: RSI_slope={rsislope:.2f}",
-                'severity': 'moderate'
-            }
-        
-        return {
-            'divergence_type': 'none',
-            'confidence_factor': 1.0,
-            'warning': None,
-            'severity': None
-        }
-    
-    def detect_volume_signature(self, indicators: Dict) -> Dict:
-        """
-        Config-driven volume signature detection.
-        Used by: detect_volume_signature_legacy()
-        """
-        rvol = self._get_val(indicators, "rvol")
-        
-        # Get thresholds (horizon-specific with global fallback)
-        surge_thresh = self.get("volume_analysis.rvol_surge_threshold", 3.0)
-        drought_thresh = self.get("volume_analysis.rvol_drought_threshold", 0.7)
-        
-        # Get adjustments from calculation engine (global)
-        surge_adj = self.get("calculation_engine.volume_signatures.surge.confidence_adjustment", 15)
-        drought_adj = self.get("calculation_engine.volume_signatures.drought.confidence_adjustment", -25)
-        
-        if rvol >= surge_thresh:
-            return {
-                'type': 'surge',
-                'adjustment': surge_adj,
-                'warning': f'Volume surge (RVOL={rvol:.2f})'
-            }
-        
-        if rvol <= drought_thresh:
-            return {
-                'type': 'drought',
-                'adjustment': drought_adj,
-                'warning': f'Volume drought (RVOL={rvol:.2f})'
-            }
-        
-        return {'type': 'normal', 'adjustment': 0, 'warning': None}
-    
-    # def get_confidence_floor(self, setup_type: str = None) -> int:
-    #     """
-    #     Get confidence floor for setup type (horizon-specific).
-        
-    #     Resolution order:
-    #     1. Horizon-specific base_floors
-    #     2. Global base_floors
-    #     3. Default 55
-    #     """
-    #     if setup_type:
-    #         # Try horizon first
-    #         base_floors = self.get("confidence.base_floors", {})
-    #         floor = base_floors.get(setup_type)
-            
-    #         if floor is not None:
-    #             return floor
-            
-    #         # Fallback to global if not in horizon
-    #         global_floors = self.global_config.get("confidence", {}).get("base_floors", {})
-    #         floor = global_floors.get(setup_type)
-            
-    #         if floor is not None:
-    #             logger.debug(
-    #                 f"{self.horizon}: Using global base_floor for {setup_type}: {floor}"
-    #             )
-    #             return floor
-            
-    #         # Ultimate fallback
-    #         logger.warning(
-    #             f"{self.horizon}: No base_floor found for {setup_type}, using 55"
-    #         )
-    #         return 55
-        
-    #     # If no setup_type provided, return buy floor
-    #     floors = self.get("confidence.floors", {})
-    #     return floors.get("buy", 55)
+                if status == "failed":
+                    stats["failed"] += 1
+                    violations.append({
+                        "gate": gate_name, "reason": reason, 
+                        "severity": gate_meta.get("severity", "high"), 
+                        "source": resolved_gate.source
+                    })
+                else:
+                    stats["skipped"] += 1
+                continue
 
-    
-    def get_spread_adjustment(self, market_cap: float) -> float:
+            # ── Threshold check (Use Canonical Evaluator) ──
+            passed, reason = ConditionEvaluator.evaluate_gate_config(
+                actual, 
+                threshold, 
+                gate_name
+            )
+
+            gate_results[gate_name] = {
+                "status": "passed" if passed else "failed",
+                "required": threshold,
+                "actual": actual,
+                "reason": reason,
+                "source": resolved_gate.source
+            }
+
+            if passed:
+                stats["passed"] += 1
+            else:
+                stats["failed"] += 1
+                violations.append({
+                    "gate": gate_name,
+                    "reason": reason,
+                    "required": threshold,
+                    "actual": actual,
+                    "source": resolved_gate.source
+                })
+
+            METRICS.log_gate_check(
+                gate_name=gate_name,
+                phase="structural",
+                passed=passed,
+                actual=actual,
+                required=threshold,
+                context=setup_type
+            )
+        failure_ratio = stats["failed"] / max(stats["total"], 1)
+        overall = {
+            "passed": stats["failed"] == 0,
+            "failed_gates": [
+                {
+                    "gate": v["gate"],
+                    "reason": v["reason"]
+                }
+                for v in violations
+            ],
+            "total_gates": stats["total"],
+            "passed_gates": stats["passed"],
+        }
+        return {
+            "phase": "structural",
+            "by_gate": gate_results,
+            "summary": {
+                **stats,
+                "failure_ratio": round(failure_ratio, 3)
+            },
+            "violations": violations,
+            "overall": overall, 
+            "failed_gates": [{"gate": v["gate"], "reason": v["reason"]} for v in violations]
+        }
+    def _resolve_gate_value_from_context(self, gate_name: str, ctx: Dict) -> Optional[float]:
         """
-        Returns spread % based on market cap (global).
-        Used by: calculate_execution_plan()
+        ✅ SIMPLIFIED: Resolve gate value using GATE_METRIC_REGISTRY.
+        
+        Now uses registry's context_paths instead of hardcoded mappings.
         """
-        brackets = self.get("calculation_engine.spread_adjustment.market_cap_brackets", {})
         
-        large = brackets.get("large_cap", {})
-        mid = brackets.get("mid_cap", {})
-        small = brackets.get("small_cap", {})
+        # Get gate metadata
+        gate_meta = GATE_METRIC_REGISTRY.get(gate_name)
         
-        if market_cap >= large.get("min", 100000):
-            return large.get("spread_pct", 0.001)
-        elif market_cap >= mid.get("min", 10000):
-            return mid.get("spread_pct", 0.002)
+        if not gate_meta:
+            # Check if this is a config key, not a metric
+            if "_" in gate_name or gate_name.endswith("guards"):
+                self.logger.error(
+                    f"❌ CONFIGURATION ERROR: '{gate_name}' is not a valid gate metric. "
+                    f"This appears to be a config key or execution rule name. "
+                    f"Gates should only reference actual metrics from indicators/fundamentals."
+                )
+            else:
+                self.logger.warning(f"⚠️ Unknown gate metric: {gate_name}")
+            return None
+        
+        # Try all context paths
+        context_paths = gate_meta.get("context_paths", [])
+        
+        for path in context_paths:
+            value = ctx
+            for key in path:
+                if isinstance(value, dict):
+                    value = value.get(key)
+                else:
+                    value = None
+                    break
+            
+            if value is not None:
+                numeric = ensure_numeric(value)
+                if numeric is not None:
+                    return numeric
+        
+        # Check if optional with fallback
+        if gate_meta.get("optional", False):
+            fallback = gate_meta.get("fallback")
+            if fallback is not None:
+                self.logger.debug(
+                    f"✅ Using fallback for optional gate {gate_name}: {fallback}"
+                )
+                return fallback
+        
+        # Not found and no fallback
+        if "guard" in gate_name.lower() or "validation" in gate_name.lower():
+            self.logger.error(
+                f"❌ CONFIG ERROR: '{gate_name}' looks like an execution rule, not a gate metric. "
+                f"Execution rules belong in 'execution_rules' section, not 'gates'."
+            )
+        elif "_" in gate_name and gate_name not in ["market_cap", "institutional_ownership"]:
+            self.logger.warning(
+                f"⚠️ Gate '{gate_name}' with underscores may be a config key, not a metric. "
+                f"Tried paths: {context_paths}"
+            )
         else:
-            return small.get("spread_pct", 0.005)
+            self.logger.debug(
+                f"Gate value not found: {gate_name}. "
+                f"Tried paths: {context_paths}"
+            )
+        return None
 
-    # ============================================================
-    # HELPER UTILITIES (Category B - Should Have)
-    # ============================================================
+    def _calculate_confidence(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        Calculate confidence following CONFIDENCE_CALCULATION_PIPELINE.
+        Uses query_optimized_extractor methods.
+        """
+        ind = ctx["indicators"]
+        fund = ctx["fundamentals"]
+        setup_type = ctx["setup"]["type"]
+
+        adx_data = ind.get("adx", 0)
+        
+        # ==========================================================
+        # STEPS 1-4: BASE + ADX BANDS
+        # ==========================================================
+        base = self.extractor.calculate_dynamic_confidence_floor(setup_type, adx_data)
+
+        flat_data = self._flatten_indicator_data({**ind, **fund})
+
+        # Inject aggregate scores so validation_modifiers can reference them
+        scoring = ctx.get("scoring", {})
+        technical_score_block = scoring.get("technical", {}) or {}
+        fundamental_score_block = scoring.get("fundamental", {}) or {}
+        technical_score_value = technical_score_block.get("score")
+        fundamental_score_value = fundamental_score_block.get("score")
+        if technical_score_value is not None:
+            flat_data["technicalScore"] = technical_score_value
+        if fundamental_score_value is not None:
+            flat_data["fundamentalScore"] = fundamental_score_value
+
+        # ==========================================================
+        # STEPS 5-7: UNIVERSAL + HORIZON + CONDITIONAL MODIFIERS
+        # ==========================================================
+        modifier_results = self.extractor.evaluate_all_confidence_modifiers(
+            data=flat_data,
+            setup_type=setup_type
+        )
+
+        # This handles divergence multiplier internally
+        total_adjustment, breakdown = self.extractor.calculate_total_confidence_adjustment(
+            modifier_results
+        )
+        self.logger.debug(
+            "Calculating confidence modifiers for setup '%s' with data keys: %s",
+            setup_type,
+            list(flat_data.keys())
+        )
+
+
+        # Extract divergence multiplier for reporting
+        divergence_multiplier = 1.0
+        for item in breakdown:
+            if "Final multiplier" in item:
+                try:
+                    divergence_multiplier = float(item.split("×")[1])
+                except:
+                    pass
+                break
+
+        # Build structured adjustments with multiplier already applied
+        structured_adjustments = []
+        
+        for group_name, group_data in modifier_results.items():
+            if group_name == "_adx_note":
+                continue
+                
+            if isinstance(group_data, dict):
+                # Handle nested structure (penalties/bonuses)
+                if group_name == "conditional_adjustments":
+                    for category in ["penalties", "bonuses"]:
+                        for name, result in group_data.get(category, {}).items():
+                            if result.get("applies") and result.get("adjustment") is not None:
+                                delta = result["adjustment"]
+                                structured_adjustments.append({
+                                    "name": name,
+                                    "delta": round(delta, 2),
+                                    "type": category[:-1],  # "penalty" or "bonus"
+                                    "direction": "negative" if delta < 0 else "positive",
+                                    "source": "conditional"
+                                })
+                else:
+                    # Handle flat structure (volume, trend, divergence)
+                    for name, result in group_data.items():
+                        if result.get("applies") and result.get("adjustment") is not None:
+                            delta = result["adjustment"]
+                            structured_adjustments.append({
+                                "name": name,
+                                "delta": round(delta, 2),
+                                "type": "bonus" if delta > 0 else "penalty",
+                                "direction": "positive" if delta > 0 else "negative",
+                                "source": group_name
+                            })
+
+        # ==========================================================
+        # SETUP VALIDATION MODIFIERS (if any)
+        # ==========================================================
+        setup_modifiers = self.extractor.get_setup_validation_modifiers(setup_type)
+        setup_modifier_count = 0
+        setup_modifier_breakdown = []
+
+        if setup_modifiers:
+            evaluator = ConditionEvaluator()
+            # ✅ BUG FIX: Include price_data so conditions referencing
+            # prev_close, price, volume etc. can resolve (4 setups use these)
+            price_data = ctx.get("price_data", {})
+            namespace = {**ind, **fund, **price_data}
+
+            # Inject aggregate scores so setup validation_modifiers can reference
+            # technicalScore / fundamentalScore in condition strings
+            scoring = ctx.get("scoring", {}) or {}
+            tech_block = scoring.get("technical", {}) or {}
+            fund_block = scoring.get("fundamental", {}) or {}
+            if tech_block.get("score") is not None:
+                namespace["technicalScore"] = tech_block["score"]
+            if fund_block.get("score") is not None:
+                namespace["fundamentalScore"] = fund_block["score"]
+
+            for category in ["penalties", "bonuses"]:
+                for name, config in setup_modifiers.get(category, {}).items():
+                    condition = config.get("condition")
+                    if not condition:
+                        continue
+
+                    try:
+                        if evaluator.evaluate_condition(condition, namespace):
+                            amount = config.get("amount", 0)
+                            
+                            # ✅ APPLY DIVERGENCE MULTIPLIER
+                            raw_delta = -amount if category == "penalties" else amount
+                            delta = raw_delta * divergence_multiplier
+                            
+                            total_adjustment += delta
+                            setup_modifier_count += 1
+
+                            breakdown.append(
+                                f"setup_{category}.{name}: {delta:+.1f}"
+                                + (f" (×{divergence_multiplier})" if divergence_multiplier != 1.0 else "")
+                            )
+
+                            structured_adjustments.append({
+                                "name": name,
+                                "delta": round(delta, 2),
+                                "type": "penalty" if delta < 0 else "bonus",
+                                "direction": "negative" if delta < 0 else "positive",
+                                "source": "setup_validation"
+                            })
+
+                            setup_modifier_breakdown.append({
+                                "type": category[:-1],
+                                "name": name,
+                                "amount": delta,
+                                "raw_amount": raw_delta,  # ✅ Track original
+                                "divergence_multiplier": divergence_multiplier,
+                                "condition": condition
+                            })
+
+                    except Exception as e:
+                        self.logger.warning(f"Failed evaluating setup modifier '{name}': {e}")
+
+        # ==========================================================
+        # EXECUTION RULE IMPACT
+        # ==========================================================
+        execution = ctx.get("execution_rules", {}).get("summary", {})
+        exec_adjustment = 0
+        exec_breakdown = []
+
+        warnings = execution.get("warnings", [])
+        violations = execution.get("violations", [])
+        risk_score = execution.get("execution_risk_score", 0)
+
+        for rule in warnings:
+            raw_penalty = -5
+            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_breakdown.append(
+                f"execution_warning.{rule}: {raw_penalty * divergence_multiplier:+.1f}"
+            )
+
+        for rule in violations:
+            raw_penalty = -15
+            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_breakdown.append(
+                f"execution_violation.{rule}: {raw_penalty * divergence_multiplier:+.1f}"
+            )
+
+        if risk_score >= 80:
+            raw_penalty = -10
+            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_breakdown.append(
+                f"execution_risk_score >= 80: {raw_penalty * divergence_multiplier:+.1f}"
+            )
+        elif risk_score >= 60:
+            raw_penalty = -5
+            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_breakdown.append(
+                f"execution_risk_score >= 60: {raw_penalty * divergence_multiplier:+.1f}"
+            )
+        elif risk_score < 40:
+            raw_bonus = 5
+            exec_adjustment += raw_bonus * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_breakdown.append(
+                f"execution_risk_score < 40: {raw_bonus * divergence_multiplier:+.1f}"
+            )
+
+        if exec_adjustment != 0:
+            total_adjustment += exec_adjustment
+            breakdown.extend(exec_breakdown)
+
+            structured_adjustments.append({
+                "name": "execution_rules",
+                "delta": round(exec_adjustment, 2),
+                "type": "penalty" if exec_adjustment < 0 else "bonus",
+                "direction": "negative" if exec_adjustment < 0 else "positive",
+                "source": "execution"
+            })
+
+        execution_adjustment_applied = {
+            "amount": exec_adjustment,
+            "breakdown": exec_breakdown
+        }
+
+        # ==========================================================
+        # FINAL + CLAMP
+        # ==========================================================
+        final = base + total_adjustment
+        clamp = self.extractor.get_confidence_clamp()
+        clamped = max(clamp[0], min(clamp[1], final))
+
+        # ==========================================================
+        # TRADEABILITY CHECK (min_tradeable_confidence)
+        # ==========================================================
+        min_tradeable = self.extractor.get_min_tradeable_confidence()
+        tradeable = True
+        below_by = 0.0
+
+        if min_tradeable and min_tradeable > 0:
+            tradeable = clamped >= min_tradeable
+            if not tradeable:
+                below_by = round(float(min_tradeable) - float(clamped), 1)
+                breakdown.append(
+                    f"min_tradeable_floor: {clamped:.1f} < {min_tradeable:.1f} → BELOW TRADEABLE THRESHOLD"
+                )
+
+        # High-confidence override config (metadata only, used by signal engine)
+        high_conf_override = self.extractor.get_high_confidence_override() or {}
+
+        return {
+            "base": base,
+            "adjustments": {
+                "total": total_adjustment,
+                "breakdown": breakdown,
+                "setup_modifiers_applied": setup_modifier_count
+            },
+            "structured_adjustments": structured_adjustments,
+            "execution_adjustment": execution_adjustment_applied,
+            "modifier_results": modifier_results,
+            "setup_validation_modifiers": setup_modifier_breakdown,
+            "divergence_multiplier": divergence_multiplier,  # ✅ From config, not ctx
+            "final": final,
+            "clamped": clamped,
+            "clamp_range": clamp,
+            "score": clamped,
+            "confidence": round(clamped, 1),
+            "tradeable": tradeable,
+            "min_tradeable_threshold": float(min_tradeable or 0.0),
+            "below_threshold_by": below_by,
+            "high_confidence_override": high_conf_override,
+            "calculation_method": "extractor_v8_fixed",
+            "horizon": self.horizon,
+            "setup_type": setup_type
+        }
     
-    def get_indicator(self, name: str, fallback: Any = None) -> Any:
+    def _validate_execution_rules(self, ctx: Dict) -> Dict[str, Any]:
         """
-        Get indicator config with legacy key mapping.
-        Safe accessor for indicator parameters.
+        ✅ PHASE 6 (REFACTORED):
+        Evaluate execution feasibility WITHOUT making decisions.
         """
-        # Check if it's a period config
-        if name in ["adx_period", "atr_period", "rsi_period"]:
-            return self.get(f"indicators.{name}", fallback)
-        
-        # Check if it's a stochastic config
-        if name.startswith("stoch_"):
-            stoch_key = name.replace("stoch_", "")
-            return self.get(f"indicators.stochastic.{stoch_key}", fallback)
-        
-        # Legacy MA key mapping
-        ma_type = self.get("moving_averages.type", "EMA")
-        
-        ma_mapping = {
-            "ma_fast": {
-                "EMA": self.get("moving_averages.fast", 20),
-                "WMA": self.get("moving_averages.fast", 10),
-                "MMA": self.get("moving_averages.fast", 6)
+        setup_type = ctx["setup"]["type"]
+
+        execution_rules = self.extractor.get_execution_rules(setup_type)
+        rule_results = {}
+        violations = []
+        warnings = []
+
+        def _normalize(result, rule_name):
+            if result.get("skipped"):
+                return {
+                    "status": "skipped",
+                    "severity": 0,
+                    "reason": result.get("reason", "Skipped"),
+                    "context": {}
+                }
+
+            if result.get("passed"):
+                return {
+                    "status": "ok",
+                    "severity": 0,
+                    "reason": "Rule satisfied",
+                    "context": result
+                }
+
+            # failed
+            severity = result.get("severity", 50)
+            status = "violation" if severity >= 70 else "warning"
+
+            entry = {
+                "status": status,
+                "severity": severity,
+                "reason": result.get("reason", "Execution constraint failed"),
+                "context": result
+            }
+
+            if status == "violation":
+                violations.append(rule_name)
+            else:
+                warnings.append(rule_name)
+
+            return entry
+
+        # ───────────────────────────────────────
+        # Rule 1: Volatility Guards
+        # ───────────────────────────────────────
+        if self.extractor.is_execution_rule_enabled("volatility_guards"):
+            res = self._check_volatility_guards(
+                ctx, self.extractor.get_volatility_guards_config()
+            )
+            rule_results["volatility_guards"] = _normalize(res, "volatility_guards")
+        else:
+            rule_results["volatility_guards"] = {
+                "status": "skipped",
+                "severity": 0,
+                "reason": "Disabled",
+                "context": {}
+            }
+
+        # ───────────────────────────────────────
+        # Rule 2: Structure Validation
+        # ───────────────────────────────────────
+        if self.extractor.is_execution_rule_enabled("structure_validation"):
+            res = self._check_structure_validation(
+                ctx, self.extractor.get_structure_validation_config()
+            )
+            rule_results["structure_validation"] = _normalize(res, "structure_validation")
+        else:
+            rule_results["structure_validation"] = {
+                "status": "skipped",
+                "severity": 0,
+                "reason": "Disabled",
+                "context": {}
+            }
+
+        # ───────────────────────────────────────
+        # Rule 3: SL Distance Validation
+        # ───────────────────────────────────────
+        if self.extractor.is_execution_rule_enabled("sl_distance_validation"):
+            res = self._check_sl_distance(
+                ctx, self.extractor.get_sl_distance_validation_config()
+            )
+            rule_results["sl_distance_validation"] = _normalize(res, "sl_distance_validation")
+        else:
+            rule_results["sl_distance_validation"] = {
+                "status": "skipped",
+                "severity": 0,
+                "reason": "Disabled",
+                "context": {}
+            }
+
+        # ───────────────────────────────────────
+        # Rule 4: Target Proximity
+        # ───────────────────────────────────────
+        if self.extractor.is_execution_rule_enabled("target_proximity_rejection"):
+            res = self._check_target_proximity(
+                ctx, self.extractor.get_target_proximity_rejection_config()
+            )
+            rule_results["target_proximity"] = _normalize(res, "target_proximity")
+        else:
+            rule_results["target_proximity"] = {
+                "status": "skipped",
+                "severity": 0,
+                "reason": "Disabled",
+                "context": {}
+            }
+
+        # ───────────────────────────────────────
+        # Aggregate risk score (NOT a decision)
+        # ───────────────────────────────────────
+        execution_risk = sum(
+            r["severity"] for r in rule_results.values()
+            if r["status"] in ("warning", "violation")
+        )
+        overall = {
+            "passed": len(violations) == 0,
+            "failed_rules": [
+                {
+                    "rule": rule_name,
+                    "severity": rule_results[rule_name]["severity"],
+                    "reason": rule_results[rule_name]["reason"]
+                }
+                for rule_name in violations
+            ],
+            "warning_rules": warnings,
+        }
+        return {
+            "phase": "execution",
+            "rules": rule_results,
+            "summary": {
+                "violations": violations,
+                "warnings": warnings,
+                "execution_risk_score": execution_risk,
+                "evaluated_rules": len(rule_results)
             },
-            "ma_mid": {
-                "EMA": self.get("moving_averages.mid", 50),
-                "WMA": self.get("moving_averages.mid", 40),
-                "MMA": self.get("moving_averages.mid", 12)
+            "overall": overall   # 🔑 REQUIRED
+        }
+
+    def _check_volatility_guards(self, ctx: Dict, vol_guards: Dict) -> Dict:
+        """Check volatility guard rules."""
+        if not vol_guards:
+            return {"passed": True, "reason": "No volatility guards configured"}
+        
+        # ✅ FIX: Extract from indicators, not price_data
+        indicators = ctx.get("indicators", {})
+        
+        # ✅ Use ensure_numeric for safe extraction
+        atr_pct = ensure_numeric(indicators.get("atrPct"))
+        vol_quality = ensure_numeric(indicators.get("volatilityQuality"))
+        
+        # ✅ Handle missing values gracefully
+        if atr_pct is None or vol_quality is None:
+            self.logger.warning(
+                f"[{ctx['meta']['symbol']}] ⚠️ Volatility guards skipped: "
+                f"atrPct={atr_pct}, volatilityQuality={vol_quality}"
+            )
+            return {
+                "passed": True,  # ✅ Don't block if data missing
+                "reason": "Volatility data incomplete - guards skipped",
+                "skipped": True
+            }
+        extreme_buffer = vol_guards.get("extreme_vol_buffer", 2.0)
+        
+        # Determine required quality based on volatility
+        if atr_pct and atr_pct > extreme_buffer:
+            required_quality = vol_guards.get("min_quality_breakout", 2.0)
+            regime = "extreme"
+        else:
+            required_quality = vol_guards.get("min_quality_normal", 4.0)
+            regime = "normal"
+        
+        if vol_quality and vol_quality >= required_quality:
+            return {
+                "passed": True,
+                "reason": f"Volatility quality {vol_quality:.1f} >= {required_quality:.1f} ({regime})"
+            }
+        
+        return {
+            "passed": False,
+            "reason": f"Volatility quality {vol_quality:.1f} < {required_quality:.1f} ({regime} regime)"
+        }
+
+    def _check_structure_validation(self, ctx: Dict, struct_val: Dict) -> Dict:
+        """Check price structure validation."""
+        if not struct_val:
+            return {"passed": True, "reason": "No structure validation configured"}
+        
+        setup_type = ctx["setup"]["type"]
+        price = ctx["price_data"].get("price", 0)
+        
+        # Check breakout clearance
+        if "BREAKOUT" in setup_type:
+            resistance = ctx["price_data"].get("resistance1", 0)
+            clearance = struct_val.get("breakout_clearance", 0.001)
+            
+            if resistance and price > 0:
+                required_price = resistance * (1 + clearance)
+                if price >= required_price:
+                    return {
+                        "passed": True,
+                        "reason": f"Price {price} cleared resistance {resistance}"
+                    }
+                return {
+                    "passed": False,
+                    "reason": f"Price {price} < required {required_price:.2f} (resistance + clearance)"
+                }
+        
+        # Check breakdown clearance
+        elif "BREAKDOWN" in setup_type:
+            support = ctx["price_data"].get("support1", 0)
+            clearance = struct_val.get("breakdown_clearance", 0.001)
+            
+            if support and price > 0:
+                required_price = support * (1 - clearance)
+                if price <= required_price:
+                    return {
+                        "passed": True,
+                        "reason": f"Price {price} broke support {support}"
+                    }
+                return {
+                    "passed": False,
+                    "reason": f"Price {price} > required {required_price:.2f} (support - clearance)"
+                }
+        
+        return {"passed": True, "reason": "Structure validation not applicable"}
+
+    def _check_sl_distance(self, ctx: Dict, sl_config: Dict) -> Dict:
+        """
+        Check if SL distance is acceptable.
+        
+        Args:
+            ctx: Evaluation context
+            sl_config: SL distance validation config from extractor
+        
+        Returns:
+            {"passed": bool, "reason": str}
+        """
+        if not sl_config:
+            return {"passed": True, "reason": "No SL distance rules configured"}
+        
+        # Get SL distance from risk model (calculated earlier)
+        risk_model = ctx.get("risk_model", {})
+        sl_distance_pct = risk_model.get("sl_distance_pct", 0)
+        if sl_distance_pct == 0 or sl_distance_pct is None:
+            sl_distance_pct = ensure_numeric(ctx["indicators"].get("slDistance"))
+        
+        # Get thresholds from config
+        min_sl = sl_config.get("min_sl_distance_pct", 0.5)
+        max_sl = sl_config.get("max_sl_distance_pct", 10.0)
+        
+        # Validate
+        if sl_distance_pct == 0:
+            return {
+                "passed": False,
+                "reason": "SL distance not calculated in risk model"
+            }
+        
+        if sl_distance_pct < min_sl:
+            return {
+                "passed": False,
+                "reason": f"SL too tight: {sl_distance_pct:.2f}% < min {min_sl}%"
+            }
+        
+        if sl_distance_pct > max_sl:
+            return {
+                "passed": False,
+                "reason": f"SL too wide: {sl_distance_pct:.2f}% > max {max_sl}%"
+            }
+        
+        return {
+            "passed": True,
+            "reason": f"SL distance OK: {sl_distance_pct:.2f}% (range: {min_sl}-{max_sl}%)"
+        }
+
+    def _check_target_proximity(self, ctx: Dict, target_config: Dict) -> Dict:
+        """
+        Check if target distance is reasonable.
+        
+        Args:
+            ctx: Evaluation context
+            target_config: Target proximity config from extractor
+        
+        Returns:
+            {"passed": bool, "reason": str}
+        """
+        if not target_config:
+            return {"passed": True, "reason": "No target proximity rules"}
+        
+        # Get target data from risk model
+        risk_model = ctx.get("risk_model", {})
+        pattern_targets = risk_model.get("pattern_targets")
+        
+        if not pattern_targets:
+            # No pattern targets calculated, use default validation
+            return {"passed": True, "reason": "No pattern targets to validate"}
+        
+        entry = pattern_targets.get("entry", 0)
+        t1 = pattern_targets.get("t1", 0)
+        
+        if entry == 0 or t1 == 0:
+            return {"passed": False, "reason": "Invalid target data"}
+        
+        # Calculate distance
+        t1_distance_pct = abs((t1 - entry) / entry) * 100
+        
+        # Get thresholds
+        min_target = target_config.get("min_target_distance_pct", 1.0)
+        max_target = target_config.get("max_target_distance_pct", 50.0)
+        
+        # Validate
+        if t1_distance_pct < min_target:
+            return {
+                "passed": False,
+                "reason": f"Target too close: {t1_distance_pct:.2f}% < min {min_target}%"
+            }
+        
+        if t1_distance_pct > max_target:
+            return {
+                "passed": False,
+                "reason": f"Target too far: {t1_distance_pct:.2f}% > max {max_target}%"
+            }
+        
+        return {
+            "passed": True,
+            "reason": f"Target distance OK: {t1_distance_pct:.2f}% (range: {min_target}-{max_target}%)"
+        }
+    
+    def _build_risk_candidates(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        PHASE 6.5: Risk feasibility metrics (Evaluation)
+        ✅ Calculates RR and SL ONCE
+        ❌ No gates
+        ❌ No decisions
+        ❌ No capital logic
+        """
+
+        setup_type = ctx["setup"]["type"]
+
+        price = ensure_numeric(ctx["price_data"].get("price"))
+        atr = ensure_numeric(ctx["indicators"].get("atrDynamic"))
+        sl_dist = ensure_numeric(ctx["indicators"].get("slDistance"))
+
+        risk_cfg = self.extractor.get_risk_management_config()
+        atr_mult = risk_cfg.get("stop_loss_atr_mult", 2.0)
+        target_mult = risk_cfg.get("target_atr_mult", 3.0)
+
+        rr = None
+        rr_source = None
+        pattern_targets = None
+        generic_targets = None
+        sl_price = None
+        if price > 0 and atr > 0:
+            sl_price = price - (atr * atr_mult)
+        # --------------------------------------------------
+        # 1️⃣ Pattern-based RR + SL (validated patterns only)
+        # --------------------------------------------------
+        primary_patterns = (
+            ctx.get("pattern_validation", {})
+            .get("by_setup", {})
+            .get(setup_type, {})
+            .get("primary_found", [])
+        )
+
+        if primary_patterns and atr > 0:
+            primary = primary_patterns[0]
+            pdata = ctx.get("patterns", {}).get(primary, {})
+
+            if pdata.get("found"):
+                pattern_targets = self._calculate_pattern_targets(
+                    primary, pdata, ctx["price_data"]
+                )
+
+                if pattern_targets:
+                    entry = pattern_targets.get("entry")
+                    sl_price = pattern_targets.get("stop_loss")
+
+                    targets = [
+                        v for k, v in pattern_targets.items()
+                        if k.startswith("t") and isinstance(v, (int, float))
+                    ]
+
+                    best_target = max(targets) if targets else None
+
+                    if entry and sl_price and best_target and entry > sl_price:
+                        rr = (best_target - entry) / (entry - sl_price)
+                        rr_source = "pattern"
+
+        # --------------------------------------------------
+        # 2️⃣ Generic ATR fallback (RR + SL + Targets)
+        # --------------------------------------------------
+        # Merge the logic to prevent unconditional overwrite
+        if atr > 0 and price > 0:
+            if sl_dist > 0:
+                generic_rr = (atr * target_mult) / sl_dist
+                
+                # ONLY apply if not already set by a primary pattern
+                if rr is None:
+                    rr = generic_rr
+                    rr_source = "generic_atr"
+                
+                # Always calculate generic_targets as a backup
+                generic_targets = {
+                    "entry": price,
+                    "stop_loss": price - (atr * atr_mult),
+                    "t1": price + (atr * target_mult),
+                    "t2": price + (atr * target_mult * 2)
+                }
+
+        return {
+            "rrRatio": round(rr, 2) if rr else None,
+            "rr_source": rr_source,
+            "sl_price": sl_price,
+            "pattern_targets": pattern_targets,
+            "generic_targets": generic_targets,
+            "atr_multiple": atr_mult,
+            "target_multiple": target_mult
+        }
+    
+    def _validate_opportunity_gates(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        ✅ PHASE 8: Validate opportunity gates (FINAL DECISION LAYER)
+        Uses Standardized ConditionEvaluator logic.
+        """
+        setup_type = ctx["setup"]["type"]
+        
+        # 1. Build Opportunity Metrics (Data)
+        opportunity_ctx = self._build_opportunity_metrics(ctx)
+        ctx["opportunity_metrics"] = opportunity_ctx
+        
+        # 2. Get Resolved Gates (Config)
+        gates_map = self.extractor.get_resolved_gates("opportunity", setup_type)
+        
+        gate_results = {}
+        failures = []
+        stats = {"total": 0, "passed": 0, "failed": 0, "skipped": 0}
+
+        for gate_name, resolved_gate in gates_map.items():
+            stats["total"] += 1
+            threshold = resolved_gate.threshold
+
+            # ── Disabled gate check ──
+            if not threshold or (threshold.get("min") is None and threshold.get("max") is None):
+                gate_results[gate_name] = {
+                    "status": "skipped", "reason": "disabled",
+                    "required": None, "actual": None, "source": resolved_gate.source
+                }
+                stats["skipped"] += 1
+                continue
+
+            # 3. Get Data (Resolver knows *where* to look)
+            actual_value = self._resolve_opportunity_gate_value(
+                gate_name, 
+                ctx["opportunity_metrics"]
+            )
+
+            # ── Missing value check (Strict for Opportunity Gates) ──
+            if actual_value is None:
+                gate_results[gate_name] = {
+                    "status": "failed", "reason": "value_unavailable",
+                    "required": threshold, "actual": None, "source": resolved_gate.source
+                }
+                failures.append({
+                    "gate": gate_name, "reason": "Value unavailable", 
+                    "required": threshold, "actual": None, "source": resolved_gate.source
+                })
+                stats["failed"] += 1
+                continue
+
+            # 4. Evaluate ( Use Canonical Evaluator)
+            passed, reason = ConditionEvaluator.evaluate_gate_config(
+                actual_value,
+                threshold,
+                gate_name
+            )
+
+            gate_results[gate_name] = {
+                "status": "passed" if passed else "failed",
+                "required": threshold,
+                "actual": actual_value,
+                "reason": reason,
+                "source": resolved_gate.source
+            }
+
+            if passed:
+                stats["passed"] += 1
+            else:
+                stats["failed"] += 1
+                failures.append({
+                    "gate": gate_name,
+                    "reason": reason,
+                    "required": threshold,
+                    "actual": actual_value,
+                    "source": resolved_gate.source
+                })
+
+        return {
+            "phase": "opportunity",
+            "overall": {
+                "passed": len(failures) == 0,
+                "failed_gates": failures,
+                "total_gates": stats["total"],
+                "passed_gates": stats["passed"]
             },
-            "ma_slow": {
-                "EMA": self.get("moving_averages.slow", 200),
-                "WMA": self.get("moving_averages.slow", 50),
-                "MMA": self.get("moving_averages.slow", 12)
+            "gates": gate_results,
+            "summary": stats
+        }
+    
+    def _build_opportunity_context(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        Build a flat, decision-ready context for opportunity gates.
+
+        ✅ No calculations
+        ✅ No config logic
+        ✅ No thresholds
+        """
+
+        return {
+            "metrics": ctx.get("opportunity_metrics", {}),
+            "gates": ctx.get("opportunity_gates", {}),
+            "passed": ctx["opportunity_gates"]["overall"]["passed"],
+            "failed_gates": ctx["opportunity_gates"]["overall"]["failed_gates"],
+            "confidence": ctx["confidence"]["clamped"],
+            "setup": ctx["setup"]["type"],
+            "strategy": ctx["strategy"]["primary"],
+        }
+
+    def _resolve_opportunity_gate_value(
+        self,
+        gate_name: str,
+        opportunity_ctx: Dict[str, Any]
+    ):
+        """
+        Resolve opportunity gate values from derived metrics.
+        """
+        return opportunity_ctx.get(gate_name)
+
+    def _build_opportunity_metrics(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        ✅ Aggregate FINAL metrics required by opportunity gates.
+        ❌ No calculations
+        ❌ No thresholds
+        ❌ No decisions
+        """
+
+        scoring = ctx.get("scoring", {})
+        confidence = ctx.get("confidence", {})
+        execution = ctx.get("execution_rules", {})
+        risk = ctx.get("risk_candidates", {}) 
+
+        return {
+            # Core confidence
+            "confidence": confidence.get("clamped"),
+
+            # Scores (pure aggregation)
+            "technicalScore": scoring.get("technical", {}).get("score"),
+            "fundamentalScore": scoring.get("fundamental", {}).get("score"),
+            "hybridScore": scoring.get("hybrid", {}).get("score"),
+
+            # Risk / R:R (will be filled next)
+            "rrRatio": risk.get("rrRatio"),
+
+            # Safety metadata (already used)
+            "execution_risk_score": execution.get("summary", {}).get("execution_risk_score"),
+        }
+
+    def validate_pattern_conditions(self, conditions: List[str], namespace: Dict[str, Any], pattern_name: str, logic: str = "AND") -> bool:
+        """
+        Validate pattern-specific conditions (invalidation/breakdown).
+        
+        This is a specialized wrapper for pattern validation that:
+        - Automatically extracts values from nested indicator dicts
+        - Supports pattern metadata access (age_candles, width, state, etc.)
+        - Logs pattern-specific failures
+        
+        Args:
+            conditions: List of condition strings from pattern invalidation config
+            namespace: Raw indicators dict (may contain nested structures)
+            pattern_name: Pattern name for logging
+            logic: "AND" or "OR" (default: "AND")
+        
+        Returns:
+            True if conditions trigger invalidation, False otherwise
+        
+        Examples:
+            conditions = ["price < bbLow", "bbWidth > 8.0"]
+            namespace = ctx["indicators"]  # Raw nested dict
+            validate_pattern_conditions(conditions, namespace, "bollingerSqueeze")
+        """
+        if not conditions:
+            return True
+        
+        evaluator = ConditionEvaluator
+        results = []
+        for condition in conditions:
+            result = evaluator.evaluate_condition(condition, namespace)
+            results.append(result)
+            # Log pattern-specific evaluation
+            METRICS.log_condition_evaluation(
+                condition=condition,
+                result=result,
+                context=f"pattern_invalidation_{pattern_name}",
+                variables={k: namespace.get(k) for k in self._extract_variables_from_condition(condition)}
+            )
+            
+        if logic.upper() == "OR":
+            return any(results)  
+        return all(results)
+    
+    
+    def _validate_patterns(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        ✅ UPDATED: Pattern validation with entry rules (MINIMAL CHANGES).
+        
+        Now includes:
+        1. Pattern affinity (setup compatibility)
+        2. Pattern invalidation (breakdown detection)
+        3. Entry rule validation (reuses existing method!)
+        Pattern Validation (RESOLVER)
+        
+        ROLE: Gatekeeper (Pre-Entry)
+        - Selects best primary pattern compatible with setup.
+        - Checks static entry rules (e.g., "close > ema").
+        - Checks immediate invalidation (e.g., "pattern broken").
+        
+        ❌ DOES NOT: Monitor post-entry expiration or trail stops.
+        (See TradeEnhancer for post-entry lifecycle).
+        """
+        detected = ctx.get("patterns", {})
+        setup_info = ctx.get("setup", {})
+        top_setups = setup_info.get("top", [])
+
+        if not detected or not top_setups:
+            return {
+                "available": False,
+                "by_setup": {}
+            }
+
+        results = {}
+
+        for setup in top_setups:
+            setup_type = setup["type"]
+            setup_patterns = self.extractor.get_setup_patterns(setup_type)
+
+            primary = setup_patterns.get("PRIMARY", [])
+            confirming = setup_patterns.get("CONFIRMING", [])
+            conflicting = setup_patterns.get("CONFLICTING", [])
+
+            primary_found = [p for p in detected if p in primary]
+            confirming_found = [p for p in detected if p in confirming]
+            conflicting_found = [p for p in detected if p in conflicting]
+
+            score = 0
+            if primary_found:
+                score += 50
+            score += len(confirming_found) * 10
+            score -= len(conflicting_found) * 20
+
+            # ──── Pattern invalidation (PER SETUP) ────────────────────────
+            invalidation_status = {}
+            
+            # ✅ NEW: Entry rule validation (MINIMAL CODE!)
+            entry_validation_status = {}
+
+            for pattern_name, pattern_data in detected.items():
+                if not pattern_data.get("found"):
+                    continue
+
+                pattern_ctx = self.extractor.get_pattern_context(pattern_name)
+                if not pattern_ctx:
+                    continue
+
+                # 1. Check invalidation (breakdown) - EXISTING
+                if pattern_ctx.invalidation:
+                    conditions = pattern_ctx.invalidation.get("conditions", [])
+                    logic = pattern_ctx.invalidation.get("_logic", "AND")
+                    
+                    if conditions:
+                        is_invalidated = self.validate_pattern_conditions(
+                            conditions,
+                            ctx["indicators"],
+                            pattern_name,
+                            logic=logic
+                        )
+
+                        invalidation_status[pattern_name] = {
+                            "invalidated": is_invalidated,
+                            "rules": pattern_ctx.invalidation,
+                            "reason": "Breakdown conditions met" if is_invalidated else "Valid"
+                        }
+                        
+                        METRICS.log_pattern_validation(
+                            pattern_name=pattern_name,
+                            found=True,
+                            quality=pattern_data.get("score", 0),
+                            invalidated=is_invalidated,
+                            reason=invalidation_status[pattern_name]["reason"]
+                        )
+                
+                # ✅ 2. Check entry rules - REUSES EXISTING METHOD!
+                entry_conditions = pattern_ctx.entry_rules.get("conditions", [])
+                
+                if entry_conditions:
+                    # Build namespace with pattern metadata
+                    namespace = self._build_pattern_namespace(
+                        ctx, pattern_name, pattern_data
+                    )
+                    
+                    # ✅ REUSE: Same method used for invalidation!
+                    entry_passes = self.validate_pattern_conditions(
+                        entry_conditions,
+                        namespace,
+                        f"{pattern_name}_entry",
+                        logic="AND"  # Entry usually requires ALL conditions
+                    )
+                    
+                    entry_validation_status[pattern_name] = {
+                        "passes": entry_passes,
+                        "conditions_checked": entry_conditions,
+                        "reason": "All entry conditions met" if entry_passes else "Entry conditions failed"
+                    }
+
+            # ──────────────────────────────────────────────────────────────
+            # ✅ Pattern affinity (PER SETUP)
+            # ──────────────────────────────────────────────────────────────
+            affinity = self._calculate_pattern_affinity(setup_type, detected)
+
+            results[setup_type] = {
+                "valid": bool(primary_found or confirming_found),
+                "score": max(0, score),
+                "primary_found": primary_found,
+                "confirming_found": confirming_found,
+                "conflicting_found": conflicting_found,
+                "pattern_affinity": affinity,
+                "invalidation": invalidation_status,
+                "entry_validation": entry_validation_status  # ✅ NEW
+            }
+
+        return {
+            "available": True,
+            "by_setup": results
+        }
+    def _build_pattern_namespace(self, ctx: Dict, pattern_name: str, pattern_data: Dict):
+        indicators = ctx.get("indicators", {})
+        fundamentals = ctx.get("fundamentals", {})
+        
+        # ✅ SAFE EXTRACTION (handles both nested AND flat)
+        namespace = {}
+        
+        for key, value in {**indicators, **fundamentals}.items():
+            if isinstance(value, dict):
+                # Explicit None checks so 0.0 values are preserved
+                extracted = value.get("value")
+                if extracted is None:
+                    extracted = value.get("raw")
+                if extracted is None:
+                    extracted = value.get("score")
+                if extracted is not None:
+                    namespace[key] = extracted
+            elif isinstance(value, (int, float, str)) or (
+                isinstance(value, numbers.Number) and not isinstance(value, bool)
+            ):
+                # Already flat — also catches numpy scalars (np.float64, etc.)
+                namespace[key] = value
+        
+        # ✅ ADD PATTERN METADATA (age_candles, etc.)
+        if isinstance(pattern_data, dict):
+            meta = pattern_data.get("raw", {}).get("meta", {})
+            namespace.update(meta)
+        
+        return namespace
+
+    def _calculate_pattern_affinity(
+        self,
+        setup_type: str,
+        detected: Dict
+    ) -> List[Dict]:
+        """Calculate affinity scores between setup and detected patterns."""
+        # ✅ Get setup patterns via extractor
+        setup_patterns = self.extractor.get_setup_patterns(setup_type)
+        
+        affinities = []
+        for pattern_name in detected.keys():
+            affinity = 0.0
+            role = "UNKNOWN"
+            
+            if pattern_name in setup_patterns.get("PRIMARY", []):
+                affinity = 2.0
+                role = "PRIMARY"
+            elif pattern_name in setup_patterns.get("CONFIRMING", []):
+                affinity = 1.0
+                role = "CONFIRMING"
+            elif pattern_name in setup_patterns.get("CONFLICTING", []):
+                affinity = -1.0
+                role = "CONFLICTING"
+            
+            if affinity != 0:
+                affinities.append({
+                    "pattern": pattern_name,
+                    "affinity": affinity,
+                    "role": role
+                })
+        
+        return sorted(affinities, key=lambda x: x["affinity"], reverse=True)
+    
+    def detect_divergence(self, indicators: Dict) -> Dict[str, Any]:
+        """
+        ✅ REFACTORED v6.0: Unified Divergence Detection.
+        Uses confidence_config.py as the sole authority for both math and scoring.
+        """
+        # 1. Resolve Physics & Scoring Config
+        physics = self.extractor.get_divergence_physics()
+        div_penalties = self.extractor.get_universal_adjustments().get("divergence_penalties", {})
+        
+        # 2. Extract Values
+        flat_indicators = self._flatten_indicator_data(indicators)
+        rsi_slope = ensure_numeric(flat_indicators.get("rsislope", 0))
+        price = ensure_numeric(flat_indicators.get("price", 0))
+        prev_price = ensure_numeric(flat_indicators.get("prevclose", price))
+        
+        # Physics Triggers
+        bear_trigger = physics.get("slope_diff_min", -0.05)
+        bull_trigger = physics.get("bullish_slope_min", 0.05)
+        price_slope = (price - prev_price) / prev_price if prev_price > 0 else 0
+
+        # 3. Detect BEARISH Divergence (Price ↑, RSI ↓)
+        if price_slope > 0 and rsi_slope < bear_trigger:
+            # ✅ Use config-based momentum thresholds for adaptive severity
+            mom_thresholds = self.extractor.get_momentum_thresholds()
+            rsi_decel = mom_thresholds.get("rsislope", {}).get("deceleration_ceiling", -0.05)
+            
+            # Adaptive severity based on threshold multiples
+            if rsi_slope <= rsi_decel * 3:  # 3x threshold = severe
+                severity = "severe"
+            elif rsi_slope <= rsi_decel * 1.5:  # 1.5x threshold = moderate
+                severity = "moderate"
+            else:
+                severity = "minor"
+            
+            penalty_cfg = div_penalties.get(severity, {})
+            
+            return {
+                "divergence_type": "bearish",
+                "confidence_factor": penalty_cfg.get("confidence_multiplier", 0.70),
+                "warning": f"Bearish Divergence ({severity.upper()}): RSI slope={rsi_slope:.2f}",
+                "severity": severity,
+                "allow_entry": not penalty_cfg.get("block_entry", False)
+            }
+
+        # 4. Detect BULLISH Divergence (Price ↓, RSI ↑)
+        elif price_slope < 0 and rsi_slope > bull_trigger:
+            return {
+                "divergence_type": "bullish",
+                "confidence_factor": 1.0,  # No penalty for bullish divergence
+                "warning": f"Bullish Divergence: RSI slope={rsi_slope:.2f}",
+                "severity": "moderate",
+                "allow_entry": True
+            }
+
+        return {
+            "divergence_type": "none",
+            "confidence_factor": 1.0,
+            "allow_entry": True
+        }
+    def detect_volume_signature(self, indicators: Dict) -> Dict[str, Any]:
+        """
+        ✅ Detect volume signature using extractor.
+        
+        Detects: surge, drought, climax, normal
+        """
+        flat_indicators = self._flatten_indicator_data(indicators)
+        rvol = ensure_numeric(flat_indicators.get("rvol", 1.0))
+
+        # ✅ Get volume modifiers via extractor
+        vol_mods = self.extractor.get_volume_modifiers()
+        
+        # Check for SURGE
+        surge_config = vol_mods.get("surge_bonus", {})
+        if surge_config:
+            surge_gates = surge_config.get("gates", {})
+            surge_passes, _ = self.extractor.evaluate_confidence_gates(
+                surge_gates,
+                flat_indicators  # ✅ Use flattened data
+            )
+            
+            if surge_passes:
+                return {
+                    "type": "surge",
+                    "adjustment": surge_config.get("confidence_boost", 10),
+                    "warning": f"Volume surge: RVOL={rvol:.2f}",
+                    "rvol": rvol
+                }
+        
+        # Check for DROUGHT
+        drought_config = vol_mods.get("drought_penalty", {})
+        if drought_config:
+            drought_gates = drought_config.get("gates", {})
+            drought_passes, _ = self.extractor.evaluate_confidence_gates(
+                drought_gates,
+                flat_indicators
+            )
+            
+            if drought_passes:
+                return {
+                    "type": "drought",
+                    "adjustment": drought_config.get("confidence_penalty", -25),
+                    "warning": f"Volume drought: RVOL={rvol:.2f}",
+                    "rvol": rvol
+                }
+        
+        # Check for CLIMAX
+        climax_config = vol_mods.get("climax_warning", {})
+        if climax_config:
+            rsi = ensure_numeric(indicators.get("rsi", 50))
+            climax_gates = climax_config.get("gates", {})
+            climax_passes, _ = self.extractor.evaluate_confidence_gates(
+                climax_gates,
+                flat_indicators
+            )
+            
+            if climax_passes:
+                return {
+                    "type": "climax",
+                    "adjustment": -10,
+                    "warning": f"Volume climax: RVOL={rvol:.2f}, RSI={rsi:.1f}",
+                    "rvol": rvol
+                }
+        
+        # Normal volume
+        return {
+            "type": "normal",
+            "adjustment": 0,
+            "warning": None,
+            "rvol": rvol
+        }
+
+    def _build_execution_context(
+        self,
+        evaluation_ctx: Dict[str, Any],
+        capital: Optional[float],
+        now: Optional[datetime]
+    ) -> Dict[str, Any]:
+        """Build execution context (real-time validation with account state)."""
+        execution = {
+            "meta": {
+                "built_at": datetime.utcnow().isoformat(),
+                "capital_provided": capital is not None,
+                "time_provided": now is not None
             }
         }
         
-        if name in ma_mapping:
-            return ma_mapping[name].get(ma_type, fallback)
+        execution["entry_permission"] = self._build_entry_permission(evaluation_ctx)
+        execution["position_sizing"] = self._build_position_sizing(evaluation_ctx, capital)
+        execution["risk"] = self._finalize_risk_model(evaluation_ctx, capital)
+        execution["order_model"] = self._build_order_model(evaluation_ctx)
+        execution["market_constraints"] = self._build_market_constraints(evaluation_ctx)
+        execution["time_constraints"] = self._build_time_constraints(now)
+        execution["can_execute"] = self._can_execute(execution, evaluation_ctx)
         
-        return self.get(f"indicators.{name}", fallback)
+        return execution
     
-    def get_many(self, paths: List[str], defaults: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _build_entry_permission(self, eval_ctx: Dict) -> Dict[str, Any]:
         """
-        Get multiple config values at once.
-        Performance helper for batch retrieval.
-        """
-        defaults = defaults or {}
-        return {
-            path: self.get(path, default=defaults.get(path))
-            for path in paths
-        }
-    
-    def get_pattern_entry_rule(self, pattern: str, rule: str) -> Any:
-        """
-        Get pattern-specific entry rules.
-        Path: global.pattern_entry_rules.{pattern}.horizons.{horizon}.{rule}
-        """
-        path = f"pattern_entry_rules.{pattern}.horizons.{self.horizon}.{rule}"
-        return self.get(path)
-    
-    def get_pattern_invalidation(self, pattern: str) -> Dict:
-        """
-        Get pattern invalidation rules (horizon-specific).
-        Path: global.pattern_invalidation.{pattern}
-        """
-        path = f"pattern_invalidation.{pattern}"
-        rules = self.get(path, {})
-        
-        breakdown = rules.get("breakdown_threshold", {}).get(self.horizon, {})
-        action = rules.get("action", {}).get(self.horizon, "EXIT_ON_CLOSE")
-        
-        return {
-            "condition": breakdown.get("condition"),
-            "duration_candles": breakdown.get("duration_candles"),
-            "action": action,
-            "or_condition": breakdown.get("or_condition")
-        }
-    
-    # ============================================================
-    # CONVENIENCE WRAPPERS (Category C - Optional but Useful)
-    # ============================================================
-    
-    def get_setup_multiplier(self, setup_type: str) -> float:
-        """
-        Get position size multiplier for setup type (global).
-        Path: global.positionsizing.globalsetupmultipliers.{setup_type}
-        Args:
-            setup_type: Setup classification (e.g., "VALUE_TURNAROUND")
-        Returns:
-            Setup multiplier (default 1.0 if not found)
-        Example:
-            >>> config.get_setup_multiplier("VALUE_TURNAROUND")
-            1.4
-        """
-        # ✅ FIXED - Use correct path with smart inheritance
-        multipliers = self.get("global.positionsizing.globalsetupmultipliers", {})
-        mult = multipliers.get(setup_type, 1.0)
-        
-        logger.debug( f"[{self.horizon}] Setup multiplier for {setup_type}: {mult:.2f}" )
-        return mult
+        FINAL: Entry permission (execution projection)
 
+        ❌ No re-evaluation
+        ❌ No indicators
+        ❌ No pattern logic recalculation
+        ❌ No horizon branching
 
-    def get_position_sizing_config(self) -> Dict:
+        ✅ Aggregates ALL evaluation-phase validations
         """
-        Get complete position sizing configuration for this horizon.
+
+        opportunity = eval_ctx["opportunity_gates"]["overall"]
+        setup_pref = eval_ctx.get("setup_preferences", {})
         
-        Uses smart inheritance:
-        - base_risk_pct: Horizon-specific with global fallback
-        - max_position_pct: Horizon-specific with global fallback  
-        - setup_multipliers: Global only
-        - volatility_adjustments: Global only
+        # ✅ Pattern entry validation (from evaluation phase)
+        pattern_entry_ok = True
+        pattern_entry_reason = None
         
-        Returns:
-            Dictionary with all position sizing parameters
+        pattern_validation = eval_ctx.get("pattern_validation", {})
+        setup_type = eval_ctx["setup"]["type"]
         
-        Example:
-            >>> config = get_config("long_term")
-            >>> ps = config.get_position_sizing_config()
-            >>> print(ps["base_risk_pct"])  # 0.015 (long_term override)
-            >>> print(ps["setup_multipliers"]["VALUE_TURNAROUND"])  # 1.4 (global)
-        """
-        # ✅ FIXED - Use correct paths with smart inheritance
-        return {
-            # Horizon-specific with global fallback
-            "base_risk_pct": self.get("global.positionsizing.baseriskpct", 0.01),
+        if pattern_validation.get("available"):
+            by_setup = pattern_validation.get("by_setup", {})
+            setup_validation = by_setup.get(setup_type, {})
+            entry_validation = setup_validation.get("entry_validation", {})
             
-            # Global only (not horizon-specific)
-            "setup_multipliers": self.get("global.positionsizing.globalsetupmultipliers", {}),
-            "volatility_adjustments": self.get("global.positionsizing.volatilityadjustments", {}),
+            primary_found = setup_validation.get("primary_found", [])
             
-            # Horizon-specific with global fallback
-            "max_position_pct": self.get("riskmanagement.maxpositionpct", 0.02)
+            for pattern_name in primary_found:
+                validation = entry_validation.get(pattern_name, {})
+                if not validation.get("passes", True):
+                    pattern_entry_ok = False
+                    pattern_entry_reason = f"{pattern_name}: {validation.get('reason')}"
+                    break
+        
+        # ✅ Divergence check (from evaluation phase)
+        divergence = eval_ctx.get("divergence", {})
+        divergence_ok = divergence.get("allow_entry", True)
+        divergence_warning = divergence.get("warning") if not divergence_ok else None
+        
+        # ✅ Volume climax check (from evaluation phase)
+        vol_signature = eval_ctx.get("volume_signature", {})
+        vol_ok = vol_signature.get("type", "normal") != "climax"
+        vol_warning = f"Volume climax: RVOL={vol_signature.get('rvol', 0):.2f}" if not vol_ok else None
+
+        structural = eval_ctx["structural_gates"]["overall"]["passed"]
+        execution_rules = eval_ctx["execution_rules"]["overall"]["passed"]
+
+        # ✅ ALL CHECKS MUST PASS
+        allowed = (
+            structural  # ✅ FIXED: Include structural gates validation
+            and execution_rules  # ✅ FIXED: Include execution rules validation
+            and opportunity["passed"]
+            and not setup_pref.get("blocked", False)
+            and pattern_entry_ok
+            and divergence_ok  # ✅ RESTORED
+            and vol_ok  # ✅ RESTORED
+        )
+
+        reason = None
+        if not allowed:
+            if not structural:  # ✅ FIXED: Check structural first
+                failures = eval_ctx["structural_gates"]["overall"].get("failed_gates", [])
+                reason = f"Structural gates failed: {[f['gate'] for f in failures[:3]]}"
+            elif not execution_rules:  # ✅ FIXED: Check execution_rules next
+                failures = eval_ctx["execution_rules"]["overall"].get("failed_gates", [])
+                reason = f"Execution rules failed: {[f['rule'] for f in failures[:3]]}"
+            elif not opportunity["passed"]:
+                failures = opportunity.get("failed_gates", [])
+                reason = f"Opportunity gates failed: {[f['gate'] for f in failures[:3]]}"
+            elif setup_pref.get("blocked"):
+                reason = setup_pref.get("blocked_reason")
+            elif not pattern_entry_ok:
+                reason = f"Pattern entry blocked: {pattern_entry_reason}"
+            elif not divergence_ok:  # ✅ RESTORED
+                reason = f"Divergence block: {divergence_warning}"
+            elif not vol_ok:  # ✅ RESTORED
+                reason = vol_warning
+
+        return {
+            "allowed": allowed,
+            "reason": reason,
+            
+            # ✅ Validation breakdown (for debugging)
+            "checks": {
+                "opportunity_gates": opportunity["passed"],
+                "setup_not_blocked": not setup_pref.get("blocked", False),
+                "pattern_entry": pattern_entry_ok,
+                "divergence": divergence_ok,
+                "volume": vol_ok,
+                "structural": structural,
+                "execution_rules": execution_rules,
+            },
+            "pattern_status": {
+                "any_invalidated": self._has_invalidated_patterns(pattern_validation, setup_type),
+                "invalidated_list": self._get_invalidated_patterns(pattern_validation, setup_type),
+                "affects_entry": False  # Currently doesn't block, but tracked
+            },
+
+            # Execution-facing transparency (UI / logs)
+            "confidence": eval_ctx["confidence"]["clamped"],
+            "setup": eval_ctx["setup"]["type"],
+            "strategy": eval_ctx["strategy"]["primary"],
+
+            # Debug-only
+            "failed_gates": opportunity.get("failed_gates", []),
+            "warnings": [w for w in [divergence_warning, vol_warning] if w]
         }
-
-    def get_volatility_multiplier(self, vol_quality: float) -> float:
-        """
-        Get position size multiplier based on volatility quality.
-        Path: global.positionsizing.volatilityadjustments
-        Args:
-            vol_quality: Volatility quality score (0-10)
-        Returns:
-            Volatility multiplier (1.2 for high, 1.0 for medium, 0.9 for low)
-        Example:
-            >>> config.get_volatility_multiplier(7.5)
-            1.2  # High quality
-        """
-        adjustments = self.get("global.positionsizing.volatilityadjustments", {})
-        
-        # Check high quality first
-        high_cfg = adjustments.get("high_quality", {})
-        if "vol_qual_min" in high_cfg and vol_quality >= high_cfg["vol_qual_min"]:
-            mult = high_cfg.get("multiplier", 1.2)
-            logger.debug(f"[{self.horizon}] Vol regime: HIGH (qual={vol_quality:.1f}, mult={mult:.2f})")
-            return mult
-        
-        # Check low quality
-        low_cfg = adjustments.get("low_quality", {})
-        if "vol_qual_max" in low_cfg and vol_quality <= low_cfg["vol_qual_max"]:
-            mult = low_cfg.get("multiplier", 0.9)
-            logger.debug(f"[{self.horizon}] Vol regime: LOW (qual={vol_quality:.1f}, mult={mult:.2f})")
-            return mult
-        
-        # Default to medium
-        medium_cfg = adjustments.get("medium_quality", {})
-        mult = medium_cfg.get("multiplier", 1.0)
-        logger.debug(f"[{self.horizon}] Vol regime: MEDIUM (qual={vol_quality:.1f}, mult={mult:.2f})")
-        return mult
-
-    def get_proximity_rejection(self) -> Dict[str, float]:
-        """
-        Get S/R proximity rejection multipliers.
-        Part of execution params.
-        """
-        return self.get("execution.proximity_rejection", {
-            "resistance_mult": 1.005,
-            "support_mult": 0.995
-        })
     
-    def get_technical_weight(self, indicator: str) -> float:
-        """
-        Get technical indicator weight with horizon overrides.
-        Path: global.technical_weights.{indicator}.weight (with horizon overrides)
-        """
-        base_weight = self.get(f"technical_weights.{indicator}.weight", 1.0)
-        override = self.get(f"technical_weight_overrides.{indicator}")
-        
-        if override is not None:
-            return base_weight * override
-        return base_weight
-
-    def get_fundamental_mix(self) -> float:
-        """
-        Get fundamental weight for this horizon's scoring mix.
-        Returns tech/fund split ratio (0.0 = pure technical, 1.0 = pure fundamental).
-        
-        Path: horizons.{horizon}.scoring.fundamental_weight (with global fallback)
-        """
-        return self.get("scoring.fundamental_weight", 0.0)
-
-    def get_execution_params(self) -> Dict[str, Any]:
-        """Get execution parameters (horizon-specific)."""
-        return {
-            "stop_loss_atr_mult": self.get("execution.stop_loss_atr_mult", 2.0),
-            "target_atr_mult": self.get("execution.target_atr_mult", 3.0),
-            "max_hold_candles": self.get("execution.max_hold_candles", 20),
-            "risk_reward_min": self.get("execution.risk_reward_min", 2.0),
-            "base_hold_days": self.get("execution.base_hold_days", 10),
-            "proximity_rejection": self.get("execution.proximity_rejection", {
-                "resistance_mult": 1.005,
-                "support_mult": 0.995
-            }),
-            "min_profit_pct": self.get("execution.min_profit_pct", 0.5)
-        }
-    def get_risk_params(self) -> Dict[str, Any]:
-        """Get risk management parameters (horizon-specific)."""
-        return {
-            "max_position_pct": self.get("risk_management.max_position_pct", 0.02),
-            "min_rr_ratio": self.get("risk_management.min_rr_ratio", 1.5),
-            "horizon_t2_cap": self.get("risk_management.horizon_t2_cap", 0.10),
-            "atr_sl_limits": self.get("risk_management.atr_sl_limits", {}),
-            "setup_size_multipliers": self.get("risk_management.setup_size_multipliers", {}),
-            "rr_regime_adjustments": self.get("risk_management.rr_regime_adjustments", {})
-        }
-
-    # ============================================================
-    # FIXED: Gates Validation
-    # ============================================================
-    # ========== NEW METHODS - Add to ConfigResolver class ==========
-
-    def get_strategy_preferences(self) -> Dict[str, Any]:
-        """
-        Get strategy preferences for current horizon.
-        
-        Path: global.strategy_preferences.horizon_strategy_config.{horizon}
-        
-        Returns:
-            Dict with:
-            - preferred_setups: List[str]
-            - blocked_setups: List[str]
-            - sizing_multipliers: Dict[str, float]
-            - min_fundamental_score: Optional[float]
-            - filters: Dict (long_term/multibagger only)
-        
-        Example:
-            >>> config = get_config("intraday")
-            >>> prefs = config.get_strategy_preferences()
-            >>> prefs["blocked_setups"]
-            ['DEEP_VALUE_PLAY', 'QUALITY_ACCUMULATION']
-        """
-        strategy_config = self.get(
-            f"strategy_preferences.horizon_strategy_config.{self.horizon}",
-            {}
-        )     
-        return {
-            "preferred_setups": strategy_config.get("preferred_setups", []),
-            "blocked_setups": strategy_config.get("blocked_setups", []),
-            "sizing_multipliers": strategy_config.get("sizing_multipliers", {}),
-            "min_fundamental_score": strategy_config.get("min_fundamental_score"),
-            "filters": strategy_config.get("filters", {})
-        }
-
-
-    def is_setup_allowed(self, setup_type: str) -> bool:
-        """
-        Check if setup is allowed for current horizon strategy.
-        
-        Args:
-            setup_type: Setup classification (e.g., "MOMENTUM_BREAKOUT")
-        
-        Returns:
-            True if setup is not in blocked list
-        
-        Example:
-            >>> config = get_config("intraday")
-            >>> config.is_setup_allowed("DEEP_VALUE_PLAY")
-            False  # Blocked for intraday
-            >>> config.is_setup_allowed("MOMENTUM_BREAKOUT")
-            True   # Allowed for intraday
-        """
-        prefs = self.get_strategy_preferences()
-        blocked = prefs.get("blocked_setups", [])
-        
-        if setup_type in blocked:
-            logger.info(f"{self.horizon}: Setup {setup_type} BLOCKED by strategy preferences")
+    def _has_invalidated_patterns(self, pattern_validation: Dict, setup_type: str) -> bool:
+        """Check if any patterns are invalidated."""
+        if not pattern_validation.get("available"):
             return False
         
-        return True
+        by_setup = pattern_validation.get("by_setup", {})
+        setup_validation = by_setup.get(setup_type, {})
+        invalidation = setup_validation.get("invalidation", {})
+        
+        return any(
+            status.get("invalidated", False)
+            for status in invalidation.values()
+        )
 
+    def _get_invalidated_patterns(self, pattern_validation: Dict, setup_type: str) -> List[str]:
+        """Get list of invalidated pattern names."""
+        if not pattern_validation.get("available"):
+            return []
+        
+        by_setup = pattern_validation.get("by_setup", {})
+        setup_validation = by_setup.get(setup_type, {})
+        invalidation = setup_validation.get("invalidation", {})
+        
+        return [
+            pattern_name
+            for pattern_name, status in invalidation.items()
+            if status.get("invalidated", False)
+        ]
+    
+    def _build_position_sizing(self, eval_ctx: Dict, capital: Optional[float]) -> Dict[str, Any]:
+        """✅ Calculate position size using extractor (backward compatible)."""
 
-    def get_strategy_sizing_multiplier(self, setup_type: str) -> float:
+        if capital is None or capital <= 0:
+            return {
+                "mode": "unknown",
+                "reason": "Capital not provided" if capital is None else "Capital is zero or negative"
+            }
+
+        # --------------------------------------------------
+        # Base risk config
+        # --------------------------------------------------
+        risk_config = self.extractor.get_risk_management_config()
+        base_risk = risk_config.get("base_risk_pct", 0.02)
+
+        # --------------------------------------------------
+        # Setup-based multipliers (already refactored)
+        # --------------------------------------------------
+        setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
+        mults = self.extractor.get_combined_position_sizing_multipliers(setup_type)
+
+        # --------------------------------------------------
+        # ✅ STRATEGY MULTIPLIER (SAFE EXTRACTION)
+        # --------------------------------------------------
+        strategy_ctx = eval_ctx.get("strategy", {})
+
+        if isinstance(strategy_ctx.get("best"), dict):
+            strategy_mult = strategy_ctx["best"].get("multiplier", 1.0)
+        else:
+            strategy_mult = strategy_ctx.get("horizon_multiplier", 1.0)
+
+        # --------------------------------------------------
+        # Final risk computation
+        # --------------------------------------------------
+        combined_multiplier = mults["combined"] * strategy_mult
+        risk_pct = base_risk * combined_multiplier
+
+        max_position = risk_config.get("max_position_pct", 0.05)
+        risk_pct = min(risk_pct, max_position)
+
+        return {
+            "mode": "percent_capital",
+            "base_risk_pct": base_risk,
+            "global_setup_multiplier": mults["global_setup"],
+            "horizon_setup_multiplier": mults["horizon_setup"],
+            "horizon_base_multiplier": mults["horizon_base"],
+            "strategy_multiplier": strategy_mult,  # ✅ EXPLICIT (useful for UI/debug)
+            "combined_multiplier": round(combined_multiplier, 3),
+            "final_risk_pct": round(risk_pct, 4),
+            "capital": capital,
+            "position_value": round(capital * risk_pct, 2)
+        }
+    
+    def _finalize_risk_model(
+        self,
+        eval_ctx: Dict[str, Any],
+        capital: Optional[float]
+    ) -> Dict[str, Any]:
         """
-        Get strategy-specific sizing multiplier.
-        
-        These are SEPARATE from setup multipliers - they represent
-        horizon strategy preferences (e.g., 'we prefer accumulation for long-term').
-        
-        Args:
-            setup_type: Setup classification
-        
-        Returns:
-            Multiplier from strategy preferences, or 1.0 if not specified
-        
-        Example:
-            >>> config = get_config("multibagger")
-            >>> config.get_strategy_sizing_multiplier("VALUE_TURNAROUND")
-            1.8  # Multibagger prefers value setups
-            >>> config.get_strategy_sizing_multiplier("MOMENTUM_BREAKOUT")
-            0.5  # Multibagger reduces momentum exposure
+        FINALIZE risk model with DUAL CONSTRAINTS (Risk vs. Capital).
         """
-        prefs = self.get_strategy_preferences()
-        multiplier = prefs.get("sizing_multipliers", {}).get(setup_type, 1.0)
+        risk_data = eval_ctx.get("risk_candidates", {})
+        price = ensure_numeric(eval_ctx["price_data"].get("price"))
+        confidence = eval_ctx["confidence"]["clamped"]
         
-        if multiplier != 1.0:
-            logger.debug(
-                f"{self.horizon}: Strategy sizing multiplier for {setup_type}: {multiplier:.2f}"
+        # 1. Get Core Data
+        sl_price = risk_data.get("sl_price")
+        rr = risk_data.get("rrRatio")
+        targets = risk_data.get("pattern_targets") or risk_data.get("generic_targets")
+        
+        # # 2. Validate Price Logic
+        # valid = all([price > 0, sl_price is not None, sl_price < price])
+        # risk_per_share = price - sl_price if valid else None
+        # 2. Validate Price Logic – short‑circuit safely
+        if price is None or price <= 0 or sl_price is None:
+            valid = False
+        else:
+            valid = sl_price < price
+
+        risk_per_share = (price - sl_price) if valid else None
+
+        # 3. Initialize Sizing Variables
+        quantity = 0
+        risk_amount = 0.0
+        capital_required = 0.0
+        limit_reason = "invalid_data"
+
+        if valid and risk_per_share > 0:
+            # --- FETCH CONFIGURATION ---
+            risk_cfg = self.extractor.get_risk_management_config()
+            
+            # A. Risk Appetite (e.g., ₹500)
+            target_risk = risk_cfg.get("risk_per_trade")
+            if target_risk is None:
+                logger.warning(f"risk_per_trade missing from config, using fallback ₹500")
+                target_risk = 500
+            
+            # B. Capital Constraints (e.g., Max ₹50,000)
+            sizing_cfg = risk_cfg.get("position_sizing", {})
+            max_capital_per_trade = sizing_cfg.get("max_capital", 50000)
+            if max_capital_per_trade is None:
+                logger.warning(f"[{symbol}] max_capital missing from config, using fallback ₹50,000")
+                max_capital_per_trade = 50_000
+            
+            # If account balance ('capital') is provided, don't exceed it
+            if capital:
+                max_capital_per_trade = min(max_capital_per_trade, capital)
+
+            # --- CALCULATE DUAL LIMITS ---
+            
+            # Limit 1: Quantity based on Risk
+            # (e.g., 500 / 3.30 = 606 shares)
+            qty_by_risk = int(target_risk / risk_per_share)
+            
+            # Limit 2: Quantity based on Capital
+            # (e.g., 50000 / 330.50 = 151 shares)
+            qty_by_capital = int(max_capital_per_trade / price)
+            
+            # --- FINAL DECISION (Take the smaller one) ---
+            if qty_by_capital < qty_by_risk:
+                quantity = qty_by_capital
+                limit_reason = "max_capital_cap"
+            else:
+                quantity = qty_by_risk
+                limit_reason = "risk_target"
+                
+            # Recalculate actuals based on final quantity
+            capital_required = quantity * price
+            risk_amount = quantity * risk_per_share
+
+        # 4. Normalize Targets (Same as before)
+        normalized_targets = []
+        if isinstance(targets, dict):
+            for k, v in targets.items():
+                if k.startswith("t") and isinstance(v, (int, float)):
+                    normalized_targets.append(float(v))
+        if not normalized_targets and price and risk_data.get("atr_multiple"):
+             atr = ensure_numeric(eval_ctx["indicators"].get("atrDynamic"))
+             if atr:
+                 normalized_targets = [price + (atr * 3.0), price + (atr * 5.0)]
+
+        # 5. Return Final Model
+        return {
+            "valid": valid and quantity > 0,
+            "entry_price": price,
+            "stop_loss": sl_price,
+            "risk_per_share": round(risk_per_share, 2) if risk_per_share else 0,
+            "atr": ensure_numeric(eval_ctx["indicators"].get("atrDynamic", 0)),
+            # Execution Details
+            "quantity": quantity,
+            "risk_amount": round(risk_amount, 2),
+            "capital_required": round(capital_required, 2),
+            "limit_reason": limit_reason,  # Useful for debugging (why is qty low?)
+            
+            # Metadata
+            "rrRatio": rr,
+            "targets": normalized_targets,
+            "confidence": confidence,
+            "setup": eval_ctx["setup"]["type"]
+        }
+    def _calculate_pattern_targets(
+        self,
+        pattern_name: str,
+        pattern_data: Dict,
+        price_data: Dict
+    ) -> Optional[Dict[str, float]]:
+        """✅ Calculate pattern-based targets using extractor."""
+        try:
+            meta = pattern_data.get("raw", {}).get("meta", {})
+            entry = price_data.get("price", 0)
+            
+            if not entry:
+                return None
+            
+            # ✅ Get pattern physics via extractor
+            pattern_ctx = self.extractor.get_pattern_context(pattern_name)
+            if not pattern_ctx:
+                return None
+            
+            target_ratio = pattern_ctx.physics.get("target_ratio", 1.0)
+            
+            # Calculate depth (pattern-specific)
+            depth = None
+            stop_loss = None
+            
+            if pattern_name == "darvasBox":
+                box_high = meta.get("box_high")
+                box_low = meta.get("box_low")
+                if box_high and box_low:
+                    if box_low >= box_high:
+                        self.logger.warning(
+                            f"Invalid Darvas box geometry: low={box_low} >= high={box_high}"
+                        )
+                        return None
+                    depth = box_high - box_low
+                    stop_loss = box_low * 0.995
+            
+            elif pattern_name == "cupHandle":
+                rim = meta.get("rim_level")
+                depth_pct = meta.get("depth_pct")
+                handle_low = meta.get("handle_low") # Check if your detector provides this
+                
+                if rim and depth_pct:
+                    depth = rim * (depth_pct / 100.0)
+                    # Fix: If detector gives handle_low, use it. Otherwise, use handle depth.
+                    if handle_low:
+                        stop_loss = handle_low * 0.99
+                    else:
+                        # Fallback: SL at 30% of cup depth (standard handle area)
+                        stop_loss = rim - (depth * 0.3)
+            
+            elif pattern_name == "flagPennant":
+                pole_pct = meta.get("pole_gain_pct")
+                if pole_pct:
+                    depth = entry * (pole_pct / 100.0)
+                    stop_loss = meta.get("flag_low") or (entry * 0.98)
+            
+            elif pattern_name == "doubleTopBottom":
+                target = meta.get("target")
+                neckline = meta.get("neckline")
+                if target and neckline:
+                    return {
+                        "entry": entry,
+                        "stop_loss": neckline * 0.99,
+                        "t1": target,
+                        "t2": target * 1.5,
+                        "depth": abs(target - neckline),
+                        "pattern": pattern_name
+                    }
+            
+            else:
+                # For GoldenCross, Ichimoku, etc., use ATR-based stop or recent swing
+                # This ensures the Signal Engine always has a Risk/Reward to display
+                atrDynamic = price_data.get("atrDynamic", entry * 0.02)
+                depth = atrDynamic * 3.0 # Default "reward" expectation
+                stop_loss = entry - (atrDynamic * 2.0) # Default 2x ATR Stop
+            # Calculate targets if depth resolved
+            if depth and entry:
+                t1 = round(entry + (depth * target_ratio), 2)
+                t2 = round(entry + (depth * target_ratio * 2), 2)
+                
+                return {
+                    "entry": _safe_float(entry),
+                    "stop_loss": _safe_float(stop_loss),
+                    "t1": _safe_float(t1),
+                    "t2": _safe_float(t2),
+                    "depth": _safe_float(depth),
+                    "pattern": pattern_name
+                }
+            
+            # ATR-based fallback (adapts to stock's actual volatility)
+            atr_fallback = price_data.get("atrDynamic", entry * 0.02)
+            return {
+                "entry": _safe_float(entry),
+                "stop_loss": _safe_float(entry - (atr_fallback * 1.5)),
+                "t1": _safe_float(entry + (atr_fallback * 2.0)),
+                "t2": _safe_float(entry + (atr_fallback * 4.0)),
+                "depth": _safe_float(atr_fallback * 2.0),
+                "pattern": pattern_name,
+                "source": "atr_fallback"
+            }
+        
+        except Exception as e:
+            self.logger.error(f"Pattern target calculation failed: {e}")
+            return None
+
+    def _build_order_model(self, eval_ctx: Dict) -> Dict[str, Any]:
+        """
+        FINAL execution order model.
+
+        ✅ Uses validated patterns only
+        ❌ No gating
+        ❌ No scoring
+        ❌ No fallback logic leakage
+        """
+
+        setup_type = eval_ctx["setup"]["type"]
+        pattern_validation = eval_ctx.get("pattern_validation", {})
+
+        # --------------------------------------------------
+        # 1️⃣ Pattern-based order model (validated only)
+        # --------------------------------------------------
+        if pattern_validation.get("available"):
+            setup_patterns = (
+                pattern_validation
+                .get("by_setup", {})
+                .get(setup_type, {})
             )
-        
-        return multiplier
+
+            primary_patterns = setup_patterns.get("primary_found", [])
+            entry_validation = setup_patterns.get("entry_validation", {})
+
+            for pattern_name in primary_patterns:
+                validation = entry_validation.get(pattern_name, {})
+                if not validation.get("passes", True):
+                    continue  # execution must respect evaluation
+
+                pattern_ctx = self.extractor.get_pattern_context(pattern_name)
+                if pattern_ctx and pattern_ctx.entry_rules:
+                    return {
+                        "type": pattern_ctx.entry_rules.get("order_type", "market"),
+                        "trigger": pattern_ctx.entry_rules.get("trigger"),
+                        "confirmation": pattern_ctx.entry_rules.get("confirmation"),
+                        "source": "pattern_matrix",
+                        "pattern": pattern_name
+                    }
+
+        # --------------------------------------------------
+        # 2️⃣ Setup-based fallback (execution-safe)
+        # --------------------------------------------------
+        order_type_map = {
+            "MOMENTUM_BREAKOUT": "stop_market",
+            "VOLATILITY_SQUEEZE": "stop_market",
+            "QUALITY_ACCUMULATION": "limit",
+            "VALUE_TURNAROUND": "limit",
+            "TREND_PULLBACK": "limit"
+        }
+
+        return {
+            "type": order_type_map.get(setup_type, "market"),
+            "source": "setup_default",
+            "reason": "no_valid_primary_pattern"
+        }
 
 
-    def apply_fundamental_filters(
-        self, 
-        fundamentals: Dict[str, Any]
-    ) -> Tuple[bool, List[str]]:
-        """
-        Apply horizon-specific fundamental filters.
-        Path: global.strategy_preferences.horizon_strategy_config.{horizon}.filters
-        Only applies to horizons with min_fundamental_score > 0.        
-        Args:
-            fundamentals: Fundamental data dict
-        Returns:
-            (passes: bool, failures: List[str])
-        Example:
-            >>> config = get_config("multibagger")
-            >>> fundamentals = {"roe": 10, "roce": 12, "deratio": 0.3}
-            >>> passes, failures = config.apply_fundamental_filters(fundamentals)
-            >>> passes
-            False
-            >>> failures
-            ['ROE 10.0% < 20%', 'ROCE 12.0% < 25%']
-        """
-        prefs = self.get_strategy_preferences()
+    def _build_market_constraints(self, eval_ctx: Dict) -> Dict[str, Any]:
+        """✅ Build market constraints using extractor."""
+        # ✅ Get market constraints via extractor
+        constraints = self.extractor.get_market_constraints_config()
         
-        min_score = prefs.get("min_fundamental_score")
-        if min_score is None or min_score == 0:
-            return (True, [])  # No fundamental requirements for this horizon
+        if constraints:
+            return {
+                "gates": constraints,
+                "source": "strategy_matrix",
+                "blocking": constraints.get("blocking", False),
+                "strategy": eval_ctx["strategy"]["primary"]
+            }
         
-        filters = prefs.get("filters", {})
-        if not filters:
-            return (True, [])  # No filters defined
+        return {"source": "none"}
+
+    def _build_time_constraints(self, now: Optional[datetime]) -> Dict[str, Any]:
+        """✅ Build time constraints using extractor."""
+        if not now:
+            return {"current_time": None, "allowed": True}
         
+        current_time = now.time()
+        
+        # ✅ Get time filters via extractor
+        time_filters = self.extractor.get_time_filters_config()
+        
+        if self.horizon == "intraday" and time_filters:
+            # Check avoidance windows
+            avoidance = time_filters.get("avoidance_windows", [])
+            for window in avoidance:
+                start_time = time(*map(int, window["start"].split(":")))
+                end_time = time(*map(int, window["end"].split(":")))
+                
+                if start_time <= current_time <= end_time:
+                    return {
+                        "current_time": now.strftime("%H:%M"),
+                        "allowed": False,
+                        "reason": window["reason"]
+                    }
+        
+        return {"current_time": now.strftime("%H:%M"), "allowed": True}
+
+    def _can_execute(self, exec_ctx: Dict, eval_ctx: Dict) -> Dict[str, Any]:
+        """Final execution decision combining all checks."""
+        # checks = {
+        #     "entry_permission": exec_ctx["entry_permission"]["allowed"],
+        #     "time_allowed": exec_ctx["time_constraints"]["allowed"],
+        #     "capital_available": exec_ctx["position_sizing"]["mode"] != "unknown"
+        # }
+        checks = {
+            "entry_permission": exec_ctx["entry_permission"]["allowed"],
+            "time_allowed": exec_ctx["time_constraints"]["allowed"],
+            "risk_valid": exec_ctx["risk"]["valid"],
+            "capital_available": exec_ctx["position_sizing"]["capital"],
+            "quantity_available": exec_ctx["risk"]["quantity"] not in (None, 0)
+        }
+
+        all_passed = all(checks.values())
         failures = []
         
-        # Check require_low_debt
-        if filters.get("require_low_debt"):
-            max_de = filters.get("max_de_ratio", 0.5)
-            deratio = _get_val(fundamentals, "deratio", 0)
-            if deratio > max_de:
-                failures.append(f"DE ratio {deratio:.2f} > {max_de}")
+        if not checks["entry_permission"]:
+            failures.append(exec_ctx["entry_permission"]["reason"])
+        if not checks["time_allowed"]:
+            failures.append(exec_ctx["time_constraints"].get("reason"))
+        if not checks["capital_available"]:
+            failures.append("Capital not provided")
         
-        # Check min_roe
-        if "min_roe" in filters:
-            min_roe = filters["min_roe"]
-            roe = _get_val(fundamentals, "roe", 0)
-            if roe < min_roe:
-                failures.append(f"ROE {roe:.1f}% < {min_roe}%")
-        
-        # Check min_roce
-        if "min_roce" in filters:
-            min_roce = filters["min_roce"]
-            roce = _get_val(fundamentals, "roce", 0)
-            if roce < min_roce:
-                failures.append(f"ROCE {roce:.1f}% < {min_roce}%")
-        
-        # Check min_piotroski_f (multibagger only)
-        if "min_piotroski_f" in filters:
-            min_f = filters["min_piotroski_f"]
-            f_score = _get_val(fundamentals, "piotroski_f", 0)
-            if f_score < min_f:
-                failures.append(f"Piotroski F-Score {f_score} < {min_f}")
-        
-        # Check max_pe_ratio
-        if "max_pe_ratio" in filters:
-            max_pe = filters["max_pe_ratio"]
-            peratio = _get_val(fundamentals, "peratio", 999)
-            if peratio > max_pe:
-                failures.append(f"P/E ratio {peratio:.1f} > {max_pe}")
-        
-        passes = len(failures) == 0
-        
-        if not passes:
-            logger.info(
-                f"{self.horizon}: Fundamental filters FAILED: {', '.join(failures)}"
-            )
-        else:
-            logger.info(f"{self.horizon}: Fundamental filters PASSED ✓")
-        
-        return (passes, failures)
-
-
-    def validate_volatility_regime(
-        self, 
-        indicators: Dict, 
-        setup_type: str
-    ) -> Tuple[bool, str]:
-        """
-        Enhanced volatility regime validation using guards.
-        
-        Now supports setup-specific quality requirements from gates.
-        
-        Args:
-            indicators: Technical indicators
-            setup_type: Setup classification
-        
-        Returns:
-            (should_trade: bool, reason: str)
-        
-        Example:
-            >>> config = get_config("intraday")
-            >>> can_trade, reason = config.validate_volatility_regime(
-            ...     indicators={"volatilityquality": 3.0, "atr_pct": 2.5},
-            ...     setup_type="MOMENTUM_BREAKOUT"
-            ... )
-            >>> can_trade
-            True
-            >>> reason
-            "Volatility expansion allowed for breakout"
-        """
-        vol_qual = _get_val(indicators, "volatilityquality")
-        atr_pct = _get_val(indicators, "atr_pct")
-        
-        if vol_qual is None or atr_pct is None:
-            return (True, "Missing vol data, proceed cautiously")
-        
-        # Get guards from horizon gates
-        guards = self.get_volatility_guards()
-        bands = self._normalize_volatility_bands()
-        
-        # 1. Extreme volatility check
-        extreme_buffer = guards.get("extreme_vol_buffer", 2.0)
-        max_band = bands.get("max", 12.0)
-        extreme_threshold = max_band * extreme_buffer
-        
-        if atr_pct > extreme_threshold:
-            return (False, f"Extreme volatility {atr_pct:.1f}%, avoid all entries")
-        
-        # 2. Setup-specific quality check
-        if "BREAKOUT" in setup_type or "BREAKDOWN" in setup_type:
-            min_qual = guards.get("min_quality_breakout", 2.0)
-            if vol_qual < min_qual:
-                return (False, f"Vol quality {vol_qual:.1f} < {min_qual} for breakout")
-            return (True, "Volatility expansion allowed for breakout")
-        
-        # 3. Normal setup quality check
-        min_qual = guards.get("min_quality_normal", 4.0)
-        if vol_qual < min_qual:
-            return (False, f"Low vol quality {vol_qual:.1f}, potential chop")
-        
-        return (True, "Volatility regime favorable")
-
-
-    def get_confidence_floor(self, setup_type: str = None) -> int:
-        """
-        Get confidence floor for setup type (horizon-specific).
-        
-        ENHANCED version with better fallback for new setups.
-        
-        Resolution order:
-        1. Horizon-specific base_floors
-        2. Global base_floors
-        3. Default 55
-        
-        Args:
-            setup_type: Setup classification (optional)
-        
-        Returns:
-            Confidence floor (35-75)
-        
-        Example:
-            >>> config = get_config("short_term")
-            >>> config.get_confidence_floor("MOMENTUM_BREAKOUT")
-            55
-            >>> config.get_confidence_floor("PATTERN_STRIKE_REVERSAL")
-            50  # Falls back to global if not in short_term
-        """
-        if setup_type:
-            # Try horizon first
-            base_floors = self.get("confidence.base_floors", {})
-            floor = base_floors.get(setup_type)
-            
-            if floor is not None:
-                return floor
-            
-            # Fallback to global if not in horizon
-            global_floors = self._global_config.get("confidence", {}).get("base_floors", {})
-            floor = global_floors.get(setup_type)
-            
-            if floor is not None:
-                logger.debug(
-                    f"{self.horizon}: Using global base_floor for {setup_type}: {floor}"
-                )
-                return floor
-            
-            # Ultimate fallback
-            logger.warning(
-                f"{self.horizon}: No base_floor found for {setup_type}, using 55"
-            )
-            return 55
-        
-        # If no setup_type provided, return buy floor
-        floors = self.get("confidence.floors", {})
-        return floors.get("buy", 55)
-
-
-# ========== END NEW METHODS ==========
-
-
-    def get_gate_checks(self) -> Dict[str, Any]:
-        """
-        ✅ UPDATED: Support for the new 'setup_gate_specifications' structure.
-        """
-        gates = self.get_section("gates", merge_global=True)
-        
-        # 1. Fetch Universal Gates (The "Nature" of the setup)
-        # This is the new path from your patch!
-        universal_specs = self._global_config.get("setup_gate_specifications", {})
-        
-        # 2. Fetch Horizon Overrides (Confidence and Volatility)
-        horizon_overrides = self._horizon_config.get("gates", {}).get("setup_gate_overrides", {})
-        
-        # 3. Smart Merge Logic
-        final_overrides = {}
-        all_setup_names = set(universal_specs.keys()) | set(horizon_overrides.keys())
-        
-        for setup in all_setup_names:
-            # Get nature/universal gates first
-            spec = universal_specs.get(setup, {}).get("universal_gates", {})
-            # Get horizon specific overrides (vol/conf)
-            h_ovr = horizon_overrides.get(setup, {})
-            
-            # Horizon overrides ALWAYS win (e.g., your adx_min: 8 for long-term)
-            final_overrides[setup] = {**spec, **h_ovr}
-        
-        gates["setup_gate_overrides"] = final_overrides
-        logger.debug(f"[{self.horizon}] Gate resolution:")
-        logger.debug(f"  Global defaults: {len(universal_specs)} setups")
-        logger.debug(f"  Horizon overrides: {len(horizon_overrides)} setups")
-        logger.debug(f"  Final merged: {len(final_overrides)} setups")
-        return gates
-    
-    def get_trend_threshold(self, metric: str) -> float:
-        """
-        Get trend slope thresholds (horizon-specific).
-        """
-        return self.get(f"trend_thresholds.slope.{metric}", 10.0)
-    
-    def get_volatility_bands(self) -> Dict[str, float]:
-        """
-        Get volatility bands (min, ideal, max).
-        Alias for _normalize_volatility_bands() for backward compatibility.
-        """
-        return self._normalize_volatility_bands()
-    
-    def get_volatility_guards(self) -> Dict[str, float]:
-        """
-        Get volatility guard thresholds - horizon-specific.
-        
-        Path: horizons.{horizon}.gates.volatility_guards
-        Fallback: global defaults
-        
-        Returns:
-            Dict with:
-            - extreme_vol_buffer: float (how much above max triggers extreme)
-            - min_quality_breakout: float (min vol quality for breakout setups)
-            - min_quality_normal: float (min vol quality for normal setups)
-        """
-        guards = self.get("gates.volatility_guards", {})
-        
-        # Ensure all required keys exist with proper defaults
         return {
-            "extreme_vol_buffer": guards.get("extreme_vol_buffer", 2.0),
-            "min_quality_breakout": guards.get("min_quality_breakout", 3.0),
-            "min_quality_normal": guards.get("min_quality_normal", 4.0)
+            "can_execute": all_passed,
+            "checks": checks,
+            "failures": failures
         }
 
+    # ========================================================================
+    # PUBLIC API METHODS (for external callers)
+    # ========================================================================
+
+    def get_setup_priority(self, setup_name: str) -> float:
+        """
+        Get resolved priority for setup (public API).
+        
+        Delegates to extractor which handles hierarchy:
+        Horizon override > Setup default > Fallback to 0
+        """
+        return self.extractor.get_setup_priority(setup_name)
+
+    def get_setup_confidence_floor(self, setup_name: str) -> float:
+        """
+        Get confidence floor for setup (public API).
+        
+        Delegates to extractor which handles hierarchy:
+        Horizon override > Global baseline > Default (40)
+        """
+        return self.extractor.get_setup_confidence_floor(setup_name)
     
-    def get_volume_threshold(self, metric: str) -> float:
-        """
-        Get volume analysis thresholds (rvol_surge, rvol_drought).
-        Horizon-specific with global fallback.
-        """
-        key_map = {
-            "rvol_surge": "volume_analysis.rvol_surge_threshold",
-            "rvol_drought": "volume_analysis.rvol_drought_threshold"
-        }
-        path = key_map.get(metric, f"volume_analysis.{metric}")
-        return self.get(path, 1.0)
-    
-    def should_trade_volatility(self, indicators: Dict, setup_type: str) -> Tuple[bool, str]:
-        """
-        Validates volatility regime for trading.
-        Returns: (should_trade: bool, reason: str)
-        """
-        vol_qual = self._get_val(indicators, "volatilityquality")
-        atr_pct = self._get_val(indicators, "atr_pct")
+    def _validate_indian_market_gates(self, eval_ctx: Dict) -> Tuple[bool, str]:
+        """✅ Validate Indian market gates using extractor."""
+        # ✅ Get market constraints via extractor
+        # this method is obsolete since we do not have capacity to calulate spread and delivery pct
+        # and we are not using this method anywhere
+        # remove this method in future for now just early return
+        return True, "Indian market gates not configured"
+        constraints = self.extractor.get_market_constraints_config()
         
-        if vol_qual is None or atr_pct is None:
-            return True, "Missing vol data, proceed cautiously"
+        if not constraints:
+            return False, "No Indian market gates configured"
         
-        # Extreme volatility check
-        guards = self.get("gates.volatility_guards", {})
-        extreme_buffer = guards.get("extreme_vol_buffer", 2.0)
-        bands = self._normalize_volatility_bands()
+        gates = constraints.get("gates", {})
+        if not gates:
+            return True, "No gates defined"
+            
+        price_data = eval_ctx.get("price_data", {})
         
-        if atr_pct > bands.get("max", 12.0) + extreme_buffer:
-            return False, f"Extreme volatility ({atr_pct:.1f}%), avoid all entries"
+        # Check min average volume
+        min_vol = gates.get("min_avg_volume")
+        if min_vol:
+            actual_vol = price_data.get("avgVolume", 0)
+            if actual_vol < min_vol:
+                return False, f"Avg volume {actual_vol:,.0f} < required {min_vol:,.0f}"
         
-        # Breakout exception
-        if "BREAKOUT" in setup_type or "BREAKDOWN" in setup_type:
-            min_qual = guards.get("min_quality_breakout", 2.0)
-            if vol_qual < min_qual:
-                return False, f"Vol quality {vol_qual:.1f} < {min_qual} for breakout"
-            return True, "Volatility expansion allowed for breakout"
+        # Check max spread
+        max_spread = gates.get("max_spread_pct")
+        if max_spread:
+            spread = price_data.get("spread_pct") or \
+                    price_data.get("bidAskSpread") or \
+                    price_data.get("spreadPct", 0)
+            
+            if spread > max_spread:
+                return False, f"Spread {spread:.2%} > max {max_spread:.2%}"
         
-        # Standard quality check
-        min_qual = guards.get("min_quality_normal", 4.0)
-        if vol_qual < min_qual:
-            return False, f"Low vol quality ({vol_qual:.1f}), potential chop"
+        # Check min delivery
+        min_delivery = gates.get("min_delivery_pct")
+        if min_delivery:
+            delivery = price_data.get("delivery_pct") or \
+                    price_data.get("deliveryPct", 0)
+            
+            if delivery < min_delivery:
+                return False, f"Delivery {delivery:.1f}% < required {min_delivery}%"
         
-        return True, "Volatility regime favorable"
+        # Check GSM avoidance
+        if gates.get("avoid_gsm"):
+            gsm_flag = price_data.get("gsm_flag") or \
+                    price_data.get("gsmFlag") or \
+                    price_data.get("in_gsm", False)
+            
+            if gsm_flag:
+                return False, "Stock in GSM - blocked"
+        
+        return True, "All Indian market gates passed"
 
-
-# ============================================================
-# Module-level API
-# ============================================================
-
-_cache: Dict[str, ConfigResolver] = {}
-
-# BOTTOM OF config_resolver.py - REPLACE existing get_config()
-# config_resolver.py - FIXED get_config() with caching
-# Global _cache: horizon → ConfigResolver(indicators, fundamentals)
-
-def get_config(horizon: str = "short_term", 
-               indicators: Dict = None, 
-               fundamentals: Dict = None,
-               master_config: Dict = None) -> 'ConfigResolver':
-    """🔥 CACHED: Pass indicators/fundamentals ONCE per horizon → Reused everywhere!"""
-
-    # if horizon not in _cache:
-    #     logger.info(f"📄 [config] NEW ConfigResolver({horizon})")
-    # else:
-    #     logger.debug(f"🔄 [config] CACHE HIT {horizon}")
-    
-    if horizon not in _cache:
-        _cache[horizon] = ConfigResolver(
-            horizon=horizon, 
-            indicators=indicators, 
-            fundamentals=fundamentals,
-            master_config=master_config
-        )
-        # logger.info(f"🔄 [config] NEW ConfigResolver({horizon}): indicators={len(indicators or {})} keys")
-    else:
-        # UPDATE existing _cache with new data (sequential flow)
-        cached = _cache[horizon]
-        if indicators and cached.indicators != indicators:
-            cached.indicators = indicators
-            cached.clear_cache()
-            # logger.debug(f"🔄 [config] UPDATED {horizon} indicators={len(indicators)}")
-        if fundamentals and cached.fundamentals != fundamentals:
-            cached.fundamentals = fundamentals
-            cached.clear_cache()
-            # logger.debug(f"🔄 [config] UPDATED {horizon} fundamentals={len(fundamentals)}")
-    return _cache[horizon]
-
-
-def clear_config_cache():
-    """Clear all cached ConfigResolver instances."""
-    _cache.clear()
+def create_resolver(master_config: Dict, horizon: str) -> ConfigResolver:
+    """Factory function to create resolver instance."""
+    return ConfigResolver(master_config, horizon)

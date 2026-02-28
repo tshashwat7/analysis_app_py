@@ -75,6 +75,15 @@
         </select>
         <button id="loadBtn" onclick="loadIndex()">🔄 Load Index</button>
 
+        <!-- ✅ NEW: Confidence floor filter -->
+        <label style="margin-left:12px;font-weight:600;">Conf ≥</label>
+        <input type="number" id="confFloor" value="60" min="0" max="100" step="5"
+               style="width:60px;text-align:center;font-weight:700;"
+               oninput="if(gridApi) gridApi.onFilterChanged()">
+        <!-- ✅ NEW: Profit % sort shortcut -->
+        <button onclick="if(gridApi) gridApi.applyColumnState({state:[{colId:'profit_pct',sort:'desc'}],defaultState:{sort:null}})" 
+                style="background:#16a34a;">📈 Sort Profit %</button>
+
         <br>
         <button id="startBtn" onclick="startAutoAnalyze()" disabled>Start Auto Analysis</button>
         <button id="stopBtn" onclick="stopAutoAnalyze()" disabled>Stop</button>
@@ -226,24 +235,135 @@
             cellClass: p => p.value >= 70 ? 'score-buy' : p.value < 40 ? 'score-sell' : 'score-hold'
         },
 
-        // 5. Recommendation -> PERFECT for Set Filter
+        // 5. Recommendation -> fix parsing of "BUY--multibagger" format
         { 
             field: "recommendation", headerName: "Rec.", width: 100, sortable: true, 
-            filter: 'agSetColumnFilter', // <--- CHECKBOXES (Buy, Sell, Hold)
-            cellClass: p => p.value === 'BUY' ? 'buy-cell' : p.value === 'SELL' ? 'sell-cell' : 'hold-cell' 
+            filter: 'agSetColumnFilter',
+            // ✅ FIX: recommendation stores "BUY--multibagger" — extract category before --
+            valueGetter: p => (p.data.recommendation || "").split("--")[0] || p.data.recommendation,
+            tooltipValueGetter: p => {
+                const cat = (p.data.recommendation || "").split("--")[0];
+                const sig = p.data.bull_signal || 'HOLD';
+                if (cat === 'BUY' && sig === 'HOLD') return `Profile qualified as BUY but execution is gated (HOLD signal). See detail page for reason.`;
+                return `${cat} — trade signal: ${sig}`;
+            },
+            cellClass: p => {
+                const v = (p.data.recommendation || "").split("--")[0];
+                // If profile=BUY but signal=HOLD, render as amber (conflict) not green
+                if (v === 'BUY' && p.data.bull_signal === 'HOLD') return 'hold-cell';
+                return v === 'BUY' ? 'buy-cell' : v === 'SELL' ? 'sell-cell' : 'hold-cell';
+            }
         },
 
-        // 6. Signal -> PERFECT for Set Filter
-        { 
-            field: "bull_signal", headerName: "Signal", width: 140, sortable: true, 
-            filter: 'agSetColumnFilter', // <--- CHECKBOXES (Squeeze, Trend, etc.)
+        // 5b. Horizon — which timeframe is best fit for this stock
+        {
+            field: "best_fit_horizon", headerName: "Horizon", width: 100, sortable: true,
+            filter: 'agSetColumnFilter',
+            // ✅ NEW: show best_fit_horizon; fall back to parsing recommendation
+            valueGetter: p => {
+                if (p.data.best_fit_horizon) return p.data.best_fit_horizon;
+                const parts = (p.data.recommendation || "").split("--");
+                return parts[1] || "";
+            },
             cellRenderer: p => {
-                const val = p.value || "";
-                if (val.includes("SQUEEZE")) return `<span style="background:#d1fae5; color:#065f46; padding:2px 6px; border-radius:4px; font-size:11px;">🚀 ${val}</span>`;
-                if (val.includes("TREND")) return `<span style="background:#dbeafe; color:#1e40af; padding:2px 6px; border-radius:4px; font-size:11px;">📈 ${val}</span>`;
-                if (val.includes("DIP") || val.includes("PULLBACK")) return `<span style="background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; font-size:11px;">📉 ${val}</span>`;
-                return `<span style="font-size:11px; color:#666">${val}</span>`;
+                const map = { intraday: "Intraday", short_term: "Short", long_term: "Long", multibagger: "Multi" };
+                const colors = {
+                    intraday:   { bg:"#e0f2fe", color:"#0369a1" },
+                    short_term: { bg:"#f0fdf4", color:"#166534" },
+                    long_term:  { bg:"#fefce8", color:"#92400e" },
+                    multibagger:{ bg:"#faf5ff", color:"#7e22ce" },
+                };
+                const v = p.value || "";
+                const c = colors[v] || { bg:"#f3f4f6", color:"#555" };
+                const label = map[v] || v;
+                if (!label) return '<span style="color:#ccc">-</span>';
+                return `<span style="background:${c.bg};color:${c.color};padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">${label}</span>`;
             }
+        },
+
+        // 6. Signal — show clean BUY/SELL/HOLD direction (bull_signal is now the clean value)
+        { 
+            field: "bull_signal", headerName: "Signal", width: 100, sortable: true, 
+            filter: 'agSetColumnFilter',
+            cellRenderer: p => {
+                const sig = p.value || 'HOLD';
+                // Use profile_category if present, else fall back to parsing recommendation
+                const profCat = p.data.profile_category || (p.data.recommendation || "").split("--")[0];
+                const conflict = (profCat === 'BUY' && sig === 'HOLD');
+                const cls = sig === 'BUY' ? 'buy-cell' : sig === 'SELL' ? 'sell-cell' : 'hold-cell';
+                const conflictIcon = conflict
+                    ? `<span title="Profile qualified BUY but execution blocked. Check detail page." 
+                             style="cursor:help;margin-left:4px;font-size:11px;">⚠️</span>`
+                    : '';
+                return `<span class="${cls}">${sig}</span>${conflictIcon}`;
+            }
+        },
+
+        // 6c. Conflict indicator — only shows when profile=BUY but signal=HOLD
+        {
+            headerName: "Exec",
+            width: 65,
+            filter: 'agSetColumnFilter',
+            filterValueGetter: p => {
+                if (!p.data) return "OK";
+                const profCat = p.data.profile_category || (p.data.recommendation || "").split("--")[0];
+                return (profCat === 'BUY' && p.data.bull_signal === 'HOLD') ? "Blocked" : "OK";
+            },
+            cellRenderer: p => {
+                if (!p.data) return '';
+                const profCat = p.data.profile_category || (p.data.recommendation || "").split("--")[0];
+                const sig = p.data.bull_signal || 'HOLD';
+                if (profCat === 'BUY' && sig === 'HOLD') {
+                    return `<span title="Profile BUY but execution gated — click ticker for details"
+                                  style="background:#fef3c7;color:#92400e;padding:2px 6px;
+                                         border-radius:10px;font-size:10px;font-weight:700;cursor:help;">⛔ Gate</span>`;
+                }
+                return `<span style="color:#d1d5db;font-size:11px;">✓</span>`;
+            }
+        },
+
+        // 6b. Setup — full setup type label e.g. "BOLLINGER SQUEEZE BUY"
+        {
+            field: "setup_signal", headerName: "Setup", width: 150, sortable: true,
+            filter: 'agSetColumnFilter',
+            cellRenderer: p => {
+                const val = (p.value || "").toString();
+                if (!val || val === "N/A") return '<span style="color:#ccc">-</span>';
+                if (val.includes("SQUEEZE")) return `<span style="background:#d1fae5;color:#065f46;padding:2px 6px;border-radius:4px;font-size:11px;">🚀 ${val}</span>`;
+                if (val.includes("TREND"))   return `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:4px;font-size:11px;">📈 ${val}</span>`;
+                if (val.includes("DIP") || val.includes("PULLBACK")) return `<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:4px;font-size:11px;">📉 ${val}</span>`;
+                return `<span style="font-size:11px;color:#666">${val}</span>`;
+            }
+        },
+
+        // ✅ NEW: Profit % — (T1 - entry) / entry * 100
+        {
+            field: "profit_pct", headerName: "Profit %", width: 95, sortable: true,
+            filter: 'agNumberColumnFilter',
+            sort: 'desc',  // default sort: highest profit first
+            valueGetter: p => {
+                // Use pre-computed server value if present
+                if (p.data.profit_pct !== null && p.data.profit_pct !== undefined) return p.data.profit_pct;
+                // Fallback: compute client-side from entry_trigger + t1
+                const e = parseFloat(p.data.entry_trigger), t = parseFloat(p.data.t1);
+                if (e > 0 && t > 0) return parseFloat(((t - e) / e * 100).toFixed(2));
+                return null;
+            },
+            cellRenderer: p => {
+                if (p.value === null || p.value === undefined) return '<span style="color:#ccc">-</span>';
+                const pct = parseFloat(p.value);
+                const color = pct >= 15 ? '#16a34a' : pct >= 7 ? '#2563eb' : pct >= 0 ? '#6b7280' : '#dc2626';
+                const icon  = pct >= 15 ? '🔥' : pct >= 7 ? '📈' : pct < 0 ? '📉' : '';
+                return `<span style="color:${color};font-weight:700;">${icon} ${pct.toFixed(1)}%</span>`;
+            },
+            comparator: (a, b) => (a ?? -Infinity) - (b ?? -Infinity)
+        },
+
+        // ✅ NEW: T1 price
+        {
+            field: "t1", headerName: "T1 ₹", width: 90, sortable: true,
+            filter: 'agNumberColumnFilter',
+            valueFormatter: p => p.value ? "₹" + parseFloat(p.value).toLocaleString('en-IN', {maximumFractionDigits:1}) : "-"
         },
 
         // 7. R:R (Number Filter)
@@ -259,15 +379,18 @@
             cellStyle: { 'color': '#dc2626', 'font-weight': '500', 'font-size': '12px' }
         },
 
-        // 9. Confidence (Number Filter)
+        // 9. Confidence — bar + numeric value shown in tooltip
         { 
-            field: "confidence", headerName: "Conf", width: 80, sortable: true, 
+            field: "confidence", headerName: "Conf %", width: 90, sortable: true, 
             filter: 'agNumberColumnFilter',
+            tooltipValueGetter: p => `Confidence: ${p.value || 0}%`,
             cellRenderer: params => {
                 const val = params.value || 0;
                 const color = val > 70 ? '#22c55e' : val > 40 ? '#facc15' : '#ef4444';
-                return `<div style="width: 100%; background: #eee; height: 6px; border-radius: 3px; margin-top: 15px;">
-                        <div style="width: ${val}%; background: ${color}; height: 100%; border-radius: 3px;"></div></div>`;
+                return `<span style="font-size:11px;font-weight:700;margin-right:4px;">${val}%</span>
+                        <span style="display:inline-block;width:40px;background:#eee;height:6px;border-radius:3px;vertical-align:middle;">
+                          <span style="display:block;width:${val}%;background:${color};height:100%;border-radius:3px;"></span>
+                        </span>`;
             }
         },
         
@@ -280,6 +403,7 @@
         { field: "long_score", hide: true },
         { field: "multi_score", hide: true },      
         { field: "fitting_strategies", hide: true }, 
+        { field: "profile_category", hide: true },   // ✅ NEW: raw profile category (pre-execution)
 
         // 12. Corp Actions (Text or Set)
         { field: "corp_action", headerName: "Events", width: 150, sortable: true, filter: 'agTextColumnFilter' },
@@ -297,7 +421,16 @@
         defaultColDef: { resizable: true, sortable: true, filter: true, flex: 1, minWidth: 80 },
         getRowId: params => params.data.symbol,
         enableBrowserTooltips: true, 
-        onPaginationChanged: onPageChange
+        onPaginationChanged: onPageChange,
+        // ✅ NEW: External confidence floor filter
+        isExternalFilterPresent: () => {
+            const floor = parseInt(document.getElementById('confFloor')?.value) || 0;
+            return floor > 0;
+        },
+        doesExternalFilterPass: node => {
+            const floor = parseInt(document.getElementById('confFloor')?.value) || 0;
+            return (node.data.confidence || 0) >= floor;
+        }
     };
 
     // --- 4. Initialize ---
@@ -473,9 +606,14 @@
                 symbol: t,
                 name: j.pairs ? j.pairs[t] : t,
                 score: null, 
-                best_strategy: null, // Init strategy field
+                best_strategy: null,
                 recommendation: "--",
                 bull_signal: "--",
+                profile_category: null,    // ✅ NEW: raw profile BUY/HOLD before execution gates
+                setup_signal: null,
+                best_fit_horizon: null,
+                profit_pct: null,
+                t1: null,
                 corp_action: ""
             }));
             

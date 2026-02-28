@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 from typing import Dict, Any
+from services.data_fetch import _safe_float
 from services.patterns.base import BasePattern
+from services.patterns.utils import _build_formation_context
 
 class CupHandlePattern(BasePattern):
     """
@@ -9,7 +11,7 @@ class CupHandlePattern(BasePattern):
     """
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
-        self.alias = "cup_handle"
+        self.alias = "cupHandle"
         # Configurable Parameters
         self.min_cup_len = self.config.get("min_cup_len", 20)
         self.max_cup_depth = self.config.get("max_cup_depth", 0.50)
@@ -118,20 +120,73 @@ class CupHandlePattern(BasePattern):
             result["quality"] = min(qual, 10.0)
             result["score"] = self._normalize_score(qual * 10)
             
-            # Rich Metadata for Plotting
+            entry_conditions_met = is_breakout and vol_bonus > 0
+
             result["meta"] = {
-                "depth_pct": round(cup_depth_pct * 100, 1),
-                "rim_level": round(rim_right_val, 2),
-                # Plotting Coordinates
+                "depth_pct": _safe_float(round(cup_depth_pct * 100, 1)),
+                "rim_level": _safe_float(round(rim_right_val, 2)),
+                "handle_low": _safe_float(round(np.min(handle_lows), 2)),
+                "handle_high": _safe_float(round(np.max(handle_highs), 2)),
                 "coords": {
                     "left_rim_idx": int(rim_left_idx),
                     "bottom_idx": int(cup_bottom_idx),
                     "right_rim_idx": int(rim_right_idx)
                 },
-                # Age tracking
-                "age_candles": 60 - rim_left_idx,  # ✅ This is correct (relative age)
+                "age_candles": 60 - rim_left_idx,
                 "formation_timestamp": window.index[rim_left_idx].isoformat(),
-                "cup_duration_candles": rim_right_idx - rim_left_idx
+                "cup_duration_candles": rim_right_idx - rim_left_idx,
+                # 🆕 Pattern-Specific Velocity Tracking
+                "velocity_tracking": {
+                    "can_track": result["quality"] >= 7.0 and entry_conditions_met,
+                    "entry_conditions_met": entry_conditions_met,
+                    "quality_sufficient": result["quality"] >= 7.0,
+                    "breakout_confirmed": is_breakout,
+                    "volume_confirmed": vol_bonus > 0
+                },
+                # 🆕 Formation Context (Generic)
+                "formation_context": _build_formation_context(indicators)
             }
+
+            # Calculate handle depth percentage
+            handle_depth_pct = ((rim_right_val - np.min(handle_lows)) / rim_right_val) * 100 if rim_right_val > 0 else 0
+
+            # Invalidation level (varies by horizon)
+            if horizon == "short_term":
+                invalidation_level = np.min(handle_lows) * 0.97
+            elif horizon == "long_term":
+                invalidation_level = np.min(handle_lows) * 0.95
+            else:
+                invalidation_level = np.min(handle_lows) * 0.97  # default
+
+            # Entry trigger is rim level
+            entry_trigger_price = rim_right_val
+
+            # Pattern strength
+            pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate" if result["quality"] >= 6.5 else "weak"
+
+            # Cup shape quality assessment
+            cup_shape_quality = "U-shaped" if cup_depth_pct < 35 else "irregular"
+
+            result["meta"].update({
+                "bar_index": len(df),
+                # Handle Metrics (Critical for invalidation)
+                "handle_depth_pct": _safe_float(round(handle_depth_pct, 2)),
+                "handle_low": float(np.min(handle_lows)), 
+                "rim_level": float(rim_right_val),
+                # Analytics
+                "cup_depth_pct": round(cup_depth_pct, 2),
+                # Entry/Exit Levels todo delete
+                "invalidation_level": _safe_float(round(invalidation_level, 2)),
+                "entry_trigger_price": _safe_float(round(entry_trigger_price, 2)),
+                # Quality Assessments
+                "cup_shape_quality": cup_shape_quality,
+                "handle_quality": "tight" if handle_depth_pct < 10 else "loose",
+                "volume_pattern": "decreasing" if vol_bonus > 0 else "stable",
+                
+                # Universal Fields
+                "horizon": horizon,
+                "pattern_strength": pattern_strength,
+                "current_price": _safe_float(round(current_close, 2))
+            })
             
         return result

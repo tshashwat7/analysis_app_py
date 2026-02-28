@@ -1,0 +1,277 @@
+# Stock Analyzer App — Architecture Walkthrough
+
+## High-Level Architecture
+
+```mermaid
+graph TD
+    subgraph "Entry Point"
+        A["main.py<br>run_analysis()"]
+    end
+    
+    subgraph "Data Layer"
+        B["data_fetch.py<br>fundamentals.py<br>indicators.py"]
+    end
+    
+    subgraph "Config Layer — 6 Horizon-Agnostic Files"
+        C1["setup_pattern_matrix_config.py<br>120KB · 3345 lines"]
+        C2["strategy_matrix_config.py<br>30KB · 806 lines"]
+        C3["confidence_config.py<br>47KB · 993 lines"]
+        C4["technical_score_config.py<br>66KB · 1921 lines"]
+        C5["fundamental_score_config.py<br>34KB · 940 lines"]
+        C6["master_config.py<br>62KB · 1585 lines"]
+    end
+    
+    subgraph "Extraction Layer"
+        D1["ConfigExtractor<br>56KB · 1255 lines"]
+        D2["QueryOptimizedExtractor<br>97KB · 2487 lines · 85 methods"]
+    end
+    
+    subgraph "Brain Layer"
+        E["ConfigResolver<br>177KB · 4188 lines · 74 methods"]
+        F["signal_engine.py<br>52KB · 1341 lines"]
+    end
+    
+    subgraph "Execution Layer"
+        G["trade_enhancer.py<br>49KB · 1203 lines"]
+        H["generate_trade_plan()"]
+    end
+    
+    A --> B
+    B --> F
+    C1 & C2 & C3 & C4 & C5 & C6 --> D1
+    D1 --> D2
+    D2 --> E
+    F --> E
+    E --> G
+    G --> H
+    H --> A
+```
+
+---
+
+## Layer 1: Config Files (The Heart)
+
+Six **horizon-agnostic** config files define the system's fixed rules:
+
+| File | Role | Key Exports |
+|------|------|-------------|
+| [setup_pattern_matrix_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/setup_pattern_matrix_config.py) | Setup↔Pattern affinity, classification rules, validation modifiers | `SETUP_PATTERN_MATRIX` — ~18 setups with PRIMARY/CONFIRMING/CONFLICTING patterns |
+| [strategy_matrix_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/strategy_matrix_config.py) | Strategy DNA: fit indicators, scoring rules, market cap filters | `STRATEGY_MATRIX` — ~10 strategies (swing, day trading, trend following, value, etc.) |
+| [confidence_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/confidence_config.py) | Confidence calculation: ADX bands, volume modifiers, setup floors | `CONFIDENCE_CONFIG` — global + per-horizon adjustments |
+| [technical_score_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/technical_score_config.py) | Technical indicator scoring (40+ metrics) | `METRIC_REGISTRY` + scoring functions |
+| [fundamental_score_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/fundamental_score_config.py) | Fundamental metric scoring with horizon participation | `METRIC_REGISTRY` + `HORIZON_FUNDAMENTAL_WEIGHTS` |
+| [master_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/master_config.py) | Horizon-specific overrides, gates, execution rules, risk mgmt | `MASTER_CONFIG` — the envelope wrapping all 6 files |
+
+### How [master_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/master_config.py) Wraps Everything
+
+```
+MASTER_CONFIG = {
+    "global": {
+        "entry_gates": { structural, opportunity },
+        "execution_rules": { volatility_guards, structure_validation, sl_distance, target_proximity },
+        "risk_management": { base_risk_pct, max_position_pct, position_sizing },
+        "strategy_preferences": { priorities, blocked setups, conflict resolution }
+    },
+    "horizons": {
+        "intraday": { gates (override), rr_gates, execution, pillar_weights, time_estimation },
+        "short_term": { ... },
+        "long_term": { ... },
+        "multibagger": { ... }
+    }
+}
+```
+
+### Setup Config Structure (Per Setup in `SETUP_PATTERN_MATRIX`)
+
+```
+"MOMENTUM_BREAKOUT": {
+    "patterns":       { PRIMARY, CONFIRMING, CONFLICTING },
+    "classification_rules": { technical_conditions, fundamental_conditions },
+    "default_priority": 90,
+    "default_confidence_floor": 55,
+    "context_requirements": { technical: {adx, trendStrength, ...}, fundamental: {required, roe, ...} },
+    "horizon_overrides": { intraday: {...}, short_term: {...}, long_term: {...}, multibagger: {...} },
+    "validation_modifiers": { penalties: {...}, bonuses: {...} },
+    "min_pattern_quality": 7.0,
+    "min_setup_score": 80,
+    "setup_type": "breakout"
+}
+```
+
+---
+
+## Layer 2: Extraction (Config → Query API)
+
+### ConfigExtractor ([config_extractor.py](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py))
+
+Pre-extracts all config sections at initialization into typed [ConfigSection](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#45-52) objects:
+
+```python
+class ConfigExtractor:
+    def __init__(self, master_config, horizon):
+        self.extract_all()  # Pre-fetch everything
+    
+    def extract_all(self):
+        self.extract_confidence_sections()   # From confidence_config.py
+        self.extract_global_sections()       # From master_config.global
+        self.extract_horizon_sections()      # From master_config.horizons[horizon]
+        self.extract_setup_sections()        # From setup_pattern_matrix
+        self.extract_strategy_sections()     # From strategy_matrix
+        self.extract_risk_sections()         # From master_config risk management
+        self.extract_gate_sections()         # Gate hierarchy: global → horizon → setup
+        self.extract_matrix_sections()       # Full matrix data (patterns, physics)
+```
+
+### QueryOptimizedExtractor ([query_optimized_extractor.py](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py))
+
+Wraps [ConfigExtractor](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#58-1256) with **85 type-safe query methods**, organized in 7 categories:
+
+| Category | Example Methods |
+|----------|-----------------|
+| **Confidence** | [get_confidence_range()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#104-121), [get_setup_baseline_floor()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#143-168), [get_adx_confidence_bands()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#245-262), [evaluate_confidence_gates()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#317-420) |
+| **Gates** | [get_resolved_gates(phase, setup)](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#767-850), [is_gate_enabled()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#879-892), [get_gate_threshold()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#893-908) |
+| **Patterns** | [get_pattern_context()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#913-991), [get_setup_patterns()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#992-1041), [get_setup_validation_modifiers()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#1042-1060) |
+| **Strategy** | [get_strategy_horizon_multiplier()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#2118-2140), [get_market_constraints_config()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#1677-1700) |
+| **Scoring** | [get_technical_score()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#1933-1940), [get_fundamental_score()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#1941-1947), [calculate_dynamic_confidence_floor()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#1721-1797) |
+| **Normalization** | [normalize_threshold()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#2258-2301), [evaluate_threshold()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#2344-2399), [check_metric_threshold()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#1961-2001) |
+| **Utility** | [clear_cache()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#2403-2409), [validate_extractor_state()](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#2425-2464) |
+
+---
+
+## Layer 3: Resolution & Scoring (The Brain)
+
+### ConfigResolver ([config_resolver.py](file:///d:/stockviedeo/stock-analyzer-app/config/config_resolver.py))
+
+The **brain** of the application. 4188 lines, 74 methods. Two public APIs:
+
+1. **[build_evaluation_context_only()](file:///d:/stockviedeo/stock-analyzer-app/config/config_resolver.py#635-676)** — Phase 1: Pure analysis (no capital/time dependency)
+2. **[build_execution_context_from_evaluation()](file:///d:/stockviedeo/stock-analyzer-app/config/config_resolver.py#677-706)** — Phase 2: Execution projection
+
+#### Evaluation Pipeline (8 Internal Phases)
+
+```mermaid
+graph TD
+    P1["Phase 1: Flatten Indicators<br>_flatten_indicator_data()"]
+    P2["Phase 2: Trend & Momentum<br>_build_trend_context()<br>_build_momentum_context()"]
+    P3["Phase 3: Score Calculation<br>_calculate_all_scores()<br>tech + fundamental + hybrid"]
+    P4["Phase 4: Setup Classification<br>_classify_setup()<br>Evaluate all 18 setups, rank by priority × fit"]
+    P5["Phase 5: Strategy Classification<br>_classify_strategy()<br>Score all strategies via fit indicators"]
+    P6["Phase 6: Confidence Calculation<br>_calculate_confidence()<br>Base floor → ADX bands → modifiers → clamp"]
+    P7["Phase 7: Gate Validation<br>_validate_structural_gates()<br>_validate_execution_rules()<br>_validate_opportunity_gates()"]
+    P8["Phase 8: Risk Candidates<br>_build_risk_candidates()<br>SL, targets, RR ratio"]
+    
+    P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8
+```
+
+#### Execution Pipeline (Built on top of evaluation)
+
+```
+_build_execution_context():
+    ├── _build_entry_permission()     # Aggregate all evaluation validations
+    ├── _build_position_sizing()      # Capital allocation
+    ├── _finalize_risk_model()        # Quantity, risk amount, targets
+    ├── _build_order_model()          # Market/limit/stop order type
+    ├── _build_market_constraints()   # Indian market gates
+    ├── _build_time_constraints()     # Avoidance windows
+    └── _can_execute()                # Final go/no-go
+```
+
+### Signal Engine ([signal_engine.py](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py))
+
+Orchestrator that **triggers** the resolver:
+
+| Function | Role |
+|----------|------|
+| [compute_all_profiles()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#366-629) | Loops over horizons, computes eligibility + opportunity scores |
+| [calculate_structural_eligibility()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#72-134) | Blends tech/fund/hybrid pillars with horizon-specific weights |
+| [compute_opportunity_score()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#136-311) | Layers patterns, setups, and strategy fit on eligibility |
+| [generate_trade_plan()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#770-1114) | Builds eval_ctx → exec_ctx → enhancer → finalize |
+| [finalize_trade_decision()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#633-748) | Maps gate outcomes to trade signals (BUY/HOLD/SELL) |
+
+---
+
+## Layer 4: Execution (Targets, Hold Times, Enhancement)
+
+### Trade Enhancer ([trade_enhancer.py](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py))
+
+Post-processes execution context with 5 phases:
+
+| Phase | Function | Role |
+|-------|----------|------|
+| 1 | [adjust_targets_for_market_conditions()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#97-250) | Adjusts resolver targets for volatility/volume/spread |
+| 2 | [get_rr_regime_multipliers()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#255-300) | ATR-based target multipliers by trend regime |
+| 3 | [check_pattern_expiration()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#306-412) | Monitors pattern lifecycle (max_duration_candles) |
+| 4 | [check_pattern_invalidation()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#418-581) | Real-time pattern breakdown detection |
+| 5 | [enhance_execution_context()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#585-753) | Main entry: applies all phases to exec_ctx |
+
+Also: [calculate_pattern_timeline()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#910-1099) for estimated hold time/weeks.
+
+---
+
+## Complete Data Flow: [run_analysis()](file:///d:/stockviedeo/stock-analyzer-app/main.py#631-906)
+
+```mermaid
+sequenceDiagram
+    participant M as main.py
+    participant D as Data Layer
+    participant SE as Signal Engine
+    participant CH as Config Helpers
+    participant CR as Config Resolver
+    participant TE as Trade Enhancer
+
+    M->>D: Step 2: compute_fundamentals()
+    M->>D: Step 3: compute_indicators_cached() × N horizons
+    M->>M: Step 4: Extract macro trend
+    M->>SE: Step 5: compute_all_profiles()
+    SE->>CH: build_evaluation_context_v5()
+    CH->>CR: build_evaluation_context_only()
+    CR-->>SE: eval_ctx (setup, strategy, confidence, gates)
+    SE-->>M: profiles{} + best_fit
+    M->>SE: Step 8: generate_trade_plan()
+    SE->>CH: build_evaluation_context_v5()
+    SE->>CH: build_execution_context_v5()
+    CH->>CR: build_execution_context_from_evaluation()
+    CR-->>SE: exec_ctx (entry permission, sizing, risk)
+    SE->>TE: enhance_execution_context()
+    TE-->>SE: enhanced exec_ctx (real targets, RR, hold time)
+    SE->>SE: finalize_trade_decision()
+    SE-->>M: trade_plan
+    M->>M: Step 9: Save to DB
+```
+
+### The 10 Steps of [run_analysis()](file:///d:/stockviedeo/stock-analyzer-app/main.py#631-906)
+
+| Step | Action | Key Function |
+|------|--------|-------------|
+| 1 | Initialize data structure | — |
+| 2 | Fetch fundamentals | `compute_fundamentals()` |
+| 3 | Compute indicators (per horizon) | `compute_indicators_cached()` |
+| 4 | Extract macro trend | `niftyTrendScore` from indicators |
+| 5 | Profile scoring | [compute_all_profiles()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#366-629) → [build_evaluation_context_v5()](file:///d:/stockviedeo/stock-analyzer-app/config/config_helpers.py#218-345) |
+| 6 | Meta scores (Value/Growth/Quality/Momentum) | `score_*_profile()` |
+| 7 | Flatten indicators for display horizon | Dictionary copy |
+| 8 | Generate trade plan | [generate_trade_plan()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#770-1114) → [enhance_execution_context()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#585-753) |
+| 9 | Persist to SQLite | [_save_analysis_to_db()](file:///d:/stockviedeo/stock-analyzer-app/main.py#921-1033) |
+| 10 | Return analysis_data | Includes profiles, trade_plan, indicators |
+
+---
+
+## File Inventory
+
+| File | Location | Lines | Size | Role |
+|------|----------|-------|------|------|
+| [master_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/master_config.py) | config/ | 1585 | 62KB | Horizon overrides, gates, risk |
+| [setup_pattern_matrix_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/setup_pattern_matrix_config.py) | config/ | 3345 | 120KB | 18 setups + pattern affinity |
+| [strategy_matrix_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/strategy_matrix_config.py) | config/ | 806 | 30KB | 10 strategies + fit indicators |
+| [confidence_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/confidence_config.py) | config/ | 993 | 47KB | Confidence pipeline config |
+| [technical_score_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/technical_score_config.py) | config/ | 1921 | 66KB | 40+ technical metrics |
+| [fundamental_score_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/fundamental_score_config.py) | config/ | 940 | 34KB | Fundamental metrics + weights |
+| [config_extractor.py](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py) | config/ | 1255 | 56KB | Pre-extracts config sections |
+| [query_optimized_extractor.py](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py) | config/ | 2487 | 97KB | 85-method query API |
+| [config_resolver.py](file:///d:/stockviedeo/stock-analyzer-app/config/config_resolver.py) | config/ | 4188 | 177KB | 8-phase evaluation brain |
+| [config_helpers.py](file:///d:/stockviedeo/stock-analyzer-app/config/config_helpers.py) | config/ | 580 | 21KB | Resolver factory + context builders |
+| [signal_engine.py](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py) | services/ | 1341 | 52KB | Profiling + trade plan orchestrator |
+| [trade_enhancer.py](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py) | services/ | 1203 | 49KB | Execution enhancement |
+| [main.py](file:///d:/stockviedeo/stock-analyzer-app/main.py) | root | 1573 | 71KB | FastAPI app + run_analysis |
+
+**Total core codebase: ~22,217 lines across 13 files**

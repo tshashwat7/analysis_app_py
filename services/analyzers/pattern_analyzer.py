@@ -4,7 +4,7 @@ import pandas as pd
 
 # Import your patterns
 from services.patterns.bollinger_squeeze import BollingerSqueeze
-from services.patterns.darvas import DarvasBoxPattern        # <--- NEW
+from services.patterns.darvas import DarvasBoxPattern        
 from services.patterns.flag_pennant import FlagPennantPattern # <--- NEW
 from services.patterns.minervini_vcp import MinerviniVCPPattern
 from services.patterns.cup_handle import CupHandlePattern
@@ -37,27 +37,20 @@ class PatternAnalyzer:
         ]
 
     def analyze(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
-        """
-        Runs all configured pattern detectors and merges results into indicators.
-        """
-        results = {}
+        raw_results = {}
         
         for detector in self.detectors:
             try:
-                # Run Detection
                 det_result = detector.detect(df, indicators, horizon)
-                
                 if det_result["found"]:
-                    results[detector.alias] = det_result
-                    
+                    raw_results[detector.alias] = det_result
             except Exception as e:
                 logger.error(f"Error in pattern {detector.alias}: {e}")
 
-        # FUSION: Inject findings directly into indicators
-        # This makes the rest of your system (Scoring/UI) see patterns as metrics
-        merge_pattern_into_indicators(indicators, results, horizon=horizon)
+        # FUSION: Now returns the ENHANCED "P" structure
+        enhanced_results = merge_pattern_into_indicators(indicators, raw_results, horizon=horizon)
         
-        return results
+        return enhanced_results # Both indicators and the return value now match
 
 # Singleton instance to avoid re-initializing classes constantly
 analyzer = PatternAnalyzer()

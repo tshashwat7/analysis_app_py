@@ -1,468 +1,422 @@
-# config/master_config.py (CLEANED VERSION - PART 1/5)
+# config/master_config.py (REFACTORED - CLEANED VERSION)
 """
 Master Configuration - Global Section
 Smart inheritance: Horizons inherit from global, only override what's different
+
+REFACTORING NOTES:
+- Removed ALL technical scoring weights/composites (now in technical_score_config.py)
+- Removed ALL fundamental scoring weights (now in fundamental_score_config.py)
+- Kept only: gates, execution, risk management, time estimation, strategy preferences
 """
+
+HYBRID_METRIC_REGISTRY = {
+    # Linear Range Metrics (Growth, Trend, Consistency)
+    "fundamentalMomentum": {
+        "type": "numeric",
+        "category": "growth_momentum",
+        "scoring_type": "linear_range",
+        "params": {
+            "min_val": 0.0,
+            "max_val": 20.0,
+            "score_at_min": 0,
+            "score_at_max": 10
+        },
+        "description": "Avg(Growth + EPS/5)"
+    },
+    "earningsConsistencyIndex": {
+        "type": "numeric",
+        "category": "quality_integrity",
+        "scoring_type": "linear_range",
+        "params": {
+            "min_val": 5.0,
+            "max_val": 30.0,
+            "score_at_min": 0,
+            "score_at_max": 10
+        },
+        "description": "Avg(ROE + Net Profit Margin)"
+    },
+    "trendConsistency": {
+        "type": "numeric",
+        "category": "technical_reliability",
+        "scoring_type": "linear_range",
+        "params": {
+            "min_val": 15.0,
+            "max_val": 30.0,
+            "score_at_min": 0,
+            "score_at_max": 10
+        },
+        "description": "ADX based trend stability"
+    },
+
+    # Stepped Metrics (Required for specific directional logic like Max thresholds)
+    "priceToIntrinsicValue": {
+        "type": "numeric",
+        "category": "valuation_price",
+        "scoring_type": "stepped",
+        "params": {
+            "thresholds": [
+                {"max": 0.8, "score": 10},  # Deep Value
+                {"max": 1.0, "score": 7},   # Fair Value
+                {"max": 1.2, "score": 3}    # Overvalued
+            ],
+            "default": 0.0
+        },
+        "description": "Price / IV (Lower is better)"
+    },
+    "volatilityAdjustedRoe": {
+        "type": "numeric",
+        "category": "quality_vol",
+        "scoring_type": "stepped",
+        "params": {
+            "thresholds": [
+                {"min": 10.0, "score": 10},
+                {"min": 5.0, "score": 7},
+                {"min": 2.0, "score": 3}
+            ],
+            "default": 0.0
+        },
+        "description": "ROE / ATR %"
+    },
+    "fcfYieldVsVolatility": {
+        "type": "numeric",
+        "category": "cash_vol",
+        "scoring_type": "stepped",
+        "params": {
+            "thresholds": [
+                {"min": 8.0, "score": 10},
+                {"min": 4.0, "score": 7},
+                {"min": 1.5, "score": 3}
+            ],
+            "default": 1.0
+        },
+        "description": "FCF Yield / ATR %"
+    },
+    "priceVsPrimaryTrendPct": {
+        "type": "numeric",
+        "category": "technical_anchor",
+        "scoring_type": "linear_range",
+        "params": {
+            "min_val": -0.10, # 10% below 200DMA
+            "max_val": 0.15,  # 15% above 200DMA
+            "score_at_min": 0,
+            "score_at_max": 10
+        },
+        "description": "Distance from 200DMA"
+    }
+}
+
+# STEP 6 LAYER: Internal Composition (Walls)
+# How the 7 metrics weight into the single "Hybrid Pillar Score"
+HYBRID_PILLAR_COMPOSITION = {
+    "intraday":    {"trendConsistency": 0.40, "priceVsPrimaryTrendPct": 0.20, "fundamentalMomentum": 0.15, "earningsConsistencyIndex": 0.10, "volatilityAdjustedRoe": 0.05, "priceToIntrinsicValue": 0.05, "fcfYieldVsVolatility": 0.05},
+    "short_term":  {"trendConsistency": 0.25, "fundamentalMomentum": 0.15, "volatilityAdjustedRoe": 0.15, "priceVsPrimaryTrendPct": 0.15, "earningsConsistencyIndex": 0.10, "priceToIntrinsicValue": 0.10, "fcfYieldVsVolatility": 0.10},
+    "long_term":   {"volatilityAdjustedRoe": 0.20, "priceToIntrinsicValue": 0.20, "earningsConsistencyIndex": 0.15, "fcfYieldVsVolatility": 0.15, "fundamentalMomentum": 0.10, "trendConsistency": 0.10, "priceVsPrimaryTrendPct": 0.10},
+    "multibagger": {"fundamentalMomentum": 0.20, "earningsConsistencyIndex": 0.20, "volatilityAdjustedRoe": 0.20, "fcfYieldVsVolatility": 0.15, "priceToIntrinsicValue": 0.15, "trendConsistency": 0.05, "priceVsPrimaryTrendPct": 0.05}
+}
+
+# STEP 6 LAYER: Global Arbitration (Blueprint)
+# How much the Hybrid Pillar counts vs Tech and Fund
+HORIZON_PILLAR_WEIGHTS = {
+    "intraday":    {"tech": 0.70, "fund": 0.00, "hybrid": 0.30},
+    "short_term":  {"tech": 0.50, "fund": 0.20, "hybrid": 0.30},
+    "long_term":   {"tech": 0.30, "fund": 0.40, "hybrid": 0.30},
+    "multibagger": {"tech": 0.10, "fund": 0.60, "hybrid": 0.30}
+}
+
+# ============================================================================
+# GATE METRIC REGISTRY (Metadata for gate validation)
+# ============================================================================
+
+
+GATE_METRIC_REGISTRY = {
+    # ===========================
+    # TREND GATES
+    # ===========================
+    "maTrendSignal": {
+        "type": "numeric",
+        "category": "trend",
+        "validation_type": "threshold",
+        "description": "Moving Average trend alignment signal (1=Strong Up, 0.5=Developing, -1=Down)",
+        "context_paths": [("indicators", "maTrendSignal")] # ✅ ADD THIS
+    },
+    "trendStrength": {
+        "type": "numeric",
+        "category": "trend",
+        "validation_type": "threshold",
+        "description": "Composite trend strength (0-10)",
+        "context_paths": [("indicators", "trendStrength")]  # ✅ ADD THIS
+    },
+    
+    "adx": {
+        "type": "numeric",
+        "category": "trend",
+        "validation_type": "threshold",
+        "description": "ADX trend strength indicator",
+        "context_paths": [("indicators", "adx")]  # ✅ ADD THIS
+    },
+    
+    # ===========================
+    # MOMENTUM GATES
+    # ===========================
+    "momentumStrength": {
+        "type": "numeric",
+        "category": "momentum",
+        "validation_type": "threshold",
+        "description": "Composite momentum strength (0-10)",
+        "context_paths": [("indicators", "momentumStrength")]
+    },
+    
+    "rsi": {
+        "type": "numeric",
+        "category": "momentum",
+        "validation_type": "threshold",
+        "description": "RSI momentum indicator",
+        "context_paths": [("indicators", "rsi")]
+    },
+    
+    "macdhistogram": {
+        "type": "numeric",
+        "category": "momentum",
+        "validation_type": "threshold",
+        "description": "MACD histogram value",
+        "context_paths": [("indicators", "macdhistogram")]
+    },
+    
+    # ===========================
+    # VOLATILITY GATES
+    # ===========================
+    "volatilityQuality": {
+        "type": "numeric",
+        "category": "volatility",
+        "validation_type": "threshold",
+        "description": "Composite volatility quality (0-10)",
+        "context_paths": [("indicators", "volatilityQuality")]
+    },
+    
+    "atrPct": {
+        "type": "numeric",
+        "category": "volatility",
+        "validation_type": "threshold",
+        "description": "ATR as percentage of price",
+        "context_paths": [("indicators", "atrPct")]
+    },
+    
+    # # Special case: alias mapping
+    # "volatilitybandsatrPct": {
+    #     "type": "numeric",
+    #     "category": "volatility",
+    #     "validation_type": "threshold",
+    #     "description": "Volatility band ATR check",
+    #     "context_paths": [("indicators", "atrPct")]  # Maps to atrPct
+    # },
+    
+    # ===========================
+    # VOLUME GATES
+    # ===========================
+    "rvol": {
+        "type": "numeric",
+        "category": "volume",
+        "validation_type": "threshold",
+        "description": "Relative volume ratio",
+        "context_paths": [("indicators", "rvol")]
+    },
+    
+    "volume": {
+        "type": "numeric",
+        "category": "volume",
+        "validation_type": "threshold",
+        "description": "Absolute volume",
+        "context_paths": [
+            ("price_data", "volume"),
+            ("indicators", "volume")  # ✅ Fallback path
+        ]
+    },
+    # ===========================
+    # STRUCTURE GATES
+    # ===========================
+    "bbpercentb": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Bollinger Band %B position",
+        "context_paths": [("indicators", "bbpercentb")]
+    },
+    
+    "position52w": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Distance from 52-week high",
+        "context_paths": [("indicators", "position52w")]
+    },
+
+    "priceVsPrimaryTrendPct": {
+        "type": "numeric",
+        "category": "trend_anchor",
+        "validation_type": "threshold",
+        "description": "Price distance from 200-period EMA (% of price)",
+        "context_paths": [
+            ("scoring", "hybrid", "metrics", "priceVsPrimaryTrendPct", "raw"),
+            ("scoring", "hybrid", "metrics", "priceVsPrimaryTrendPct", "value"),
+            ("indicators", "priceVsPrimaryTrendPct")  # ✅ Fallback
+        ]
+    },
+
+    # ===========================
+    # FUNDAMENTAL GATES
+    # ===========================
+    "roe": {
+        "type": "numeric",
+        "category": "profitability",
+        "validation_type": "threshold",
+        "description": "Return on Equity",
+        "context_paths": [("fundamentals", "roe")]
+    },
+    
+    "roce": {
+        "type": "numeric",
+        "category": "profitability",
+        "validation_type": "threshold",
+        "description": "Return on Capital Employed",
+        "context_paths": [("fundamentals", "roce")]
+    },
+    
+    "deRatio": {
+        "type": "numeric",
+        "category": "financial_health",
+        "validation_type": "threshold",
+        "description": "Debt-to-Equity ratio",
+        "context_paths": [("fundamentals", "deRatio")]
+    },
+    
+    "piotroskiF": {
+        "type": "numeric",
+        "category": "quality",
+        "validation_type": "threshold",
+        "description": "Piotroski F-Score",
+        "context_paths": [("fundamentals", "piotroskiF")]
+    },
+    
+    # ===========================
+    # MARKET GATES
+    # ===========================
+    "marketCap": {
+        "type": "numeric",
+        "category": "market",
+        "validation_type": "threshold",
+        "description": "Market capitalization",
+        "context_paths": [
+            ("fundamentals", "marketCap"),
+            ("price_data", "marketCap")  # ✅ Fallback
+        ]
+    },
+    
+    "institutionalOwnership": {
+        "type": "numeric",
+        "category": "ownership",
+        "validation_type": "threshold",
+        "description": "Institutional ownership %",
+        "context_paths": [
+            ("fundamentals", "institutionalOwnership"),
+            ("price_data", "institutionalownership")  # ✅ Case variation
+        ]
+    },
+    
+    # ===========================
+    # COMPOSITE GATES
+    # ===========================
+    "confidence": {
+        "type": "numeric",
+        "category": "composite",
+        "validation_type": "threshold",
+        "description": "Setup confidence score",
+        "context_paths": [("confidence", "clamped")]  # Post-confidence calc
+    },
+    
+    "rrRatio": {
+        "type": "numeric",
+        "category": "risk_reward",
+        "validation_type": "threshold",
+        "description": "Risk-reward ratio",
+        "context_paths": [("risk_model", "rrRatio")]
+    },
+    
+    "technicalScore": {
+        "type": "numeric",
+        "category": "composite",
+        "validation_type": "threshold",
+        "description": "Aggregated technical score",
+        "context_paths": [("scoring", "technical", "score")]
+    },
+    
+    "fundamentalScore": {
+        "type": "numeric",
+        "category": "composite",
+        "validation_type": "threshold",
+        "description": "Aggregated fundamental score",
+        "context_paths": [("scoring", "fundamental", "score")]
+    },
+    
+    "hybridScore": {
+        "type": "numeric",
+        "category": "composite",
+        "validation_type": "threshold",
+        "description": "Hybrid metrics score",
+        "context_paths": [("scoring", "hybrid", "score")]
+    },
+    
+    # ===========================
+    # EXECUTION GATES its not metric
+    # ===========================
+    # "volatilityguards": {
+    #     "type": "boolean",
+    #     "category": "execution",
+    #     "validation_type": "boolean",
+    #     "description": "Volatility guards passed",
+    #     "context_paths": [("execution_rules", "rules", "volatilityguards", "passed")],
+    #     "optional": True  # ✅ Mark as optional
+    # },
+    
+    # ===========================
+    # MISSING METRICS (NOT YET IMPLEMENTED)
+    # ===========================
+    "marketTrendScore": {
+        "type": "numeric",
+        "category": "market",
+        "validation_type": "threshold",
+        "description": "Overall market trend score",
+        "context_paths": [("indicators", "marketTrendScore")],
+        "optional": True,  # ✅ Not yet computed
+        "fallback": 5.0    # ✅ Default neutral value
+    },
+    
+    "relativeStrength": {
+        "type": "numeric",
+        "category": "market",
+        "validation_type": "threshold",
+        "description": "Relative strength vs benchmark",
+        "context_paths": [("indicators", "relativeStrength")],
+        "optional": True,
+        "fallback": 0.0
+    },
+    
+    "sectorTrendScore": {
+        "type": "numeric",
+        "category": "market",
+        "validation_type": "threshold",
+        "description": "Sector trend alignment",
+        "context_paths": [("indicators", "sectorTrendScore")],
+        "optional": True,
+        "fallback": 5.0
+    }
+}
+
 
 MASTER_CONFIG = {
     # ============================================================================
     # GLOBAL CONSTANTS (Universal Physics & Logic)
     # ============================================================================
-    "global": {
-        
-        "fundamental_weights": {
-            "value": {
-                "pe_ratio": {"weight": 0.05, "direction": "invert", "ideal_range": [10, 20], "penalty_threshold": 50},
-                "pb_ratio": {"weight": 0.04, "direction": "invert", "ideal_range": [1, 3], "penalty_threshold": 5},
-                "peg_ratio": {"weight": 0.03, "direction": "invert", "ideal_range": [0.5, 1.5], "penalty_threshold": 3},
-                "ps_ratio": {"weight": 0.02, "direction": "invert", "ideal_range": [1, 3]},
-                "fcf_yield": {"weight": 0.05, "direction": "normal", "min_threshold": 3.0},
-                "dividend_yield": {"weight": 0.03, "direction": "normal", "min_threshold": 2.0},
-                "pe_vs_sector": {"weight": 0.03, "direction": "invert"}
-            },
-            "growth": {
-                "eps_growth_5y": {"weight": 0.06, "direction": "normal", "min_threshold": 15, "ideal_range": [20, 40]},
-                "eps_growth_3y": {"weight": 0.05, "direction": "normal", "min_threshold": 15},
-                "revenue_growth_5y": {"weight": 0.05, "direction": "normal", "min_threshold": 10},
-                "profit_growth_3y": {"weight": 0.04, "direction": "normal", "min_threshold": 15},
-                "fcf_growth_3y": {"weight": 0.05, "direction": "normal", "min_threshold": 10},
-                "market_cap_cagr": {"weight": 0.04, "direction": "normal", "min_threshold": 15},
-                "quarterly_growth": {"weight": 0.03, "direction": "normal", "min_threshold": 20}
-            },
-            "quality": {
-                "roe": {"weight": 0.10, "direction": "normal", "min_threshold": 15, "ideal_range": [20, 40]},
-                "roce": {"weight": 0.07, "direction": "normal", "min_threshold": 15, "ideal_range": [20, 35]},
-                "roic": {"weight": 0.08, "direction": "normal", "min_threshold": 12, "ideal_range": [18, 35]},
-                "net_profit_margin": {"weight": 0.04, "direction": "normal", "min_threshold": 10},
-                "operating_margin": {"weight": 0.03, "direction": "normal", "min_threshold": 15},
-                "ebitda_margin": {"weight": 0.03, "direction": "normal"},
-                "fcf_margin": {"weight": 0.04, "direction": "normal", "min_threshold": 8},
-                "de_ratio": {"weight": 0.05, "direction": "invert", "max_threshold": 1.0, "ideal_range": [0, 0.5]},
-                "interest_coverage": {"weight": 0.05, "direction": "normal", "min_threshold": 3.0, "ideal_range": [5, 20]},
-                "current_ratio": {"weight": 0.03, "direction": "normal", "min_threshold": 1.5},
-                "ocf_vs_profit": {"weight": 0.02, "direction": "normal", "min_threshold": 0.8},
-                "piotroski_f": {"weight": 0.07, "direction": "normal", "min_threshold": 7},
-                "asset_turnover": {"weight": 0.04, "direction": "normal", "min_threshold": 0.5},
-                "r_d_intensity": {"weight": 0.04, "direction": "normal"},
-                "earnings_stability": {"weight": 0.05, "direction": "normal", "min_threshold": 7.0}
-            },
-            "momentum": {
-                "momentum_strength": {"weight": 0.30, "direction": "normal", "min_threshold": 6.0},
-                "trend_strength": {"weight": 0.40, "direction": "normal", "min_threshold": 5.0},
-                "volatility_quality": {"weight": 0.10, "direction": "normal", "min_threshold": 4.0},
-                "52w_position": {"weight": 0.01, "direction": "normal", "ideal_range": [80, 95]},
-                "rel_strength_nifty": {"weight": 0.04, "direction": "normal", "min_threshold": 0},
-                "promoter_holding": {"weight": 0.015, "direction": "normal", "ideal_range": [50, 75]},
-                "institutional_ownership": {"weight": 0.015, "direction": "normal", "ideal_range": [20, 50]},
-                "beta": {"weight": 0.01, "direction": "normal", "ideal_range": [0.8, 1.2]},
-                "dividend_payout": {"weight": 0.03, "direction": "normal"},
-                "yield_vs_avg": {"weight": 0.02, "direction": "normal"}
-            }
-        },
-        "technical_weights": {
-            # Momentum Indicators
-            "rsi": {"weight": 1.0, "category": "momentum", "speed": "fast"},
-            "rsi_slope": {"weight": 0.8, "category": "momentum", "speed": "fast"},
-            "macd_cross": {"weight": 1.0, "category": "momentum", "speed": "medium"},
-            "macd_hist_z": {"weight": 0.8, "category": "momentum", "speed": "medium"},
-            "macd_histogram": {"weight": 0.6, "category": "momentum", "speed": "medium"},
-            "stoch_k": {"weight": 0.6, "category": "momentum", "speed": "fast"},
-            "stoch_cross": {"weight": 0.8, "category": "momentum", "speed": "fast"},
-            "mfi": {"weight": 0.7, "category": "momentum", "speed": "fast"},
-            "cci": {"weight": 0.6, "category": "momentum", "speed": "fast"},
-            
-            # Trend Indicators
-            "adx": {"weight": 1.0, "category": "trend", "speed": "slow"},
-            "adx_signal": {"weight": 0.6, "category": "trend", "speed": "slow"},
-            "ma_cross_signal": {"weight": 0.8, "category": "trend", "speed": "medium"},
-            "ma_trend_signal": {"weight": 1.0, "category": "trend", "speed": "slow"},
-            "ma_fast_slope": {"weight": 0.8, "category": "trend", "speed": "medium"},
-            "ema_20_50_cross": {"weight": 0.8, "category": "trend", "speed": "medium"},
-            "price_vs_primary_trend_pct": {"weight": 1.0, "category": "trend", "speed": "slow"},
-            "price_vs_200dma_pct": {"weight": 1.0, "category": "trend", "speed": "slow"},
-            "dma_200_slope": {"weight": 0.8, "category": "trend", "speed": "slow"},
-            "supertrend_signal": {"weight": 1.0, "category": "trend", "speed": "medium"},
-            "psar_trend": {"weight": 0.8, "category": "trend", "speed": "medium"},
-            "ichi_cloud": {"weight": 1.0, "category": "trend", "speed": "slow"},
-            
-            # Volatility Indicators
-            "atr_14": {"weight": 0.8, "category": "volatility", "speed": "medium"},
-            "atr_pct": {"weight": 0.6, "category": "volatility", "speed": "medium"},
-            "bb_width": {"weight": 0.3, "category": "volatility", "speed": "medium"},
-            "bb_percent_b": {"weight": 0.4, "category": "volatility", "speed": "fast"},
-            "bb_low": {"weight": 0.4, "category": "volatility", "speed": "fast"},
-            "ttm_squeeze": {"weight": 1.0, "category": "volatility", "speed": "medium"},
-            "true_range": {"weight": 0.5, "category": "volatility", "speed": "fast"},
-            "hv_10": {"weight": 0.6, "category": "volatility", "speed": "fast"},
-            "hv_20": {"weight": 0.6, "category": "volatility", "speed": "medium"},
-            
-            # Volume Indicators
-            "rvol": {"weight": 0.6, "category": "volume", "speed": "fast"},
-            "vol_spike_ratio": {"weight": 0.5, "category": "volume", "speed": "fast"},
-            "vol_spike_signal": {"weight": 1.0, "category": "volume", "speed": "fast"},
-            "vol_trend": {"weight": 0.6, "category": "volume", "speed": "medium"},
-            "obv_div": {"weight": 0.6, "category": "volume", "speed": "medium"},
-            "vpt": {"weight": 0.5, "category": "volume", "speed": "medium"},
-            "cmf_signal": {"weight": 0.6, "category": "volume", "speed": "medium"},
-            
-            # Support/Resistance
-            "entry_confirm": {"weight": 0.5, "category": "level", "speed": "static"},
-            "pivot_point": {"weight": 0.4, "category": "level", "speed": "static"},
-            "donchian_signal": {"weight": 0.8, "category": "level", "speed": "medium"},
-            
-            # Pattern Signals
-            "wick_rejection": {"weight": 0.7, "category": "pattern", "speed": "fast"},
-            
-            # Composite Scores
-            "trend_strength": {"weight": 1.5, "category": "composite", "speed": "medium"},
-            "momentum_strength": {"weight": 1.5, "category": "composite", "speed": "medium"},
-            "volatility_quality": {"weight": 1.0, "category": "composite", "speed": "medium"},
-            
-            # Relative Metrics
-            "rel_strength_nifty": {"weight": 0.6, "category": "relative", "speed": "slow"},
-            "nifty_trend_score": {"weight": 0.5, "category": "relative", "speed": "slow"},
-            
-            # Price Action
-            "vwap_bias": {"weight": 0.8, "category": "price_action", "speed": "fast"},
-            "price_action": {"weight": 0.7, "category": "price_action", "speed": "fast"},
-            "gap_percent": {"weight": 0.5, "category": "price_action", "speed": "fast"},
-            "reg_slope": {"weight": 0.8, "category": "price_action", "speed": "medium"}
-        },
-        "pattern_physics": {
-            "cup_handle": {
-                "target_ratio": 0.618,
-                "duration_multiplier": 1.2,
-                "max_stop_pct": 8.0,
-                "min_cup_len": 20,
-                "max_cup_depth": 0.50,
-                "handle_len": 5,
-                "require_volume": False,
-                "horizons_supported": ["short_term", "long_term"]
-            },
-            "darvas_box": {
-                "target_ratio": 1.0,
-                "duration_multiplier": 1.3,
-                "max_stop_pct": 5.0,
-                "lookback": 50,
-                "box_length": 5,
-                "horizons_supported": ["intraday", "short_term"]
-            },
-            "flag_pennant": {
-                "target_ratio": 0.5,
-                "duration_multiplier": 0.8,
-                "max_stop_pct": 6.0,
-                "horizons_supported": ["intraday", "short_term"]
-            },
-            "minervini_vcp": {
-                "target_ratio": 1.0,
-                "duration_multiplier": 1.8,
-                "max_stop_pct": 7.0,
-                "min_contraction_pct": 1.5,
-                "horizons_supported": ["short_term", "long_term"]
-            },
-            "volatility_squeeze": {
-                "target_ratio": 1.0,
-                "duration_multiplier": 0.5,
-                "max_stop_pct": 4.0,
-                "horizons_supported": ["intraday", "short_term"]
-            },
-            "golden_cross": {
-                "target_ratio": None,
-                "duration_multiplier": 2.0,
-                "max_stop_pct": None,
-                "horizons_supported": ["short_term", "long_term", "multibagger"]
-            },
-            "scoring_thresholds": {
-                "high_quality": 60,
-                "medium_quality": 40,
-                "poor_quality": 20
-            },
-            "default": {
-                "target_ratio": 1.0,
-                "duration_multiplier": 1.0,
-                "max_stop_pct": 10.0
-            }
-        },
-        "pattern_entry_rules": {
-            "bollinger_squeeze": {
-                "horizons": {
-                    "intraday": {
-                        "rsi_min": 50,
-                        "macd_hist_min": 0,
-                        "squeeze_duration_min": 5,
-                        "rvol_on_breakout": 1.5
-                    },
-                    "short_term": {
-                        "rsi_min": 50,
-                        "macd_hist_min": 0,
-                        "squeeze_duration_min": 3,
-                        "rvol_on_breakout": 1.2
-                    },
-                    "long_term": {
-                        "rsi_min": 45,
-                        "macd_hist_min": -0.2,
-                        "squeeze_duration_min": 4,
-                        "rvol_on_breakout": 1.0
-                    }
-                }
-            },
-            "darvas_box": {
-                "horizons": {
-                    "intraday": {
-                        "box_clearance": 1.002,
-                        "volume_surge_required": 1.5,
-                        "max_box_age_candles": 50
-                    },
-                    "short_term": {
-                        "box_clearance": 1.005,
-                        "volume_surge_required": 1.3,
-                        "max_box_age_candles": 30
-                    }
-                }
-            },
-            "cup_handle": {
-                "horizons": {
-                    "short_term": {
-                        "rim_clearance": 0.995,
-                        "rvol_min": 1.2,
-                        "rvol_bonus_threshold": 2.0
-                    },
-                    "long_term": {
-                        "rim_clearance": 0.99,
-                        "rvol_min": 1.1,
-                        "rvol_bonus_threshold": 1.8
-                    }
-                }
-            },
-            "minervini_stage2": {
-                "horizons": {
-                    "short_term": {
-                        "contraction_max": 1.5,
-                        "pivot_clearance": 1.01,
-                        "rs_rating_min": 80
-                    },
-                    "long_term": {
-                        "contraction_max": 2.0,
-                        "pivot_clearance": 1.005,
-                        "rs_rating_min": 70
-                    }
-                }
-            },
-            "flag_pennant": {
-                "horizons": {
-                    "intraday": {
-                        "pole_length_min": 8,
-                        "flag_tightness": 0.03,
-                        "breakout_clearance": 1.005
-                    },
-                    "short_term": {
-                        "pole_length_min": 5,
-                        "flag_tightness": 0.05,
-                        "breakout_clearance": 1.01
-                    }
-                }
-            },
-            "three_line_strike": {
-                "horizons": {
-                    "intraday": {
-                        "strike_candle_body_min": 0.6,
-                        "rvol_min": 1.3
-                    },
-                    "short_term": {
-                        "strike_candle_body_min": 0.7,
-                        "rvol_min": 1.2
-                    }
-                }
-            },
-            "ichimoku_signals": {
-                "horizons": {
-                    "short_term": {
-                        "cloud_thickness_min": 0.01,
-                        "tenkan_kijun_spread_min": 0.005
-                    },
-                    "long_term": {
-                        "cloud_thickness_min": 0.02,
-                        "tenkan_kijun_spread_min": 0.01
-                    }
-                }
-            },
-            "golden_cross": {
-                "horizons": {
-                    "short_term": {
-                        "cross_clearance": 0.002,
-                        "volume_confirmation": 1.1
-                    },
-                    "long_term": {
-                        "cross_clearance": 0.005,
-                        "volume_confirmation": 1.0
-                    }
-                }
-            },
-            "double_top_bottom": {
-                "horizons": {
-                    "short_term": {
-                        "peak_similarity_tolerance": 0.02,
-                        "neckline_clearance": 1.01,
-                        "volume_decline_on_second_peak": True
-                    },
-                    "long_term": {
-                        "peak_similarity_tolerance": 0.03,
-                        "neckline_clearance": 1.005,
-                        "volume_decline_on_second_peak": False
-                    }
-                }
-            }
-        },
-        "pattern_invalidation": {
-            "bollinger_squeeze": {
-                "breakdown_threshold": {
-                    "intraday": {
-                        "condition": "price < bb_low",
-                        "duration_candles": 2,
-                        "or_condition": "bb_width > 8.0"
-                    },
-                    "short_term": {
-                        "condition": "price < bb_low * 0.99",
-                        "duration_candles": 1,
-                        "or_condition": "bb_width > 10.0"
-                    },
-                    "long_term": {
-                        "condition": "price < bb_low",
-                        "duration_candles": 2,
-                        "or_condition": "bb_width > 12.0"
-                    }
-                },
-                "action": {
-                    "intraday": "EXIT_IMMEDIATELY",
-                    "short_term": "EXIT_ON_CLOSE",
-                    "long_term": "TIGHTEN_STOP"
-                }
-            },
-            "darvas_box": {
-                "breakdown_threshold": {
-                    "intraday": {"condition": "price < box_low * 0.998", "duration_candles": 1},
-                    "short_term": {"condition": "price < box_low * 0.995", "duration_candles": 1},
-                    "long_term": {"condition": "price < box_low * 0.99", "duration_candles": 2}
-                },
-                "action": {
-                    "intraday": "EXIT_IMMEDIATELY",
-                    "short_term": "EXIT_IMMEDIATELY",
-                    "long_term": "EXIT_ON_CLOSE"
-                },
-                "notes": "Darvas box breakdown is binary - no 'monitor' mode"
-            },
-            "flag_pennant": {
-                "breakdown_threshold": {
-                    "intraday": {"condition": "price < flag_low * 0.998", "duration_candles": 1},
-                    "short_term": {"condition": "price < flag_low * 0.995", "duration_candles": 1},
-                    "long_term": {"condition": "price < flag_low * 0.99", "duration_candles": 1}
-                },
-                "action": {
-                    "intraday": "EXIT_IMMEDIATELY",
-                    "short_term": "EXIT_IMMEDIATELY",
-                    "long_term": "EXIT_ON_CLOSE"
-                },
-                "expiration": {
-                    "max_duration_candles": {
-                        "intraday": 20,
-                        "short_term": 10,
-                        "long_term": 8
-                    },
-                    "action_on_expire": "DOWNGRADE_TO_CONSOLIDATION"
-                }
-            },
-            "minervini_stage2": {
-                "breakdown_threshold": {
-                    "intraday": {"condition": "price < pivot * 0.98", "duration_candles": 2},
-                    "short_term": {"condition": "price < pivot * 0.95", "duration_candles": 2},
-                    "long_term": {"condition": "price < pivot * 0.92", "duration_candles": 3}
-                },
-                "action": {
-                    "intraday": "EXIT_IMMEDIATELY",
-                    "short_term": "EXIT_ON_CLOSE",
-                    "long_term": "TIGHTEN_STOP"
-                },
-                "stage_reversion": {
-                    "stage_1_threshold": "price < 10wma and volume declining",
-                    "action": "EXIT_ON_CLOSE"
-                }
-            },
-            "cup_handle": {
-                "breakdown_threshold": {
-                    "intraday": {"condition": "price < handle_low * 0.99", "duration_candles": 2},
-                    "short_term": {"condition": "price < handle_low * 0.97", "duration_candles": 2},
-                    "long_term": {"condition": "price < handle_low * 0.95", "duration_candles": 3}
-                },
-                "action": {
-                    "intraday": "EXIT_ON_CLOSE",
-                    "short_term": "TIGHTEN_STOP",
-                    "long_term": "MONITOR"
-                },
-                "handle_failure": {
-                    "max_handle_depth": 0.15,
-                    "action": "INVALIDATE_PATTERN"
-                }
-            },
-            "three_line_strike": {
-                "expiration": {
-                    "max_hold_candles": {
-                        "intraday": 10,
-                        "short_term": 8,
-                        "long_term": 6
-                    }
-                }
-            },
-            "ichimoku_signals": {
-                "breakdown_threshold": {
-                    "intraday": {"condition": "price < cloud_bottom * 0.998", "duration_candles": 2},
-                    "short_term": {"condition": "price < cloud_bottom * 0.995", "duration_candles": 2},
-                    "long_term": {"condition": "price < cloud_bottom", "duration_candles": 3}
-                },
-                "action": {
-                    "intraday": "EXIT_IMMEDIATELY",
-                    "short_term": "EXIT_ON_CLOSE",
-                    "long_term": "TIGHTEN_STOP"
-                },
-                "lagging_span_confirmation": {
-                    "enabled": True,
-                    "condition": "lagging_span < price_26_candles_ago",
-                    "action": "INCREASE_STOP_URGENCY"
-                }
-            },
-            "golden_cross": {
-                "breakdown_threshold": {
-                    "intraday": {"condition": "ema_50 < ema_200", "duration_candles": 3},
-                    "short_term": {"condition": "ema_50 < ema_200", "duration_candles": 3},
-                    "long_term": {"condition": "ema_50 < ema_200", "duration_candles": 4}
-                },
-                "action": {
-                    "intraday": "EXIT_IMMEDIATELY",
-                    "short_term": "EXIT_ON_CLOSE",
-                    "long_term": "EXIT_ON_CLOSE"
-                }
-            },
-            "double_top_bottom": {
-                "breakdown_threshold": {
-                    "intraday": {"condition": "price < neckline * 0.998", "duration_candles": 1},
-                    "short_term": {"condition": "price < neckline * 0.995", "duration_candles": 2},
-                    "long_term": {"condition": "price < neckline * 0.99", "duration_candles": 3}
-                },
-                "action": {
-                    "intraday": "EXIT_IMMEDIATELY",
-                    "short_term": "EXIT_ON_CLOSE",
-                    "long_term": "TIGHTEN_STOP"
-                },
-                "target_failure": {
-                    "condition": "price fails to reach target within max_duration",
-                    "max_duration_candles": {
-                        "intraday": 15,
-                        "short_term": 10,
-                        "long_term": 12
-                    },
-                    "action": "EXIT_ON_CLOSE"
-                }
-            }
-        },
+    "global": {   
         "time_estimation": {
             "candles_per_unit": 1,
             "base_friction": 0.8,
@@ -476,345 +430,239 @@ MASTER_CONFIG = {
                 "days_per_week": 5
             }
         },
+        
         "entry_gates": {
-            "confidence_requirements": {
-                "breakout_base": 70,
-                "trend_discount": -15,
-                "accumulation_discount": -25
+            "structural": {
+                "description": "Validates setup structure before confidence calculation",
+                "execution_order": 1,
+                "gates": {
+                    "adx": {"min": 18},
+                    "trendStrength": {"min": 3.0},
+                    "volatilityQuality": {"min": 3.0},
+                    "rsi": {"min": None, "max": None},
+                    "macdhistogram": {"min": None},
+                    "bbpercentb": {"min": None, "max": None},
+                    "atrPct": {"min": None},
+                    "roe": {"min": None},
+                    "roce": {"min": None},
+                    "deRatio": {"max": None},
+                    "piotroskiF": {"min": None},
+                    "rvol": {"min": None},
+                    "volume": {"min": None},
+                    "marketTrendScore": {"min": None},   
+                    "relativeStrength": {"min": None},    
+                    "sectorTrendScore": {"min": None},   
+                    "marketCap": {"min": None},              
+                    "institutionalOwnership": {"min": None}
+                }
             },
-            "adx_requirements": {
-                "trend_setups_min": 18,
-                "breakout_setups_min": 15
-            },
-            "execution_constraints": {
+            "execution_rules": {
+                "description": "Complex validation rules requiring custom logic",
+                "execution_order": 1.5,
+                "volatility_guards": {
+                    "description": "Dynamic volatility quality requirements",
+                    "extreme_vol_buffer": 2.0,
+                    "min_quality_breakout": 2.0,
+                    "min_quality_normal": 4.0,
+                    "enabled": True,
+                    "logic": "if atr_pct > extreme_threshold: use min_quality_breakout"
+                },
                 "structure_validation": {
+                    "description": "Price structure alignment checks",
                     "breakout_clearance": 0.001,
-                    "breakdown_clearance": 0.001
+                    "breakdown_clearance": 0.001,
+                    "enabled": True,
+                    "logic": "price must clear resistance/support by clearance %"
                 },
                 "sl_distance_validation": {
+                    "description": "Stop loss feasibility constraints",
                     "min_atr_multiplier": 0.5,
-                    "max_atr_multiplier": 5.0
+                    "max_atr_multiplier": 5.0,
+                    "enabled": True,
+                    "logic": "0.5*ATR <= |entry-SL| <= 5*ATR"
                 },
                 "target_proximity_rejection": {
+                    "description": "Reject if targets too close to resistance",
                     "min_t1_distance": 0.005,
-                    "min_t2_distance": 0.01
+                    "min_t2_distance": 0.01,
+                    "enabled": True,
+                    "logic": "t1 must be > resistance * (1 + min_t1_distance)"
                 }
-            }
+            },
+            "opportunity": {
+                "description": "Validates trade opportunity quality after confidence calculation",
+                "execution_order": 2,
+                "gates": {
+                    "confidence": {"min": 55},
+                    "rrRatio": {"min": 1.5},
+                    "technicalScore": {"min": None},
+                    "fundamentalScore": {"min": None},
+                    "hybridScore": {"min": None},
+                    "max_pattern_age_candles": None,
+                    "max_setup_staleness_candles": None
+                }
+            },
+            
+            # ❌ REMOVED: setup_gate_specifications
+            # This entire section has been MOVED to setup_pattern_matrix.py
+            # Each setup now owns its own gate requirements and horizon overrides
+            
+            # OLD CODE (DELETED):
+            # "setup_gate_specifications": {
+            #     "MOMENTUM_BREAKOUT": {
+            #         "structural_gates": {...},
+            #         "opportunity_gates": {...}
+            #     },
+            #     ...
+            # }
         },
+
         "calculation_engine": {
             "horizon_priority_overrides": {
                 "intraday": {
-                    # Patterns ALWAYS win (95+)
+                    # Elite Patterns (95-100) - Always win
+                    "PATTERN_DARVAS_BREAKOUT": 98,
+                    "PATTERN_FLAG_BREAKOUT": 97,
+                    "PATTERN_STRIKE_REVERSAL": 96,
+                    "PATTERN_VCP_BREAKOUT": 95,
+                    
+                    # Generic Signals (85-90)
+                    "MOMENTUM_BREAKOUT": 90,
+                    "VOLATILITY_SQUEEZE": 88,
+                    "TREND_PULLBACK": 85,
+                    "REVERSAL_MACD_CROSS_UP": 82,
+                    
+                    # Blocked for Intraday (Low Priority)
+                    "VALUE_TURNAROUND": 40,
+                    "DEEP_VALUE_PLAY": 30,
+                    "QUALITY_ACCUMULATION": 35
+                },
+                
+                "short_term": {
+                    # Elite Patterns (95-100)
                     "PATTERN_DARVAS_BREAKOUT": 98,
                     "PATTERN_VCP_BREAKOUT": 97,
                     "PATTERN_CUP_BREAKOUT": 96,
-                    "PATTERN_FLAG_BREAKOUT": 96,
-                    "PATTERN_STRIKE_REVERSAL": 95,
+                    "PATTERN_FLAG_BREAKOUT": 95,
+                    "PATTERN_STRIKE_REVERSAL": 94,
+                    
+                    # Generic Signals (80-90)
                     "MOMENTUM_BREAKOUT": 90,
-                    "VOLATILITY_SQUEEZE": 85,
-                    "REVERSAL_MACD_CROSS_UP": 85,
-                    "TREND_PULLBACK": 88,
-                    "VALUE_TURNAROUND": 50,
-                    "DEEP_VALUE_PLAY": 40,
-                    "QUALITY_ACCUMULATION": 45
-                },
-                "short_term": {
-                    "MOMENTUM_BREAKOUT": 90,
-                    "VOLATILITY_SQUEEZE": 85,
-                    "TREND_PULLBACK": 88,
+                    "VOLATILITY_SQUEEZE": 88,
+                    "TREND_PULLBACK": 85,
                     "REVERSAL_MACD_CROSS_UP": 82,
-                    "VALUE_TURNAROUND": 65,
-                    "DEEP_VALUE_PLAY": 55,
-                    "QUALITY_ACCUMULATION": 60
+                    
+                    # Value Plays (Lower for Short-Term)
+                    "VALUE_TURNAROUND": 70,
+                    "DEEP_VALUE_PLAY": 65,
+                    "QUALITY_ACCUMULATION": 68
                 },
+                
                 "long_term": {
-                    "VALUE_TURNAROUND": 90,       # Highest priority for long-term
-                    "DEEP_VALUE_PLAY": 88,
-                    "QUALITY_ACCUMULATION": 85,
+                    # Elite Patterns (95-100) - Trend/Value Focus
+                    "PATTERN_GOLDEN_CROSS": 99,
+                    "PATTERN_CUP_BREAKOUT": 96,
+                    "PATTERN_VCP_BREAKOUT": 95,
+                    
+                    # Value Setups (85-92) - PRIORITY for Long-Term
+                    "VALUE_TURNAROUND": 92,
+                    "DEEP_VALUE_PLAY": 90,
+                    "QUALITY_ACCUMULATION": 88,
+                    
+                    # Trend Following (75-80)
                     "TREND_PULLBACK": 80,
-                    "REVERSAL_MACD_CROSS_UP": 70,
-                    "VOLATILITY_SQUEEZE": 65,
-                    "MOMENTUM_BREAKOUT": 60,      # Lowered to avoid "Priority Trap"
+                    "REVERSAL_MACD_CROSS_UP": 75,
+                    
+                    # Momentum DEPRIORITIZED (55-65)
+                    "MOMENTUM_BREAKOUT": 60,
+                    "VOLATILITY_SQUEEZE": 58,
+                    "PATTERN_FLAG_BREAKOUT": 65
                 },
+                
                 "multibagger": {
-                    "VALUE_TURNAROUND": 95,       # Absolute priority for multi-year holds
-                    "DEEP_VALUE_PLAY": 92,
-                    "QUALITY_ACCUMULATION": 90,
-                    "TREND_PULLBACK": 70,
-                    "REVERSAL_MACD_CROSS_UP": 65,
-                    "MOMENTUM_BREAKOUT": 60
+                    # Value Setups DOMINATE (95-98)
+                    "VALUE_TURNAROUND": 98,
+                    "DEEP_VALUE_PLAY": 96,
+                    "QUALITY_ACCUMULATION": 95,
+                    
+                    # Long-term Patterns (90-92)
+                    "PATTERN_GOLDEN_CROSS": 92,
+                    "PATTERN_CUP_BREAKOUT": 90,
+                    
+                    # Trend Following (70-75)
+                    "TREND_PULLBACK": 72,
+                    "REVERSAL_MACD_CROSS_UP": 70,
+                    
+                    # Momentum BLOCKED (55 or below)
+                    "MOMENTUM_BREAKOUT": 55,
+                    "VOLATILITY_SQUEEZE": 52,
+                    "PATTERN_FLAG_BREAKOUT": 50
                 }
             },
-            # Composite Score Calculation
-            "composite_weights": {
-                "trend_strength": {
-                    "adx": {
-                        "weight": 0.4,
-                        "thresholds": {"strong": 25, "moderate": 20, "weak": 15},
-                        "scoring": [
-                            {"min": 25, "score": 10},
-                            {"min": 20, "score": 8},
-                            {"min": 15, "score": 4},
-                            {"default": 2}
-                        ]
-                    },
-                    "ema_slope": {
-                        "weight": 0.3,
-                        "thresholds": {"strong": 20.0, "moderate": 5.0},
-                        "scoring": [
-                            {"min": 20, "score": 10},
-                            {"min": 5, "score": 7},
-                            {"default": 2}
-                        ]
-                    },
-                    "di_spread": {
-                        "weight": 0.2,
-                        "scoring": [
-                            {"min": 15, "score": 10},
-                            {"min": 10, "score": 7},
-                            {"default": 5}
-                        ]
-                    },
-                    "supertrend": {
-                        "weight": 0.1,
-                        "scoring": {"bullish": 10, "bearish": 0}
-                    },
-                    "adaptive_weights_no_supertrend": {
-                        "adx": 0.45,
-                        "ema_slope": 0.35,
-                        "di_spread": 0.20
-                    }
-                },
-                "momentum_strength": {
-                    "rsi_value": {
-                        "weight": 0.25,
-                        "thresholds": {"overbought": 70, "strong": 60, "neutral": 50, "weak": 40},
-                        "scoring": [
-                            {"min": 70, "score": 8},
-                            {"min": 60, "score": 7},
-                            {"min": 50, "score": 5},
-                            {"default": 2}
-                        ]
-                    },
-                    "rsi_slope": {
-                        "weight": 0.25,
-                        "thresholds": {"strong": 1.0, "neutral": 0.0},
-                        "scoring": [
-                            {"min": 1.0, "score": 8},
-                            {"min": 0, "score": 4},
-                            {"default": 2}
-                        ]
-                    },
-                    "macd_hist": {
-                        "weight": 0.3,
-                        "thresholds": {"strong": 0.5, "neutral": 0.0},
-                        "scoring": [
-                            {"min": 0.5, "score": 8},
-                            {"min": 0, "score": 5},
-                            {"default": 2}
-                        ]
-                    },
-                    "stoch_cross": {
-                        "weight": 0.2,
-                        "thresholds": {"overbought": 80, "neutral": 50},
-                        "scoring": {
-                            "bullish_strong": {"condition": "k>d and k>=50", "score": 8},
-                            "default": 3
-                        }
-                    }
-                },
-                "volatility_quality": {
-                    "atr_pct": {
-                        "weight": 0.3,
-                        "thresholds": {"low": 1.5, "moderate": 3.0, "high": 5.0},
-                        "scoring": [
-                            {"max": 1.5, "score": 10},
-                            {"max": 3.0, "score": 8},
-                            {"max": 5.0, "score": 6},
-                            {"default": 2}
-                        ]
-                    },
-                    "bb_width": {
-                        "weight": 0.25,
-                        "thresholds": {"tight": 0.01, "moderate": 0.02, "wide": 0.04},
-                        "scoring": [
-                            {"max": 0.01, "score": 10},
-                            {"max": 0.02, "score": 8},
-                            {"default": 2}
-                        ]
-                    },
-                    "true_range_consistency": {
-                        "weight": 0.20,
-                        "scoring": [{"max": 0.5, "score": 10}, {"default": 4}]
-                    },
-                    "hv_trend": {
-                        "weight": 0.15,
-                        "scoring": {"declining": {"condition": "hv_10 < hv_20", "score": 8}, "default": 4}
-                    },
-                    "atr_sma_ratio": {
-                        "weight": 0.15,
-                        "thresholds": {"stable": 0.02, "moderate": 0.035, "volatile": 0.05},
-                        "scoring": [
-                            {"max": 0.02, "score": 10},
-                            {"max": 0.035, "score": 7},
-                            {"default": 3}
-                        ]
-                    }
-                }
-            },
+            
             # Setup Classification (SINGLE SOURCE - NOT in horizons)
             "setup_classification": {
-                "pattern_priority": [
-                    {"pattern": "darvas_box", "setup_name": "PATTERN_DARVAS_BREAKOUT", "min_score": 85},
-                    {"pattern": "minervini_stage2", "setup_name": "PATTERN_VCP_BREAKOUT", "min_score": 85},
-                    {"pattern": "cup_handle", "setup_name": "PATTERN_CUP_BREAKOUT", "min_score": 80},
-                    {"pattern": "three_line_strike", "setup_name": "PATTERN_STRIKE_REVERSAL", "min_score": 80},
-                    {"pattern": "golden_cross", "setup_name": "PATTERN_GOLDEN_CROSS", "min_score": 75},
-                    {"pattern": "flag_pennant", "setup_name": "PATTERN_FLAG_BREAKOUT", "min_score": 80}
-                ],
                 "consolidation": {
                     "bb_width_threshold": 0.5,
                     "volume_ratio_max": 0.8
                 },
                 "MOMENTUM_BREAKOUT": {
-                    "bb_percent_b_min": 0.98,
-                    "rsi_min": 60,
-                    "wick_ratio_max": 2.5,
-                    "rvol_min": 1.5
+                    "bbpercentb": {"min": 0.98},
+                    "rsi": {"min": 60},
+                    "wickRejection":{"max": 2.5},
+                    "rvol": {"min": 1.5}
                 },
                 "MOMENTUM_BREAKDOWN": {
-                    "bb_percentb_max": 0.02,
-                    "rsi_max": 40,
-                    "rvol_min": 1.5
+                    "bbpercentb": {"max": 0.02},
+                    "rsi": {"max": 40},
+                    "rvol": {"min": 1.5}
                 },
                 "TREND_PULLBACK": {
                     "ma_dist_max": 0.05,
-                    "rsi_min": 50
+                    "rsi": {"min": 50}
                 },
                 "bear_pullback": {
                     "ma_dist_max": 0.05,
-                    "rsi_max": 50
+                    "rsi": {"max": 50}
                 },
                 "trend_following": {
                     "classic": {
-                        "rsi_min": 55,
-                        "macd_hist_min": 0
+                        "rsi": {"min": 55},
+                        "macdhistogram": {"min": 0}
                     },
                     "strong_drift": {
-                        "trend_strength_min": 7.0
+                        "trendStrength": {"min": 7.0}
                     }
                 },
-                "VALUE_TURNAROUND": { "trend_strength_range": [3.0, 5.0], "rsi_min": 45 },
-                "DEEP_VALUE_PLAY": { "pe_ratio_max": 10.0, "fcf_yield_min": 5.0 },
+                "VALUE_TURNAROUND": {
+                    "trendStrength": {"min": 3.0, "max": 5.5},
+                    "rsi": {"min": 45}
+                },
+                "DEEP_VALUE_PLAY": {
+                    "peRatio": {"max": 10.0},
+                    "fcfYield": {"min": 5.0}
+                },
                 "QUALITY_ACCUMULATION": {
                     "consolidation_required": True,
                     "rsi_range": [40, 60]
                 },
                 "QUALITY_ACCUMULATION_DOWNTREND": {
                     "fundamental_requirements": {
-                        "roe_min": 20,
-                        "roce_min": 25,
-                        "de_ratio_max": 0.5
+                        "roe": {"min": 20},
+                        "roce": {"min": 25},
+                        "deRatio": {"max": 0.5}
                     },
-                    "bb_percent_b_range": [0.2, 0.5]
+                    "bbpercentb": {"min": 0.2, "max": 0.5}
                 },
-                "divergence": {
-                    "lookback": 10,
-                    "slope_diff_min": -0.05,
-                    "confidence_penalties": {
-                        "bearish_divergence": 0.70,
-                        "bullish_divergence": 0.70
-                    }
-                },
-                "rules": {
-                    "MOMENTUM_BREAKOUT": {
-                        "conditions": [
-                            "bb_percent_b >= 0.98",
-                            "rsi >= 60"
-                        ],
-                        "priority": 90
-                    },
-                    "MOMENTUM_BREAKDOWN": {
-                        "conditions": [
-                            "bb_percent_b <= 0.02",
-                            "rsi <= 40"
-                        ],
-                        "priority": 90
-                    },
-                    "TREND_PULLBACK": {
-                        "conditions": [
-                            "trend_dir == 'up'",
-                            "abs(price - ma_fast) / ma_fast <= 0.05",
-                            "rsi >= 50"
-                        ],
-                        "priority": 75
-                    },
-                    "VOLATILITY_SQUEEZE": {
-                        "conditions": [
-                            "is_squeeze == True",
-                            "volatility_quality >= 7.0"
-                        ],
-                        "priority": 80
-                    },
-                    "QUALITY_ACCUMULATION": {
-                        "conditions": [
-                            "is_consolidating == True",
-                            "roe >= 20",
-                            "roce >= 25",
-                            "de_ratio <= 0.5"
-                        ],
-                        "priority": 65
-                    },
-                    "REVERSAL_MACD_CROSS_UP": {
-                        "conditions": ["macd_histogram > 0", "prev_macd_histogram < 0"],
-                        "priority": 80
-                    },
-                    "REVERSAL_RSI_SWING_UP": {
-                        "conditions": ["rsi < 30", "rsi_slope > 0.05"],
-                        "priority": 75
-                    },
-                    "REVERSAL_ST_FLIP_UP": {
-                        "conditions": ["supertrend_signal == 'Bullish'", "prev_supertrend_signal == 'Bearish'"],
-                        "priority": 70
-                    },
-                    "SELL_AT_RANGE_TOP": {
-                        "conditions": ["is_consolidating == True", "price >= bb_high * 0.98", "rsi > 60"],
-                        "priority": 75
-                    },
-                    "TAKE_PROFIT_AT_MID": {
-                        "conditions": ["is_consolidating == True", "price >= bb_mid * 0.98", "price < bb_high * 0.98", "rsi > 55"],
-                        "priority": 60
-                    },
-                    "QUALITY_ACCUMULATION_DOWNTREND": {
-                        "conditions": [
-                            "trend_strength < 3.0",           # In downtrend/sideways
-                            "roe >= 20",                      # High quality
-                            "roce >= 25",
-                            "de_ratio <= 0.5",                # Low debt
-                            "pe_ratio < 15"                   # Cheap valuation
-                        ],
-                        "priority": 85
-                    },
-                    "DEEP_VALUE_PLAY": {
-                        "conditions": [
-                            "pe_ratio < 10",                  # Very cheap
-                            "fcf_yield > 5.0",                # High cash generation
-                            "roe >= 15",                      # Still profitable
-                            "dividend_yield > 4.0"            # High income
-                        ],
-                        "priority": 80
-                    },
-                    "VALUE_TURNAROUND": {
-                        "conditions": [
-                            "trend_strength >= 3.0",          # Starting to turn
-                            "trend_strength < 5.0",
-                            "roe >= 18",
-                            "pe_ratio < 12",
-                            "momentum_strength >= 4.0"
-                        ],
-                        "priority": 82
-                    },
-                }
+                #moved to confidence config
+                # "divergence": { 
+                #     "lookback": 10,
+                #     "slope_diff_min": -0.05,
+                #     "confidence_penalties": {
+                #         # "bearish_divergence": 0.70,
+                #         # "bullish_divergence": 0.70
+                #     }
+                # },
             },
 
             # Spread Adjustment
@@ -830,79 +678,80 @@ MASTER_CONFIG = {
             "volume_signatures": {
                 "surge": {"threshold": 3.0, "confidence_adjustment": 15},
                 "drought": {"threshold": 0.7, "confidence_adjustment": -25},
-                "climax": {"threshold": 2.0, "rsi_condition_min": 70}
+                "climax": {"threshold": 2.0, "rsi_condition_min": 70, "confidence_adjustment": -15 }
             },
             
             # Wick Rejection
-            "wick_rejection": {
+            "wickRejection": {
                 "max_ratio": 2.5,
                 "calculation": "abs(high - close) / abs(close - open)"
             },
             
             # Divergence Detection
-            "divergence_detection": {
-                "lookback": 10,
-                "slope_diff_min": -0.05,
-                "confidence_penalties": {
-                    "bearish_divergence": 0.70,
-                    "bullish_divergence": 0.70
-                },
-                "severity_bands": {
-                    "minor": {
-                        "rsi_slope_min": -0.03,
-                        "confidence_penalty": 0.90,
-                        "allow_entry": True
-                    },
-                    "moderate": {
-                        "rsi_slope_min": -0.08,
-                        "confidence_penalty": 0.70,
-                        "allow_entry": True
-                    },
-                    "severe": {
-                        "rsi_slope_min": -999,
-                        "confidence_penalty": 0.50,
-                        "allow_entry": False
-                    }
-                }
-            },
-            
-            # Setup Confidence (REMOVED - Will only be in horizons)
+            # "divergence_detection": {
+            #     "lookback": 10,
+            #     "slope_diff_min": -0.05,
+            #     "confidence_penalties": {
+            #         "bearish_divergence": 0.70,
+            #         "bullish_divergence": 0.70
+            #     },
+            #     "severity_bands": {
+            #         "minor": {
+            #             "rsislope": {"min": -0.03},
+            #             "confidence_penalty": 0.90,
+            #             "allow_entry": True
+            #         },
+            #         "moderate": {
+            #             "rsislope": {"min": -0.08},
+            #             "confidence_penalty": 0.70,
+            #             "allow_entry": True
+            #         },
+            #         "severe": {
+            #             "rsislope": {"min": -999},
+            #             "confidence_penalty": 0.50,
+            #             "allow_entry": False
+            #         }
+            #     }
+            # },
         },
+        
         "position_sizing": {
             "base_risk_pct": 0.01,
             "global_setup_multipliers": {
-                "DEEP_VALUE_PLAY": 1.5,           # Deep value with strong fundamentals
-                "VALUE_TURNAROUND": 1.4,          # Turnaround story, high conviction
-                "QUALITY_ACCUMULATION": 1.3,      # Quality + consolidation
-                "VOLATILITY_SQUEEZE": 1.3,        # Coiled spring, expansion expected
-                "DEEP_PULLBACK": 1.5,             # Deep pullback in strong trend
-                "TREND_PULLBACK": 1.0,            # Standard trend following
-                "REVERSAL_MACD_CROSS_UP": 1.0,    # Early reversal signal
-                "REVERSAL_RSI_SWING_UP": 0.9,     # RSI reversal (needs confirmation)
-                "REVERSAL_ST_FLIP_UP": 1.1,       # Supertrend flip (reliable)
-                "QUALITY_ACCUMULATION_DOWNTREND": 0.9,  # Contrarian, lower conviction
-                "MOMENTUM_BREAKOUT": 0.8,         # Breakouts fail often
-                "MOMENTUM_BREAKDOWN": 0.7,        # Short setup (riskier)
-                "SELL_AT_RANGE_TOP": 0.7,         # Range-bound exit
-                "TAKE_PROFIT_AT_MID": 0.6,        # Partial exit
-                "GENERIC": 0.5                    # Unknown setup, minimal size
+                "DEEP_VALUE_PLAY": 1.5,
+                "VALUE_TURNAROUND": 1.4,
+                "QUALITY_ACCUMULATION": 1.3,
+                "VOLATILITY_SQUEEZE": 1.3,
+                "DEEP_PULLBACK": 1.5,
+                "TREND_PULLBACK": 1.0,
+                "REVERSAL_MACD_CROSS_UP": 1.0,
+                "REVERSAL_RSI_SWING_UP": 0.9,
+                "REVERSAL_ST_FLIP_UP": 1.1,
+                "QUALITY_ACCUMULATION_DOWNTREND": 0.9,
+                "MOMENTUM_BREAKOUT": 0.8,
+                "MOMENTUM_BREAKDOWN": 0.7,
+                "SELL_AT_RANGE_TOP": 0.7,
+                "TAKE_PROFIT_AT_MID": 0.6,
+                "GENERIC": 0.5
             },
             "volatility_adjustments": {
                 "high_quality": {"vol_qual_min": 7.0, "multiplier": 1.2},
                 "low_quality": {"vol_qual_max": 5.0, "multiplier": 0.9}
             }
         },
+        
         "trend_weights": {
             "primary": 0.50,
             "secondary": 0.30,
             "acceleration": 0.20
         },
+        
         "boosts": {
             "pattern": {"single": 0.8, "confluence": 1.5},
             "momentum": {"score": 1.2, "trigger_rvol": 2.0},
             "volatility": {
-                "squeeze": {"score": 1.0, "min_quality": 7.0},
-                "expansion": {"score": 0.6, "min_quality": 4.0}
+                "squeeze": {"score": 1.0, "volatilityQuality": {"min": 7.0}},
+                "expansion": {"score": 0.6, "volatilityQuality": {"min": 4.0}}
             },
             "relative_strength": {
                 "outperforming_weak_market": 1.5,
@@ -911,46 +760,16 @@ MASTER_CONFIG = {
             "proximity": {"support": 0.6, "resistance": 0.8},
             "max_cap": 2.5
         },
-        "system": {
-            "process_pool_workers": 4,
-            "cache": {"ttl_seconds": 3600, "timezone": "Asia/Kolkata"},
-            "cache_warmer": {
-                "batch_size": 5,
-                "market_interval_sec": 900,
-                "top_n_during_market": 50,
-                "lru_target": 500,
-                "deep_hour": 2,
-                "batch_sleep_market": 5.0
-            },
-            "fetch": {
-                "max_retries": 3,
-                "timeout": 10,
-                "period_map": {
-                    "intraday": "1mo",
-                    "short_term": "2y",
-                    "long_term": "5y",
-                    "multibagger": "10y"
-                },
-                "interval_map": {
-                    "intraday": "15m",
-                    "short_term": "1d",
-                    "long_term": "1wk",
-                    "multibagger": "1mo"
-                }
-            },
-            "corporate_actions": {
-                "lookback_days": {"past": 365, "upcoming": 7},
-                "display_priority": ["Dividend", "Bonus", "Split", "Rights"]
-            }
-        },
+        
         "moving_averages": {
             "type": "EMA",
             "fast": 20,
             "mid": 50,
             "slow": 200,
-            "keys": ["ema_20", "ema_50", "ema_200"],
-            "dip_buy_reference": "ema_50"
+            "keys": ["ema20", "ema50", "ema200"],
+            "dip_buy_reference": "maMid"
         },
+        
         "indicators": {
             "rsi_period": 14,
             "adx_period": 14,
@@ -967,37 +786,46 @@ MASTER_CONFIG = {
                 "oversold": 20
             }
         },
+        
         "momentum_thresholds": {
-            "rsi_slope": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
+            "rsislope": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
             "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
         },
+        
         "volatility": {
             "scoring_thresholds": {
-                "atr_pct": {"excellent": 2.5, "good": 3.0, "fair": 4.5, "poor": 5.5},
-                "bb_width": {"tight": 3.0, "normal": 6.0, "wide": 12.0}
+                "atrPct": {"excellent": 2.5, "good": 3.0, "fair": 4.5, "poor": 5.5},
+                "bbWidth": {"tight": 3.0, "normal": 6.0, "wide": 12.0}
             },
             "extreme_threshold": 7.0,
             "min_quality": 4.0,
             "squeeze_quality_min": 7.0,
             "breakout_min_quality": 2.0
         },
+        
         "risk_management": {
             "max_position_pct": 0.02,
             "setup_size_multipliers": {"default": 1.0},
             "atr_sl_limits": {"max_percent": 0.05, "min_percent": 0.01},
-            "min_rr_ratio": 1.5,
+            "rrRatio": {"min": 1.5},
             "horizon_t2_cap": 0.10,
             "rr_regime_adjustments": {
-                "strong_trend": {"adx_min": 35, "t1_mult": 2.0, "t2_mult": 4.0},
-                "normal_trend": {"adx_min": 20, "t1_mult": 1.5, "t2_mult": 3.0},
-                "weak_trend": {"adx_max": 20, "t1_mult": 1.2, "t2_mult": 2.5}
-            }
+                "strong_trend": {"adx": {"min": 35}, "t1_mult": 2.0, "t2_mult": 4.0},
+                "normal_trend": {"adx": {"min": 20}, "t1_mult": 1.5, "t2_mult": 3.0},
+                "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.2, "t2_mult": 2.5}
+            },
+            "position_sizing": {
+                "min_capital": 25000,     # Optional: Warn if trade is too small?
+                "max_capital": 50000      # Hard Cap: Never invest more than this
+            },
+            "rr_gates": {"min_t1": 1.5,"min_t2": 2.0,"min_structural": 2.0,"execution_floor": 1.0}
         },
+        
         "execution": {
             "stop_loss_atr_mult": 2.0,
             "target_atr_mult": 3.0,
             "max_hold_candles": 20,
-            "dip_buy_reference": "ema_50",
+            "dip_buy_reference": "maMid",
             "risk_reward_min": 2.0,
             "stop_loss": {
                 "vol_qual_high_mult": 1.5,
@@ -1015,312 +843,176 @@ MASTER_CONFIG = {
                 "breakdown_tolerance": 0.999
             }
         },
+        
         "lookback": {"python_data": 600},
+        
+        # âš ï¸ DEPRECATED - Use technical_score_config.py instead
+        # Kept for backward compatibility only
         "scoring": {
-            "metrics": {
-                "trend_strength": 0.20,
-                "momentum_strength": 0.20,
-                "volatility_quality": 0.15,
-                "ma_trend_signal": 0.15,
-                "supertrend_signal": 0.10,
-                "rvol": 0.10,
-                "price_action": 0.10
-            },
-            "penalties": {
-                "rvol": {"op": "<", "val": 0.5, "pen": 0.2},
-                "atr_pct": {"op": "<", "val": 1.0, "pen": 0.2}
-            },
             "thresholds": {"buy": 6.0, "hold": 5.0, "sell": 4.0}
         },
-        # ========================================================================
-        # SETUP GATE SPECIFICATIONS (Universal Baseline)
-        # ========================================================================
-        "setup_gate_specifications": {
-            # Complete gate table - defines WHAT EACH SETUP IS BY NATURE
-            # Horizons override only volatility_quality_min and confidence_min
-            
-            "MOMENTUM_BREAKOUT": {
-                "nature": "Requires strong established trend with momentum confirmation",
-                "universal_gates": {
-                    "adx_min": 18,
-                    "min_trend_strength": 5.0
-                }
-                # volatility_quality_min and confidence_min: defined per horizon
-            },
-            
-            "VOLATILITY_SQUEEZE": {
-                "nature": "Pre-breakout compression setup, trend-agnostic",
-                "universal_gates": {
-                    "adx_min": None,  # Skip ADX - squeeze happens before trend
-                    "min_trend_strength": None
-                }
-            },
-            
-            "QUALITY_ACCUMULATION": {
-                "nature": "Consolidation-based accumulation, fundamentally driven",
-                "universal_gates": {
-                    "adx_min": None,  # Consolidation = low ADX by design
-                    "min_trend_strength": None
-                }
-            },
-            
-            "QUALITY_ACCUMULATION_DOWNTREND": {
-                "nature": "Accumulation during downtrend/sideways, quality-first",
-                "universal_gates": {
-                    "adx_min": None,
-                    "min_trend_strength": None
-                }
-            },
-            
-            "DEEP_VALUE_PLAY": {
-                "nature": "Deep value based on fundamentals, trend-neutral",
-                "universal_gates": {
-                    "adx_min": None,
-                    "min_trend_strength": None
-                }
-            },
-            
-            "VALUE_TURNAROUND": {
-                "nature": "Value stock showing early trend reversal signs",
-                "universal_gates": {
-                    "adx_min": 15,  # Universal minimum - needs turning momentum
-                    "min_trend_strength": 3.0  # Weak but present uptrend
-                }
-            },
-            
-            "TREND_PULLBACK": {
-                "nature": "Dip-buying in established uptrend",
-                "universal_gates": {
-                    "adx_min": 16,
-                    "min_trend_strength": 4.0
-                }
-            },
-            
-            "DEEP_PULLBACK": {
-                "nature": "Deeper retracement in trend, higher risk/reward",
-                "universal_gates": {
-                    "adx_min": 14,
-                    "min_trend_strength": 3.5
-                }
-            },
-            
-            "REVERSAL_MACD_CROSS_UP": {
-                "nature": "Early reversal signal via MACD momentum shift",
-                "universal_gates": {
-                    "adx_min": 10,  # Low ADX ok - trend just starting
-                    "min_trend_strength": None
-                }
-            },
-            
-            "REVERSAL_RSI_SWING_UP": {
-                "nature": "Oversold bounce reversal",
-                "universal_gates": {
-                    "adx_min": 12,
-                    "min_trend_strength": None
-                }
-            },
-            
-            "REVERSAL_ST_FLIP_UP": {
-                "nature": "Supertrend reversal confirmation",
-                "universal_gates": {
-                    "adx_min": 14,
-                    "min_trend_strength": 2.5
-                }
-            },
-            
-            "PATTERN_DARVAS_BREAKOUT": {
-                "nature": "Darvas box breakout pattern",
-                "universal_gates": {
-                    "adx_min": 16,
-                    "min_trend_strength": 4.0
-                }
-            },
-            
-            "PATTERN_VCP_BREAKOUT": {
-                "nature": "Minervini-style volatility contraction",
-                "universal_gates": {
-                    "adx_min": 15,
-                    "min_trend_strength": 4.5
-                }
-            },
-            
-            "PATTERN_CUP_BREAKOUT": {
-                "nature": "Cup and handle breakout",
-                "universal_gates": {
-                    "adx_min": 14,
-                    "min_trend_strength": 3.5
-                }
-            },
-            
-            "PATTERN_FLAG_BREAKOUT": {
-                "nature": "Flag/pennant continuation pattern",
-                "universal_gates": {
-                    "adx_min": 18,
-                    "min_trend_strength": 5.5
-                }
-            },
-            
-            "PATTERN_GOLDEN_CROSS": {
-                "nature": "Long-term MA crossover signal",
-                "universal_gates": {
-                    "adx_min": 15,
-                    "min_trend_strength": 3.0
-                }
-            },
-
-            "PATTERN_STRIKE_REVERSAL": {
-                "nature": "Three-line strike reversal pattern",
-                "universal_gates": {
-                    "adx_min": 12,
-                    "min_trend_strength": None  # Reversal can happen in weak trend
-                }
-            },
-
-            "MOMENTUM_BREAKDOWN": {
-                "nature": "Breakdown from support with strong bearish momentum",
-                "universal_gates": {
-                    "adx_min": 18,
-                    "min_trend_strength": 5.0  # Strong downtrend
-                }
-            },
-
-            "SELL_AT_RANGE_TOP": {
-                "nature": "Range-bound exit at resistance",
-                "universal_gates": {
-                    "adx_min": None,  # Range = low ADX
-                    "min_trend_strength": None
-                }
-            },
-
-            "TAKE_PROFIT_AT_MID": {
-                "nature": "Partial profit in range-bound consolidation",
-                "universal_gates": {
-                    "adx_min": None,
-                    "min_trend_strength": None
-                }
-            },
-
-            "TREND_FOLLOWING": {
-                "nature": "Classic trend-following entry in established trend",
-                "universal_gates": {
-                    "adx_min": 20,
-                    "min_trend_strength": 5.0
-                }
-            },
-
-            "BEAR_TREND_FOLLOWING": {
-                "nature": "Short/sell setup in strong downtrend",
-                "universal_gates": {
-                    "adx_min": 20,
-                    "min_trend_strength": 5.0  # Strong bearish trend
-                }
-            },           
-            "GENERIC": {
-                "nature": "Fallback for unclassified setups",
-                "universal_gates": {
-                    "adx_min": None,
-                    "min_trend_strength": None
+        
+        "strategy_preferences": {
+            # This layer controls TRADING preferences per horizon
+            # Independent of objective setup classification
+            "horizon_strategy_config": {
+                "intraday": {
+                    "preferred_setups": [
+                        "MOMENTUM_BREAKOUT",
+                        "VOLATILITY_SQUEEZE", 
+                        "TREND_PULLBACK"
+                    ],
+                    "blocked_setups": [
+                        "QUALITY_ACCUMULATION",
+                        "DEEP_VALUE_PLAY",
+                        "VALUE_TURNAROUND"
+                    ],
+                    "sizing_multipliers": {
+                        "VOLATILITY_SQUEEZE": 1.3,
+                        "MOMENTUM_BREAKOUT": 0.8
+                    },
+                    "fundamentalScore": {"min": None}
+                },
+                
+                "short_term": {
+                    "preferred_setups": [
+                        "MOMENTUM_BREAKOUT",
+                        "TREND_PULLBACK",
+                        "VOLATILITY_SQUEEZE",
+                        "REVERSAL_MACD_CROSS_UP"
+                    ],
+                    "blocked_setups": [],
+                    "sizing_multipliers": {
+                        "DEEP_PULLBACK": 1.5,
+                        "TREND_PULLBACK": 1.3,
+                        "MOMENTUM_BREAKOUT": 1.0
+                    },
+                    "fundamentalScore": {"min": 3.0}
+                },
+                
+                "long_term": {
+                    "preferred_setups": [
+                        "VALUE_TURNAROUND",
+                        "DEEP_VALUE_PLAY",
+                        "QUALITY_ACCUMULATION",
+                        "TREND_PULLBACK"
+                    ],
+                    "blocked_setups": [
+                        "VOLATILITY_SQUEEZE",
+                        "MOMENTUM_BREAKDOWN"
+                    ],
+                    "sizing_multipliers": {
+                        "VALUE_TURNAROUND": 1.5,
+                        "DEEP_VALUE_PLAY": 1.4,
+                        "QUALITY_ACCUMULATION": 1.3,
+                        "MOMENTUM_BREAKOUT": 0.8
+                    },
+                    "fundamentalScore": {"min": 6.0},
+                    "filters": {
+                        "require_low_debt": True,
+                        "roe": {"min": 15.0},
+                        "roce": {"min": 15.0},
+                        "deRatio": {"max": 0.5}
+                    }
+                },
+                
+                "multibagger": {
+                    "preferred_setups": [
+                        "VALUE_TURNAROUND",
+                        "DEEP_VALUE_PLAY",
+                        "QUALITY_ACCUMULATION"
+                    ],
+                    "blocked_setups": [
+                        "MOMENTUM_BREAKOUT",
+                        "VOLATILITY_SQUEEZE",
+                        "REVERSAL_MACD_CROSS_UP"
+                    ],
+                    "sizing_multipliers": {
+                        "VALUE_TURNAROUND": 1.8,
+                        "DEEP_VALUE_PLAY": 1.6,
+                        "QUALITY_ACCUMULATION": 1.5
+                    },
+                    "fundamentalScore": {"min": 8.0},
+                    "filters": {
+                        "require_low_debt": True,
+                        "roe": {"min": 20.0},
+                        "roce": {"min": 25.0},
+                        "piotroskiF": {"min": 7}
+                    }
                 }
             }
         },
         
-        # ========================================================================
-        # STRATEGY LAYER (Separated from Setup Detection)
-        # ========================================================================
-        "strategy_preferences": {
-        # This layer controls TRADING preferences per horizon
-        # Independent of objective setup classification
-        
-        "horizon_strategy_config": {
+        "strategy_priority": {
             "intraday": {
-                "preferred_setups": [
-                    "MOMENTUM_BREAKOUT",
-                    "VOLATILITY_SQUEEZE", 
-                    "TREND_PULLBACK"
+                "blocked_strategies": [
+                    "value_investing",
+                    "income_investing",
+                    "position_trading",
+                    "canslim",
+                    "quality_growth",
+                    "reversal_trading"
                 ],
-                "blocked_setups": [
-                    "QUALITY_ACCUMULATION",
-                    "DEEP_VALUE_PLAY",
-                    "VALUE_TURNAROUND"  # Too slow for intraday
-                ],
-                "sizing_multipliers": {
-                    "VOLATILITY_SQUEEZE": 1.3,
-                    "MOMENTUM_BREAKOUT": 0.8
-                },
-                "min_fundamental_score": None  # Ignore fundamentals for intraday
+                "priority_multipliers": {
+                    "day_trading": 1.3,
+                    "momentum": 1.2,
+                    "swing_trading": 1.1,
+                    "trend_following": 0.8,
+                    "minervini_growth": 0.5
+                }
             },
             
             "short_term": {
-                "preferred_setups": [
-                    "MOMENTUM_BREAKOUT",
-                    "TREND_PULLBACK",
-                    "VOLATILITY_SQUEEZE",
-                    "REVERSAL_MACD_CROSS_UP"
-                ],
-                "blocked_setups": [],  # Accept most setups
-                "sizing_multipliers": {
-                    "DEEP_PULLBACK": 1.5,
-                    "TREND_PULLBACK": 1.3,
-                    "MOMENTUM_BREAKOUT": 1.0
-                },
-                "min_fundamental_score": 3.0  # Some fundamental filter
+                "blocked_strategies": [],
+                "priority_multipliers": {
+                    "swing_trading": 1.2,
+                    "momentum": 1.15,
+                    "quality_growth": 1.1,
+                    "trend_following": 1.1,
+                    "reversal_trading": 1.1,
+                    "minervini_growth": 1.1,
+                    "canslim": 1.05,
+                    "value_investing": 0.85,
+                    "position_trading": 0.8,
+                    "income_investing": 0.7
+                }
             },
             
             "long_term": {
-                "preferred_setups": [
-                    "VALUE_TURNAROUND",
-                    "DEEP_VALUE_PLAY",
-                    "QUALITY_ACCUMULATION",
-                    "TREND_PULLBACK"
-                ],
-                "blocked_setups": [
-                    "VOLATILITY_SQUEEZE",  # Too short-term
-                    "MOMENTUM_BREAKDOWN"
-                ],
-                "sizing_multipliers": {
-                    "VALUE_TURNAROUND": 1.5,
-                    "DEEP_VALUE_PLAY": 1.4,
-                    "QUALITY_ACCUMULATION": 1.3,
-                    "MOMENTUM_BREAKOUT": 0.8  # Lower conviction for momentum
-                },
-                "min_fundamental_score": 6.0,  # Strong fundamental requirement
-                "filters": {
-                    "require_low_debt": True,  # D/E < 0.5
-                    "min_roe": 15.0,
-                    "min_roce": 15.0,
-                    "max_de_ratio": 0.5 
+                "blocked_strategies": ["day_trading"],
+                "priority_multipliers": {
+                    "quality_growth": 1.35,
+                    "value_investing": 1.3,
+                    "position_trading": 1.25,
+                    "reversal_trading": 1.2,
+                    "income_investing": 1.2,
+                    "minervini_growth": 1.1,
+                    "canslim": 1.05,
+                    "trend_following": 1.0,
+                    "swing_trading": 0.8,
+                    "momentum": 0.7
                 }
             },
             
             "multibagger": {
-                "preferred_setups": [
-                    "VALUE_TURNAROUND",
-                    "DEEP_VALUE_PLAY",
-                    "QUALITY_ACCUMULATION"
+                "blocked_strategies": [
+                    "day_trading",
+                    "momentum",
+                    "swing_trading"
                 ],
-                "blocked_setups": [
-                    "MOMENTUM_BREAKOUT",
-                    "VOLATILITY_SQUEEZE",
-                    "REVERSAL_MACD_CROSS_UP"
-                ],
-                "sizing_multipliers": {
-                    "VALUE_TURNAROUND": 1.8,
-                    "DEEP_VALUE_PLAY": 1.6,
-                    "QUALITY_ACCUMULATION": 1.5
-                },
-                "min_fundamental_score": 8.0,  # Very high fundamental bar
-                "filters": {
-                    "require_low_debt": True,
-                    "min_roe": 20.0,
-                    "min_roce": 25.0,
-                    "min_piotroski_f": 7
+                "priority_multipliers": {
+                    "quality_growth": 1.5,
+                    "value_investing": 1.45,
+                    "minervini_growth": 1.35,
+                    "canslim": 1.25,
+                    "position_trading": 1.2,
+                    "income_investing": 1.1,
+                    "reversal_trading": 1.05,
+                    "trend_following": 0.8
                 }
             }
-        }
-    },
-        # ========================================================================
-        # SETUP PRIORITY DESIGN INTENT (Documentation)
-        # ========================================================================
+        },
+        
         "setup_priority_design_philosophy": {
             "long_term": {
                 "philosophy": "Value-first, quality-second, momentum-last",
@@ -1365,84 +1057,7 @@ MASTER_CONFIG = {
                 }
             }
         },
-        "gates": {
-            "min_trend_strength": 3.0,
-            "allowed_supertrend_counter": False,
-            "volatility_bands_atr_pct": {
-                "min": 1.0,
-                "ideal": 2.5,
-                "max": 12.0
-            },
-            "volatility_quality_mins": {"default": 3.0},
-        },
-        "confidence": {
-            "horizon_discount": 5,
-            "floors": {"buy": 55, "wait": 35},
-            "volume_penalty": {"rvol_drought_penalty": -15, "ignore_for_squeeze": True},
-            "adx_based_floors": {
-                "strong": {"adx_min": 30, "floor": 60},
-                "moderate": {"adx_min": 25, "floor": 50},
-                "weak": {"adx_min": 20, "floor": 40},
-                "range_bound": {"adx_max": 20, "floor": 30}
-            },
-            "setup_type_overrides": {
-                "MOMENTUM_BREAKOUT": 5,
-                "VOLATILITY_SQUEEZE": 10,
-                "QUALITY_ACCUMULATION": 0
-            },
-            "base_floors": {
-                "MOMENTUM_BREAKOUT": 55,
-                "MOMENTUM_BREAKDOWN": 55,
-                "TREND_PULLBACK": 53,
-                "DEEP_PULLBACK": 50,
-                "QUALITY_ACCUMULATION": 45,
-                "VOLATILITY_SQUEEZE": 50,
-                "TREND_FOLLOWING": 50,
-                "BEAR_TREND_FOLLOWING": 50,
-                "REVERSAL_MACD_CROSS_UP": 50,
-                "REVERSAL_RSI_SWING_UP": 50,
-                "REVERSAL_ST_FLIP_UP": 55,
-                "VALUE_TURNAROUND": 50,  # Starts lower as it's a turning point
-                "DEEP_VALUE_PLAY": 45,   # Low base floor, relies heavily on fundamental quality
-                "QUALITY_ACCUMULATION_DOWNTREND": 45,  # Value play in a negative trend
-                "SELL_AT_RANGE_TOP": 60,  # Higher confidence for range exit
-                "TAKE_PROFIT_AT_MID": 55,
-                "PATTERN_STRIKE_REVERSAL": 55,
-            },
-            "adx_normalization": {
-                "min": 10,
-                "max": 40,
-                "adjustment_factor": 12
-            }
-        },
-        "composites": {
-            "trend_strength": {
-                "adx_thresholds": {"strong": 25, "moderate": 20, "weak": 15},
-                "slope_thresholds": {"strong": 20.0, "moderate": 5.0},
-                "weights": {
-                    "adx": 0.4,
-                    "slope": 0.3,
-                    "di": 0.2,
-                    "st": 0.1,
-                    "adx_adaptive": 0.45,
-                    "slope_adaptive": 0.35,
-                    "di_adaptive": 0.20
-                }
-            },
-            "momentum_strength": {
-                "rsi_thresholds": {"overbought": 70, "strong": 60, "neutral": 50, "weak": 40},
-                "rsi_slope_thresholds": {"strong": 1.0, "neutral": 0.0},
-                "macd_thresholds": {"strong": 0.5, "neutral": 0.0},
-                "stoch_thresholds": {"overbought": 80, "neutral": 50},
-                "weights": {"rsi": 0.25, "slope": 0.25, "macd": 0.30, "stoch": 0.20}
-            },
-            "volatility_quality": {
-                "atr_pct_thresholds": {"low": 1.5, "moderate": 3.0, "high": 5.0},
-                "bb_width_thresholds": {"tight": 0.01, "moderate": 0.02, "wide": 0.04},
-                "atr_sma_ratio_thresholds": {"stable": 0.02, "moderate": 0.035, "volatile": 0.05},
-                "weights": {"atr": 0.25, "bb_width": 0.25, "true_range": 0.20, "hv": 0.15, "ratio": 0.15}
-            }
-        },
+    
         "targets": {
             "resistance_cushion": 0.96,
             "support_cushion": 1.005,
@@ -1450,54 +1065,54 @@ MASTER_CONFIG = {
             "support_buffer": 0.998,
             "cover_cushion": 1.005
         },
-        "enhancements": {},
         "divergence": {
-            "rsi_slope_deceleration_ceiling": -0.08,
+            "rsislope_deceleration_ceiling": -0.08,
             "bearish_penalty": 0.70,
             "bullish_penalty": 0.70,
             "severity_bands": {
                 "severe": {
-                    "rsi_slope_threshold": -0.08,
+                    "rsislope_threshold": -0.08,
                     "allow_entry": False,
                     "confidence_penalty": 1.0
                 },
                 "moderate": {
-                    "rsi_slope_threshold": -0.03,
+                    "rsislope_threshold": -0.03,
                     "allow_entry": True,
                     "confidence_penalty": 0.7
                 },
                 "minor": {
-                    "rsi_slope_threshold": 0.0,
+                    "rsislope_threshold": 0.0,
                     "allow_entry": True,
                     "confidence_penalty": 0.9
                 }
             }
         }
     },
-
+    
+    # ============================================================================
+    # HORIZON CONFIGURATIONS
+    # ============================================================================
     "horizons": {
         "intraday": {
+            "timeframe": "15m",
+            "description": "Quick scalps and day trades",
+            
             "volume_analysis": {
-                "rvol_surge_threshold": 3.0,
-                "rvol_drought_threshold": 0.7
+                "rvol": {"surge_threshold": 3.0, "drought_threshold": 0.7}
             },
             "time_estimation": {
                 "candles_per_unit": 4
             },
-            "timeframe": "15m",
-            "description": "Quick scalps and day trades",
             
-            # Override MA settings
             "moving_averages": {
                 "type": "EMA",
                 "fast": 20,
                 "mid": 50,
                 "slow": 200,
-                "keys": ["ema_20", "ema_50", "ema_200"],
-                "dip_buy_reference": "ema_20"
+                "keys": ["ema20", "ema50", "ema200"],
+                "dip_buy_reference": "maFast"
             },
             
-            # Override indicators for faster response
             "indicators": {
                 "rsi_period": 9,
                 "adx_period": 10,
@@ -1515,9 +1130,8 @@ MASTER_CONFIG = {
                 }
             },
             
-            # Tighter momentum thresholds
             "momentum_thresholds": {
-                "rsi_slope": {
+                "rsislope": {
                     "acceleration_floor": 0.10,
                     "deceleration_ceiling": -0.10
                 },
@@ -1527,26 +1141,33 @@ MASTER_CONFIG = {
                 }
             },
             
-            # Tighter volatility scoring
             "volatility": {
                 "scoring_thresholds": {
-                    "atr_pct": {
+                    "atrPct": {
                         "excellent": 1.5,
                         "good": 3.0,
                         "fair": 4.0,
                         "poor": 5.0
                     },
-                    "bb_width": {
+                    "bbWidth": {
                         "tight": 2.0,
                         "normal": 5.0,
                         "wide": 10.0
                     }
                 }
             },
-            "position_sizing": {
-                "base_risk_pct": 0.005,  # ✅ Override: 0.5% for quick trades
+            
+            "trend_thresholds": {
+                "slope": {
+                    "strong": 15.0,
+                    "moderate": 5.0
+                }
             },
-            # Tighter risk management
+            
+            "position_sizing": {
+                "base_risk_pct": 0.005
+            },
+            
             "risk_management": {
                 "max_position_pct": 0.01,
                 "setup_size_multipliers": {
@@ -1554,16 +1175,16 @@ MASTER_CONFIG = {
                     "MOMENTUM_BREAKOUT": 0.8
                 },
                 "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.01},
-                "min_rr_ratio": 1.2,
+                "rrRatio": {"min": 1.2},
                 "horizon_t2_cap": 0.04,
                 "rr_regime_adjustments": {
-                    "strong_trend": {"adx_min": 40, "t1_mult": 2.0, "t2_mult": 4.0},
-                    "normal_trend": {"adx_min": 20, "t1_mult": 1.5, "t2_mult": 3.0},
-                    "weak_trend": {"adx_max": 20, "t1_mult": 1.2, "t2_mult": 2.5}
-                }
+                    "strong_trend": {"adx": {"min": 40}, "t1_mult": 2.0, "t2_mult": 4.0},
+                    "normal_trend": {"adx": {"min": 20}, "t1_mult": 1.5, "t2_mult": 3.0},
+                    "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.2, "t2_mult": 2.5}
+                },
+                "rr_gates": { "min_t1": 1.5, "min_t2": 2.2, "min_structural": 2.5, "execution_floor": 1.2 }
             },
             
-            # Execution params
             "execution": {
                 "stop_loss_atr_mult": 1.5,
                 "target_atr_mult": 2.5,
@@ -1579,248 +1200,55 @@ MASTER_CONFIG = {
             
             "lookback": {"python_data": 500},
             
-            # Scoring - focus on momentum & price action
-            "scoring": {
-                "fundamental_weight": 0.0,
-                "metrics": {
-                    "ma_fast_slope": 0.20,
-                    "rsi_slope": 0.20,
-                    "price_action": 0.15,
-                    "vwap_bias": 0.15,
-                    "vol_spike_ratio": 0.10,
-                    "momentum_strength": 0.10,
-                    "volatility_quality": 0.05,
-                    "ma_trend_signal": 0.05
+            # ✅ KEEP: Horizon-specific structural gates (universal defaults)
+            "entry_gates": {
+                "structural": {
+                    "adx": {"min": 18},
+                    "atrPct": {"min": 0.3},
+                    "trendStrength": {"min": 5.0},
+                    "volatilityQuality": {"min": 5.0}
                 },
-                "penalties": {
-                    "atr_pct": {"op": "<", "val": 0.4, "pen": 0.3},
-                    "ma_fast_slope": {"op": "<", "val": -2, "pen": 0.3}
+                "execution_rules": {
+                    "volatility_guards": {
+                        "extreme_vol_buffer": 1.5,     # Tighter than global 2.0
+                        "min_quality_breakout": 2.5,   # Higher floor for 15m candles
+                        "min_quality_normal": 4.0,
+                        "enabled": True
+                    },
+                    "structure_validation": {
+                        "breakout_clearance": 0.002,   # 0.2% clearance for intraday noise
+                        "enabled": True
+                    }
                 },
-                "thresholds": {"buy": 6.5, "hold": 5.0, "sell": 3.8},
-                "metric_weights": {
-                    "momentum_strength": 0.30,
-                    "trend_strength": 0.25,
-                    "volatility_quality": 0.15,
-                    "vwap_bias": 0.10,
-                    "rvol": 0.10,
-                    "price_action": 0.10
+                "opportunity": {
+                    "confidence": {"min": 65},
+                    "rrRatio": {"min": 1.2},
+                    "technicalScore": {"min": None},
+                    "fundamentalScore": {"min": None}
                 }
-            },
-            
-            # Technical weight overrides - boost fast indicators
-            "technical_weight_overrides": {
-                "rsi": 1.3,
-                "rsi_slope": 1.2,
-                "stoch_k": 1.2,
-                "macd_cross": 1.2,
-                "vol_spike_signal": 1.5,
-                "rvol": 1.3,
-                "vol_spike_ratio": 1.3,
-                "vwap_bias": 1.4,
-                "price_action": 1.3,
-                "gap_percent": 1.2,
-                "bb_percent_b": 1.2,
-                "wick_rejection": 1.2,
-                "momentum_strength": 1.3,
-                "price_vs_200dma_pct": 0.4,
-                "price_vs_primary_trend_pct": 0.5,
-                "ma_trend_signal": 0.6,
-                "adx": 0.7,
-                "dma_200_slope": 0.4,
-                "ichi_cloud": 0.5,
-                "rel_strength_nifty": 0.5,
-                "nifty_trend_score": 0.4,
-                "trend_strength": 0.8,
-                "volatility_quality": 1.1
-            },
-            # "gates": {
-            #     "min_trend_strength": 2.0,
-            #     "allowed_supertrend_counter": True,
-            #     "volatility_bands_atr_pct": {
-            #         "min": 0.3,
-            #         "ideal": 3.0,
-            #         "max": 5.0
-            #     },
-            #     "volatility_quality_mins": {
-            #         "MOMENTUM_BREAKOUT": 2.5,
-            #         "VOLATILITY_SQUEEZE": 4.0,
-            #         "TREND_PULLBACK": 3.0,
-            #         "default": 2.5
-            #     },
-            #     "volatility_guards": {
-            #         "extreme_vol_buffer": 2.0,
-            #         "min_quality_breakout": 2.5,
-            #         "min_quality_normal": 4.0
-            #     },
-            #     "confidence_min": 55,
-            #     "adx_min": 15,
-            #     "volatility_quality_min": 3.0,
-            #     "rr_ratio_min": 1.1,
-            #     "trend_strength_min": 2.0
-            # },
-            # Gates - more lenient
-            "gates": {
-                # Base gates for intraday (generic baseline)
-                "adx_min": 18,  # Horizon-specific baseline (can be None if very lenient)
-                "min_trend_strength": 5.0,
-                "confidence_min": 65,
-                "volatility_quality_min": 5.0,
                 
-                # Volatility bands specific to intraday
-                "volatility_bands_atr_pct": {
-                    "min": 0.3,
-                    "ideal": 3.0,
-                    "max": 5.0
-                },
-                "volatility_guards": {
-                    "extreme_vol_buffer": 2.0,
-                    "min_quality_breakout": 2.5,
-                    "min_quality_normal": 4.0
-                },
-                # Setup-specific overrides (ONLY volatility & confidence)
-                "setup_gate_overrides": {
-                    "QUALITY_ACCUMULATION": {
-                        "volatility_quality_min": 4.0,
-                        "confidence_min": 55
-                        # NO adx_min or min_trend_strength - inherited from global
-                    },
-                    "DEEP_VALUE_PLAY": {
-                        "volatility_quality_min": 2.5,
-                        "confidence_min": 45
-                    },
-                    "VOLATILITY_SQUEEZE": {
-                        "volatility_quality_min": 7.0,  # Intraday needs tighter squeeze
-                        "confidence_min": 60
-                    },
-                    "VALUE_TURNAROUND": {
-                        "volatility_quality_min": 3.0,
-                        "confidence_min": 50
-                    },
-                    "GENERIC": {
-                        "volatility_quality_min": 3.0,
-                        "confidence_min": 45
-                    }
-                    # Don't repeat universal gates - they come from global.setup_gate_specifications
-                }
-            },
-            "trend_thresholds": {
-                "slope": {
-                    "strong": 15.0,
-                    "moderate": 5.0
-                }
+                # ❌ REMOVED: setup_gate_overrides
+                # This section has been MOVED to setup_pattern_matrix.py
+                # Each setup now defines its own horizon_overrides
+                
             },
             
-            # Confidence - higher discount for noise
-            "confidence": {
-                "horizon_discount": 10,
-                "floors": {"buy": 55, "wait": 30},
-                "base_floors": {
-                    "MOMENTUM_BREAKOUT": 50,
-                    "MOMENTUM_BREAKDOWN": 50,
-                    "TREND_PULLBACK": 48,
-                    "DEEP_PULLBACK": 45,
-                    "QUALITY_ACCUMULATION": 40,
-                    "VOLATILITY_SQUEEZE": 50,
-                    "TREND_FOLLOWING": 48,
-                    "BEAR_TREND_FOLLOWING": 48,
-                    "REVERSAL_MACD_CROSS_UP": 45,
-                    "REVERSAL_RSI_SWING_UP": 45,
-                    "REVERSAL_ST_FLIP_UP": 50
-                },
-                "volume_penalty": {
-                    "rvol_drought_penalty": -20,
-                    "ignore_for_squeeze": True
-                }
-            },
-            
-            # Setup Confidence - intraday-specific penalties/bonuses
-            "setup_confidence": {
-                "confidence_clamp": [30, 90],
-                "penalties": {
-                    "weak_trend": {
-                        "condition": "adx < 20",
-                        "amount": 10,
-                        "reason": "Intraday trend too weak"
-                    },
-                    "low_liquidity": {
-                        "condition": "rvol < 0.8",
-                        "amount": 10,
-                        "reason": "Thin intraday liquidity"
-                    },
-                    "wide_spread": {
-                        "condition": "spread_pct > 0.005",
-                        "amount": 8,
-                        "reason": "Spread too wide for intraday"
-                    },
-                    "choppy_market": {
-                        "condition": "trend_strength < 3.0",
-                        "amount": 20,
-                        "reason": "Choppy intraday - high whipsaw risk"
-                    }
-                },
-                "bonuses": {
-                    "momentum_volume_confirmed": {
-                        "condition": "setup_type == 'MOMENTUM_BREAKOUT' and rvol >= 3.0",
-                        "amount": 10,
-                        "reason": "Breakout with strong volume"
-                    },
-                    "clean_flag": {
-                        "condition": "setup_type == 'PATTERN_FLAG_BREAKOUT' and volatility_quality >= 6.0",
-                        "amount": 8,
-                        "reason": "Clean intraday flag breakout"
-                    },
-                    "explosive_trend": {
-                        "condition": "trend_strength >= 8.0",
-                        "amount": 20,
-                        "reason": "Explosive intraday trend"
-                    },
-                    "strong_trend": {
-                        "condition": "trend_strength >= 5.5",
-                        "amount": 15,
-                        "reason": "Strong intraday momentum"
-                    },
-                    "decent_trend": {
-                        "condition": "trend_strength >= 4.0",
-                        "amount": 8,
-                        "reason": "Decent trend support"
-                    }
-                }
-            },
-            
-            # Enhancements - intraday-specific
-            "enhancements": {
-                "volume_surge": {
-                    "condition": "rvol >= 2.5",
-                    "amount": 12.0,
-                    "reason": "Strong intraday volume surge",
-                    "max_boost": 15.0
-                },
-                "squeeze_release": {
-                    "condition": "bb_width < 3.0 and rvol >= 2.0",
-                    "amount": 15.0,
-                    "reason": "Tight squeeze breaking with volume",
-                    "max_boost": 18.0
-                },
-                "momentum_spike": {
-                    "condition": "momentum_strength >= 8.0",
-                    "amount": 10.0,
-                    "reason": "Explosive momentum for scalp",
-                    "max_boost": 12.0
-                }
-            }
+            # ❌ REMOVED: enhancements section (migrated to confidence_config.py)
+            # All confidence enhancements are now in confidence_config.py
+            # See confidence_config.CONFIDENCE_CONFIG['horizons']['intraday']['conditional_adjustments']['bonuses']
         },
+        
         "short_term": {
+            "timeframe": "1d",
+            "description": "Swing trading (Days to Weeks)",
             "volume_analysis": {
-                "rvol_surge_threshold": 2.5,
-                "rvol_drought_threshold": 0.7
+                "rvol": {"surge_threshold": 2.5, "drought_threshold": 0.7}
             },
             "time_estimation": {
                 "candles_per_unit": 1
             },
-            "timeframe": "1d",
-            "description": "Swing trading (Days to Weeks)",
             "position_sizing": {
-                "base_risk_pct": 0.01  # ✅ Override: 1.0% (or omit to use global)
+                "base_risk_pct": 0.01
             },
             "risk_management": {
                 "max_position_pct": 0.02,
@@ -1829,19 +1257,20 @@ MASTER_CONFIG = {
                     "MOMENTUM_BREAKOUT": 1.0
                 },
                 "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.01},
-                "min_rr_ratio": 1.4,
+                "rrRatio": {"min": 1.4},
                 "horizon_t2_cap": 0.10,
                 "rr_regime_adjustments": {
-                    "strong_trend": {"adx_min": 40, "t1_mult": 2.0, "t2_mult": 4.0},
-                    "normal_trend": {"adx_min": 20, "t1_mult": 1.5, "t2_mult": 3.0},
-                    "weak_trend": {"adx_max": 20, "t1_mult": 1.2, "t2_mult": 2.5}
-                }
+                    "strong_trend": {"adx": {"min": 40}, "t1_mult": 2.0, "t2_mult": 4.0},
+                    "normal_trend": {"adx": {"min": 20}, "t1_mult": 1.5, "t2_mult": 3.0},
+                    "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.2, "t2_mult": 2.5}
+                },
+                "rr_gates": { "min_t1": 1.6, "min_t2": 2.5, "min_structural": 3.0, "execution_floor": 1.4 }
             },
             "execution": {
                 "stop_loss_atr_mult": 2.0,
                 "target_atr_mult": 3.0,
                 "max_hold_candles": 15,
-                "dip_buy_reference": "ema_50",
+                "dip_buy_reference": "maMid",
                 "risk_reward_min": 2.0,
                 "base_hold_days": 10,
                 "proximity_rejection": {
@@ -1851,240 +1280,55 @@ MASTER_CONFIG = {
                 "min_profit_pct": 0.5
             },
             "lookback": {"python_data": 600},
-            "scoring": {
-                "fundamental_weight": 0.3,
-                "metrics": {
-                    "trend_strength": 0.15,
-                    "ma_fast_slope": 0.15,
-                    "rsi_slope": 0.10,
-                    "momentum_strength": 0.12,
-                    "volatility_quality": 0.10,
-                    "supertrend_signal": 0.10,
-                    "ma_trend_signal": 0.10,
-                    "price_vs_primary_trend_pct": 0.08,
-                    "rvol": 0.10
+            "entry_gates": {
+                "structural": {
+                    "adx": {"min": 15},
+                    "atrPct": {"min": 0.8},                # ✅ Wider range acceptable
+                    "trendStrength": {"min": 4.0},
+                    "volatilityQuality": {"min": 4.0}
                 },
-                "penalties": {
-                    "ma_fast_slope": {"op": "<", "val": -5, "pen": 0.3}
-                },
-                "thresholds": {"buy": 6.0, "hold": 4.8, "sell": 4.0},
-                "metric_weights": {
-                    "pe_ratio": 0.10,
-                    "peg_ratio": 0.10,
-                    "roe": 0.10,
-                    "roce": 0.10,
-                    "de_ratio": 0.05,
-                    "eps_growth_5y": 0.15,
-                    "revenue_growth_5y": 0.10,
-                    "quarterly_growth": 0.05,
-                    "trend_strength": 0.10,
-                    "momentum_strength": 0.10,
-                    "volatility_quality": 0.05
-                }
-            },
-            "technical_weight_overrides": {
-                "momentum_strength": 1.1,
-                "trend_strength": 1.1,
-                "macd_cross": 1.1,
-                "supertrend_signal": 1.1,
-                "ma_cross_signal": 1.1,
-                "vol_spike_signal": 1.0,
-                "rvol": 1.0,
-                "adx": 1.0,
-                "price_vs_200dma_pct": 1.0,
-                "rsi_slope": 1.0,
-                "stoch_k": 1.0,
-                "volatility_quality": 1.0,
-                "gap_percent": 0.9,
-                "vwap_bias": 0.8
-            },
-            # Gates
-            # "gates": {
-                # "min_trend_strength": 2.0,
-                # "allowed_supertrend_counter": False,
-                # "volatility_bands_atr_pct": {
-                #     "min": 0.8,
-                #     "ideal": 2.5,
-                #     "max": 12.0
-                # },
-                # "volatility_quality_mins": {
-                #     "MOMENTUM_BREAKOUT": 3.0,
-                #     "VOLATILITY_SQUEEZE": 5.0,
-                #     "TREND_PULLBACK": 3.5,
-                #     "default": 3
-                # },
-                # "confidence_min": 60,
-                # "adx_min": 18,
-                # "volatility_quality_min": 4.0,
-                # "trend_strength_min": 3.5,
-                # "rr_ratio_min": 1.3,
-                # "volatility_guards": {
-                #     "extreme_vol_buffer": 2.0,
-                #     "min_quality_breakout": 3.0,
-                #     "min_quality_normal": 4.0
-                # },
-                # "setup_gate_overrides": {
-                #     "QUALITY_ACCUMULATION": {
-                #         "min_trend_strength": None,  # Skip trend check
-                #         "adx_min": None,
-                #         "volatility_quality_min": 3.0
-                #     },
-                #     "QUALITY_ACCUMULATION_DOWNTREND": {
-                #         "min_trend_strength": None,
-                #         "adx_min": None,
-                #         "volatility_quality_min": 3.0
-                #     },
-                #     "DEEP_VALUE_PLAY": {
-                #         "min_trend_strength": None,
-                #         "adx_min": None,
-                #         "volatility_quality_min": 2.5
-                #     }
-                # }
-                # },
-            "gates": {
-                "adx_min": 15,
-                "min_trend_strength": 4.0,
-                "confidence_min": 60,
-                "volatility_quality_min": 4.0,
-                "volatility_guards": {
-                    "extreme_vol_buffer": 2.0,
-                    "min_quality_breakout": 3.0,
-                    "min_quality_normal": 4.0
-                },
-                "volatility_bands_atr_pct": {
-                    "min": 0.8,
-                    "ideal": 2.5,
-                    "max": 12.0
-                },
-                
-                "setup_gate_overrides": {
-                    "QUALITY_ACCUMULATION": {
-                        "volatility_quality_min": 2.5,
-                        "confidence_min": 45
+
+                "execution_rules": {
+                    "volatility_guards": {
+                        "extreme_vol_buffer": 2.5,     # Wider than intraday (1.5) to allow daily swings
+                        "min_quality_breakout": 3.0,   # Prevents entry on low-quality "wicky" breakouts
+                        "min_quality_normal": 4.5,     # Standard baseline for swing trades
+                        "enabled": True
                     },
-                    "DEEP_VALUE_PLAY": {
-                        "volatility_quality_min": 2.0,
-                        "confidence_min": 40
-                    },
-                    "VOLATILITY_SQUEEZE": {
-                        "volatility_quality_min": 6.0,  # Slightly looser than intraday
-                        "confidence_min": 55
-                    },
-                    "VALUE_TURNAROUND": {
-                        "volatility_quality_min": None,  # No vol requirement
-                        "confidence_min": 50
-                    },
-                    "GENERIC": {
-                        "volatility_quality_min": 2.5,
-                        "confidence_min": 40
+                    "structure_validation": {
+                        "breakout_clearance": 0.005,   # 0.5% clearance; avoids "false starts" on 1D charts
+                        "enabled": True
                     }
-                }
+                },
+                "opportunity": {
+                    "confidence": {"min": 60},
+                    "rrRatio": {"min": 1.4},
+                    "fundamentalScore": {"min": 3.0}
+                },
             },
+                
             "trend_thresholds": {
                 "slope": {
                     "strong": 10.0,
                     "moderate": 3.0
                 }
             },
-            "confidence": {
-                "horizon_discount": 5,
-                "floors": {"buy": 55, "wait": 30},
-                "base_floors": {
-                    "MOMENTUM_BREAKOUT": 55,
-                    "MOMENTUM_BREAKDOWN": 55,
-                    "TREND_PULLBACK": 53,
-                    "DEEP_PULLBACK": 50,
-                    "QUALITY_ACCUMULATION": 45,
-                    "VOLATILITY_SQUEEZE": 50,
-                    "TREND_FOLLOWING": 50,
-                    "BEAR_TREND_FOLLOWING": 50,
-                    "REVERSAL_MACD_CROSS_UP": 50,
-                    "REVERSAL_RSI_SWING_UP": 50,
-                    "REVERSAL_ST_FLIP_UP": 55,
-                    "SELL_AT_RANGE_TOP": 60,
-                    "TAKE_PROFIT_AT_MID": 55,
-                    "PATTERN_STRIKE_REVERSAL": 55
+            "momentum_thresholds": {
+                "rsislope": {
+                    "acceleration_floor": 0.05,
+                    "deceleration_ceiling": -0.05
                 },
-                "volume_penalty": {
-                    "rvol_drought_penalty": -20,
-                    "ignore_for_squeeze": True
+                "macd": {
+                    "acceleration_floor": 0.5,
+                    "deceleration_ceiling": -0.5
                 }
             },
-            "setup_confidence": {
-                "confidence_clamp": [35, 95],
-                "penalties": {
-                    "moderate_divergence": {
-                        "condition": "rsi_slope < -0.03",
-                        "amount": 10,
-                        "reason": "Moderate bearish RSI divergence"
-                    },
-                    "low_breakout_volume": {
-                        "condition": "setup_type == 'MOMENTUM_BREAKOUT' and rvol < 1.5",
-                        "amount": 8,
-                        "reason": "Breakout with insufficient volume"
-                    },
-                    "sideways_trend": {
-                        "condition": "trend_strength < 3.5",
-                        "amount": 15,
-                        "reason": "Weak trend - sideways risk"
-                    },
-                    "trend_setup_weak_trend": {
-                        "condition": "setup_type in ['TREND_PULLBACK', 'TREND_FOLLOWING'] and trend_strength < 4.0",
-                        "amount": 20,
-                        "reason": "Trend-following setup without strong trend"
-                    }
-                },
-                "bonuses": {
-                    "pattern_confluence": {
-                        "condition": "pattern_count >= 2",
-                        "amount": 10,
-                        "reason": "Multiple bullish patterns aligned"
-                    },
-                    "exceptional_combo": {
-                        "condition": "trend_strength >= 7.0 and momentum_strength >= 7.0",
-                        "amount": 25,
-                        "reason": "Exceptional trend + momentum synergy"
-                    },
-                    "very_strong_trend": {
-                        "condition": "trend_strength >= 7.5 and momentum_strength < 7.0",
-                        "amount": 25,
-                        "reason": "Very strong trend (standalone)"
-                    },
-                    "strong_trend": {
-                        "condition": "trend_strength >= 6.0 and trend_strength < 7.5",
-                        "amount": 20,
-                        "reason": "Strong trend confirmation"
-                    },
-                    "moderate_trend": {
-                        "condition": "trend_strength >= 4.5 and trend_strength < 6.0",
-                        "amount": 10,
-                        "reason": "Moderate trend support"
-                    }
-                }
-            },
-            "enhancements": {
-                "pattern_confluence": {
-                    "condition": "pattern_count >= 2",
-                    "amount": 12.0,
-                    "reason": "Multiple patterns confirm swing setup",
-                    "max_boost": 15.0
-                },
-                "trend_momentum_sync": {
-                    "condition": "trend_strength >= 7.0 and momentum_strength >= 7.0",
-                    "amount": 10.0,
-                    "reason": "Strong trend + momentum for swing",
-                    "max_boost": 15.0
-                },
-                "quality_pullback": {
-                    "condition": "setup_type == 'TREND_PULLBACK' and volatility_quality >= 6.0",
-                    "amount": 8.0,
-                    "reason": "Clean pullback setup",
-                    "max_boost": 12.0
-                }
-            }
         },
         
         "long_term": {
+            "timeframe": "1wk",
+            "description": "Trend Following & Investing",
+            
             "trend_thresholds": {
                 "slope": {
                     "strong": 5.0,
@@ -2092,24 +1336,22 @@ MASTER_CONFIG = {
                 }
             },
             "volume_analysis": {
-                "rvol_surge_threshold": 2.0,
-                "rvol_drought_threshold": 0.8
+                "rvol": {"surge_threshold": 2.0, "drought_threshold": 0.8}
             },
             "time_estimation": {
                 "candles_per_unit": 0.2
             },
-            "timeframe": "1wk",
-            "description": "Trend Following & Investing",
             "moving_averages": {
                 "type": "WMA",
                 "fast": 10,
                 "mid": 40,
                 "slow": 50,
-                "keys": ["wma_10", "wma_40", "wma_50"],
-                "dip_buy_reference": "wma_40"
+                "keys": ["wma10", "wma40", "wma50"],
+                "dip_buy_reference": "maMid"
             },
+            
             "momentum_thresholds": {
-                "rsi_slope": {
+                "rsislope": {
                     "acceleration_floor": 0.03,
                     "deceleration_ceiling": -0.03
                 },
@@ -2118,41 +1360,46 @@ MASTER_CONFIG = {
                     "deceleration_ceiling": -0.5
                 }
             },
+            
             "volatility": {
                 "scoring_thresholds": {
-                    "atr_pct": {
+                    "atrPct": {
                         "excellent": 5.5,
                         "good": 9.0,
                         "fair": 13.0,
                         "poor": 18.0
                     },
-                    "bb_width": {
+                    "bbWidth": {
                         "tight": 4.0,
                         "normal": 8.0,
                         "wide": 15.0
                     }
                 }
             },
+            
             "position_sizing": {
-                "base_risk_pct": 0.015  # ✅ Override: 1.5% for conviction
+                "base_risk_pct": 0.015
             },
+            
             "risk_management": {
                 "max_position_pct": 0.03,
                 "setup_size_multipliers": {"default": 1.0},
                 "atr_sl_limits": {"max_percent": 0.05, "min_percent": 0.01},
-                "min_rr_ratio": 1.5,
+                "rrRatio": {"min": 1.5},
                 "horizon_t2_cap": 0.20,
                 "rr_regime_adjustments": {
-                    "strong_trend": {"adx_min": 35, "t1_mult": 2.5, "t2_mult": 5.0},
-                    "normal_trend": {"adx_min": 20, "t1_mult": 2.0, "t2_mult": 4.0},
-                    "weak_trend": {"adx_max": 20, "t1_mult": 1.5, "t2_mult": 3.0}
-                }
+                    "strong_trend": {"adx": {"min": 35}, "t1_mult": 2.5, "t2_mult": 5.0},
+                    "normal_trend": {"adx": {"min": 20}, "t1_mult": 2.0, "t2_mult": 4.0},
+                    "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.5, "t2_mult": 3.0}
+                },
+                "rr_gates": { "min_t1": 2.0, "min_t2": 3.0, "min_structural": 4.0, "execution_floor": 1.4 }
             },
+            
             "execution": {
                 "stop_loss_atr_mult": 2.5,
                 "target_atr_mult": 5.0,
                 "max_hold_candles": 52,
-                "dip_buy_reference": "wma_40",
+                "dip_buy_reference": "maMid",
                 "risk_reward_min": 2.5,
                 "base_hold_days": 60,
                 "proximity_rejection": {
@@ -2161,256 +1408,41 @@ MASTER_CONFIG = {
                 },
                 "min_profit_pct": 1.0
             },
-            "lookback": {"python_data": 800},
-            "scoring": {
-                "fundamental_weight": 0.5,
-                "metrics": {
-                    "ma_trend_signal": 0.15,
-                    "price_vs_primary_trend_pct": 0.10,
-                    "roe": 0.10,
-                    "roce": 0.08,
-                    "roic": 0.08,
-                    "earnings_stability": 0.08,
-                    "fcf_yield": 0.08,
-                    "eps_growth_5y": 0.06,
-                    "piotroski_f": 0.05,
-                    "rel_strength_nifty": 0.04,
-                    "ma_fast_slope": 0.05,
-                    "promoter_holding": 0.05
-                },
-                "penalties": {
-                    "price_vs_primary_trend_pct": {"op": "<", "val": 0, "pen": 0.5},
-                    "roe": {"op": "<", "val": 10, "pen": 0.3},
-                    "fcf_yield": {"op": "<", "val": 2, "pen": 0.3},
-                    "promoter_pledge": {"op": ">", "val": 15.0, "pen": 0.2},
-                    "ocf_vs_profit": {"op": "<", "val": 0.6, "pen": 0.5}
-                },
-                "thresholds": {"buy": 7.5, "hold": 6.0, "sell": 4.0},
-                "metric_weights": {
-                    "roe": 0.12,
-                    "roce": 0.12,
-                    "roic": 0.10,
-                    "de_ratio": 0.05,
-                    "interest_coverage": 0.05,
-                    "eps_growth_5y": 0.12,
-                    "revenue_growth_5y": 0.10,
-                    "market_cap_cagr": 0.08,
-                    "earnings_stability": 0.06,
-                    "fcf_growth_3y": 0.05,
-                    "promoter_holding": 0.05,
-                    "institutional_ownership": 0.05,
-                    "ocf_vs_profit": 0.05
-                }
-            },
             
-            "technical_weight_overrides": {
-                "trend_strength": 1.4,
-                "adx": 1.3,
-                "ma_trend_signal": 1.3,
-                "price_vs_200dma_pct": 1.4,
-                "price_vs_primary_trend_pct": 1.3,
-                "dma_200_slope": 1.3,
-                "ma_cross_signal": 1.2,
-                "ichi_cloud": 1.2,
-                "rel_strength_nifty": 1.2,
-                "supertrend_signal": 1.1,
-                "psar_trend": 1.1,
-                "rsi": 0.8,
-                "rsi_slope": 0.7,
-                "stoch_k": 0.7,
-                "macd_hist_z": 0.8,
-                "vol_spike_signal": 0.6,
-                "rvol": 0.7,
-                "vol_spike_ratio": 0.6,
-                "vwap_bias": 0.5,
-                "gap_percent": 0.6,
-                "wick_rejection": 0.7,
-                "bb_percent_b": 0.7,
-                "momentum_strength": 0.9,
-                "volatility_quality": 1.1
-            },
-            # Gates # RR ratio is validated during trade plan construction, not gate phase
-            # "gates": {
-            #     "min_trend_strength": 3.0,
-            #     "allowed_supertrend_counter": False,
-            #     "volatility_bands_atr_pct": {
-            #         "min": 1.0,
-            #         "ideal": 5.5,
-            #         "max": 15.0
-            #     },
-            #     "volatility_quality_mins": {
-            #         "MOMENTUM_BREAKOUT": 4.0,
-            #         "VOLATILITY_SQUEEZE": 6.0,
-            #         "TREND_PULLBACK": 4.5,
-            #         "default": 4
-            #     },
-            #     "confidence_min": 65,
-            #     "adx_min": 20,
-            #     "volatility_quality_min": 5.0,
-            #     "trend_strength_min": 5.0,
-            #     "rr_ratio_min": 1.5,
-            #     "volatility_guards": {
-            #         "extreme_vol_buffer": 3.0,
-            #         "min_quality_breakout": 4.0,
-            #         "min_quality_normal": 5.0
-            #     },
-            #     "setup_gate_overrides": {
-            #         "QUALITY_ACCUMULATION": {
-            #             "min_trend_strength": None,
-            #             "adx_min": None,
-            #             "volatility_quality_min": 3.0
-            #         },
-            #         "QUALITY_ACCUMULATION_DOWNTREND": {
-            #             "min_trend_strength": None,
-            #             "adx_min": None,
-            #             "volatility_quality_min": 3.0
-            #         },
-            #         "DEEP_VALUE_PLAY": {
-            #             "min_trend_strength": None,
-            #             "adx_min": None,
-            #             "volatility_quality_min": 2.5
-            #         },
-            #         "VALUE_TURNAROUND": {
-            #             "min_trend_strength": 3.0,  # Only require weak trend
-            #             "adx_min": 15
-            #         }
-            #     },
-            # },
-            "gates": {
-                "adx_min": None,  # Very relaxed for long-term
-                "min_trend_strength": 3.0,
-                "confidence_min": 55,
-                "volatility_quality_min": None,  # Skip volatility checks
-                "volatility_guards": {
-                        "extreme_vol_buffer": 3.0,
-                        "min_quality_breakout": 4.0,
-                        "min_quality_normal": 5.0
-                    },
-                "volatility_bands_atr_pct": {
-                    "min": 1.0,
-                    "ideal": 5.5,
-                    "max": 15.0
+            "lookback": {"python_data": 800},
+            
+            "entry_gates": {
+                "structural": {
+                    "adx": {"min": None},
+                    "atrPct": {"min": 1.0},
+                    "trendStrength": {"min": 3.0},
+                    "volatilityQuality": {"min": None}
                 },
+                "execution_rules": {
+                    "volatility_guards": {
+                        "extreme_vol_buffer": 4.0,     # Very loose; long-term trends often start with high vol
+                        "min_quality_breakout": 4.0,   # Ensures the weekly breakout has some substance
+                        "enabled": True
+                    },
+                    "structure_validation": {
+                        "breakout_clearance": 0.01,    # Requires a full 1% move above resistance to confirm
+                        "enabled": True
+                    }
+                },
+                "opportunity": {
+                    "confidence": {"min": 55},
+                    "rrRatio": {"min": 1.5},
+                    "fundamentalScore": {"min": 6.0},
+                    "technicalScore": {"min": None}
+                },
+            },
                 
-                "setup_gate_overrides": {
-                    "QUALITY_ACCUMULATION": {
-                        "adx_min": None,
-                        "min_trend_strength": None,
-                        "volatility_quality_min": None,
-                        "confidence_min": None  # ✅ Skip all gates
-                    },
-                    "DEEP_VALUE_PLAY": {
-                        "volatility_quality_min": None,
-                        "confidence_min": 35  # Very patient
-                    },
-                    "VALUE_TURNAROUND": {
-                        "adx_min": 8,  # Override universal 15 - lower for value
-                        # min_trend_strength: inherits 3.0 from global - no override needed
-                        "volatility_quality_min": None,
-                        "confidence_min": 45
-                    },
-                    "MOMENTUM_BREAKOUT": {
-                        "min_trend_strength": 4.5,  # Relax from universal 5.0
-                        "volatility_quality_min": None,
-                        "confidence_min": 50
-                    },
-                    "GENERIC": {
-                        "volatility_quality_min": None,
-                        "confidence_min": 35
-                    }
-                }
-            },
-            "confidence": {
-                "horizon_discount": 0,
-                "floors": {"buy": 60, "wait": 40},
-                "base_floors": {
-                    "MOMENTUM_BREAKOUT": 60,
-                    "MOMENTUM_BREAKDOWN": 60,
-                    "TREND_PULLBACK": 58,
-                    "DEEP_PULLBACK": 55,
-                    "QUALITY_ACCUMULATION": 55,
-                    "VOLATILITY_SQUEEZE": 55,
-                    "TREND_FOLLOWING": 55,
-                    "BEAR_TREND_FOLLOWING": 55,
-                    "REVERSAL_MACD_CROSS_UP": 55,
-                    "REVERSAL_RSI_SWING_UP": 55,
-                    "REVERSAL_ST_FLIP_UP": 60
-                },
-                "volume_penalty": {
-                    "rvol_drought_penalty": -10,
-                    "ignore_for_squeeze": True
-                }
-            },
-            "setup_confidence": {
-                "confidence_clamp": [40, 98],
-                "penalties": {
-                    "poor_fundamentals": {
-                        "condition": "roe < 15 or roce < 15",
-                        "amount": 15,
-                        "reason": "Weak fundamentals for long-term hold"
-                    },
-                    "high_debt": {
-                        "condition": "de_ratio > 1.0",
-                        "amount": 12,
-                        "reason": "High leverage risk"
-                    },
-                    "moderate_weak_trend": {
-                        "condition": "trend_strength >= 4.5 and trend_strength < 5.5",
-                        "amount": 10,
-                        "reason": "Moderate trend weakness for long-term"
-                    },
-                    "very_weak_trend": {
-                        "condition": "trend_strength < 4.5",
-                        "amount": 20,
-                        "reason": "Very weak trend - unstable for long-term hold"
-                    }
-                },
-                "bonuses": {
-                    "high_quality_compounder": {
-                        "condition": "roe >= 20 and roce >= 25 and eps_growth_5y >= 15",
-                        "amount": 15,
-                        "reason": "High-quality long-term compounder"
-                    },
-                    "stable_growth": {
-                        "condition": "earnings_stability >= 7.0 and revenue_growth_5y >= 10",
-                        "amount": 10,
-                        "reason": "Stable earnings and revenue growth"
-                    },
-                    "exceptional_trend": {
-                        "condition": "trend_strength >= 8.0",
-                        "amount": 25,
-                        "reason": "Exceptional sustained trend"
-                    },
-                    "strong_trend": {
-                        "condition": "trend_strength >= 6.5",
-                        "amount": 20,
-                        "reason": "Strong sustained trend"
-                    }
-                }
-            },
-            "enhancements": {
-                "quality_fundamentals": {
-                    "condition": "roe >= 20 and roce >= 25",
-                    "amount": 15.0,
-                    "reason": "High-quality company for trend trade",
-                    "max_boost": 20.0
-                },
-                "earnings_acceleration": {
-                    "condition": "quarterly_growth >= 15 and eps_growth_5y >= 15",
-                    "amount": 12.0,
-                    "reason": "Consistent earnings growth",
-                    "max_boost": 15.0
-                },
-                "institutional_interest": {
-                    "condition": "institutional_ownership >= 25 and institutional_ownership <= 75",
-                    "amount": 8.0,
-                    "reason": "Smart money accumulating",
-                    "max_boost": 10.0
-                }
-            }
+            # ❌ REMOVED: enhancements section (migrated to confidence_config.py)
         },
         
         "multibagger": {
+            "timeframe": "1mo",
+            "description": "Deep Value & Compounders",
             "trend_thresholds": {
                 "slope": {
                     "strong": 30.0,
@@ -2418,21 +1450,18 @@ MASTER_CONFIG = {
                 }
             },
             "volume_analysis": {
-                "rvol_surge_threshold": 1.8,
-                "rvol_drought_threshold": 0.8
+                "rvol": {"surge_threshold": 1.8, "drought_threshold": 0.8}
             },
             "time_estimation": {
                 "candles_per_unit": 0.05
             },
-            "timeframe": "1mo",
-            "description": "Deep Value & Compounders",
             "moving_averages": {
                 "type": "MMA",
                 "fast": 6,
                 "mid": 12,
                 "slow": 12,
-                "keys": ["mma_6", "mma_12", "mma_12"],
-                "dip_buy_reference": "mma_12"
+                "keys": ["mma6", "mma12", "mma12"],
+                "dip_buy_reference": "maSlow"
             },
             "indicators": {
                 "rsi_period": 14,
@@ -2451,7 +1480,7 @@ MASTER_CONFIG = {
                 }
             },
             "momentum_thresholds": {
-                "rsi_slope": {
+                "rsislope": {
                     "acceleration_floor": 0.02,
                     "deceleration_ceiling": -0.02
                 },
@@ -2462,13 +1491,13 @@ MASTER_CONFIG = {
             },
             "volatility": {
                 "scoring_thresholds": {
-                    "atr_pct": {
+                    "atrPct": {
                         "excellent": 11.5,
                         "good": 18.0,
                         "fair": 27.0,
                         "poor": 36.0
                     },
-                    "bb_width": {
+                    "bbWidth": {
                         "tight": 6.0,
                         "normal": 12.0,
                         "wide": 20.0
@@ -2476,25 +1505,26 @@ MASTER_CONFIG = {
                 }
             },
             "position_sizing": {
-                "base_risk_pct": 0.02  # ✅ Override: 2.0% for moonshots
+                "base_risk_pct": 0.02
             },
             "risk_management": {
                 "max_position_pct": 0.05,
                 "setup_size_multipliers": {"QUALITY_ACCUMULATION": 1.5},
                 "atr_sl_limits": {"max_percent": 0.10, "min_percent": 0.02},
-                "min_rr_ratio": 2.0,
+                "rrRatio": {"min": 2.0},
                 "horizon_t2_cap": 1.00,
                 "rr_regime_adjustments": {
-                    "strong_trend": {"adx_min": 30, "t1_mult": 3.0, "t2_mult": 10.0},
-                    "normal_trend": {"adx_min": 20, "t1_mult": 2.5, "t2_mult": 8.0},
-                    "weak_trend": {"adx_max": 20, "t1_mult": 2.0, "t2_mult": 6.0}
-                }
+                    "strong_trend": {"adx": {"min": 30}, "t1_mult": 3.0, "t2_mult": 10.0},
+                    "normal_trend": {"adx": {"min": 20}, "t1_mult": 2.5, "t2_mult": 8.0},
+                    "weak_trend": {"adx": {"max": 20}, "t1_mult": 2.0, "t2_mult": 6.0}
+                },
+                "rr_gates": { "min_t1": 2.5, "min_t2": 4.0, "min_structural": 5.0, "execution_floor": 1.5 }
             },
             "execution": {
                 "stop_loss_atr_mult": 3.0,
                 "target_atr_mult": 10.0,
                 "max_hold_candles": 60,
-                "dip_buy_reference": "mma_12",
+                "dip_buy_reference": "maSlow",
                 "risk_reward_min": 3.0,
                 "base_hold_days": 180,
                 "proximity_rejection": {
@@ -2504,246 +1534,49 @@ MASTER_CONFIG = {
                 "min_profit_pct": 2.0
             },
             "lookback": {"python_data": 3000},
-            "technical_weight_overrides": {
-                "trend_strength": 1.5,
-                "adx": 1.5,
-                "ma_trend_signal": 1.6,
-                "price_vs_200dma_pct": 1.6,
-                "price_vs_primary_trend_pct": 1.5,
-                "dma_200_slope": 1.5,
-                "ma_cross_signal": 1.4,
-                "ichi_cloud": 1.3,
-                "rel_strength_nifty": 1.4,
-                "nifty_trend_score": 1.2,
-                "rsi": 0.5,
-                "rsi_slope": 0.4,
-                "stoch_k": 0.4,
-                "macd_cross": 0.6,
-                "macd_hist_z": 0.5,
-                "vol_spike_signal": 0.4,
-                "rvol": 0.5,
-                "vol_spike_ratio": 0.4,
-                "vol_trend": 0.5,
-                "vwap_bias": 0.3,
-                "gap_percent": 0.4,
-                "price_action": 0.5,
-                "wick_rejection": 0.5,
-                "bb_percent_b": 0.5,
-                "ttm_squeeze": 0.6,
-                "momentum_strength": 0.7,
-                "volatility_quality": 1.2
-            },
-            "scoring": {
-                "metric_weights": {
-                    # Quality metrics (highest weight)
-                    "roe": 0.12,
-                    "roce": 0.12,
-                    "roic": 0.10,
-                    
-                    # Debt & efficiency
-                    "de_ratio": 0.05,
-                    "interest_coverage": 0.05,
-                    
-                    # Growth metrics
-                    "eps_growth_5y": 0.12,
-                    "revenue_growth_5y": 0.10,
-                    "market_cap_cagr": 0.08,
-                    "fcf_growth_3y": 0.05,
-                    
-                    # Stability & consistency
-                    "earnings_stability": 0.06,
-                    
-                    # Ownership & quality signals
-                    "promoter_holding": 0.05,
-                    "institutional_ownership": 0.05,
-                    "ocf_vs_profit": 0.05,
-                    
-                    # Trend (technical component - 30% total)
-                    "trend_strength": 0.04,
-                    "ma_trend_signal": 0.04,
-                    "price_vs_200dma_pct": 0.04,
-                    "rel_strength_nifty": 0.03
+            "entry_gates": {
+                "structural": {
+                    "adx": {"min": None},
+                    "atrPct": {"min": 1.0},
+                    "trendStrength": {"min": 3.0},
+                    "volatilityQuality": {"min": None}
                 },
-                "penalties": {
-                    "price_vs_primary_trend_pct": {"op": "<", "val": 0, "pen": 0.5},
-                    "roe": {"op": "<", "val": 10, "pen": 0.3},
-                    "fcf_yield": {"op": "<", "val": 2, "pen": 0.3},
-                    "promoter_pledge": {"op": ">", "val": 15.0, "pen": 0.2},
-                    "ocf_vs_profit": {"op": "<", "val": 0.6, "pen": 0.5}
+                "execution_rules": {
+                    "volatility_guards": {"enabled": False},
+                    "sl_distance_validation": {"enabled": False}, 
+                    "structure_validation": {"enabled": False} 
                 },
-                "thresholds": {
-                    "buy": 7.5,
-                    "hold": 6.0,
-                    "sell": 4.0
-                }
-            },    
-            # Gates - focus on quality
-            # "gates": {
-            #     "min_trend_strength": None,
-            #     "allowed_supertrend_counter": False,
-            #     "volatility_bands_atr_pct": {
-            #         "min": 1.5,
-            #         "ideal": 8.0,
-            #         "max": 25.0
-            #     },
-            #     "volatility_quality_mins": {
-            #         "MOMENTUM_BREAKOUT": 5.0,
-            #         "VOLATILITY_SQUEEZE": 7.0,
-            #         "TREND_PULLBACK": 5.0,
-            #         "default": 4.5
-            #     },
-            #     "confidence_min": 70,
-            #     "adx_min": 25,
-            #     "volatility_quality_min": 6.0,
-            #     "trend_strength_min": 6.0,
-            #     "rr_ratio_min": 1.5,
-            #     "volatility_guards": {
-            #         "extreme_vol_buffer": 4.0,
-            #         "min_quality_breakout": 5.0,
-            #         "min_quality_normal": 6.0
-            #     },
-            #     "setup_gate_overrides": {
-            #         "QUALITY_ACCUMULATION": {
-            #             "volatility_quality_min": 2.5
-            #         },
-            #         "QUALITY_ACCUMULATION_DOWNTREND": {
-            #             "volatility_quality_min": 2.5
-            #         },
-            #         "DEEP_VALUE_PLAY": {
-            #             "volatility_quality_min": 2.0
-            #         }
-            #     },
-            # },
-            "gates": {
-                "adx_min": None,
-                "min_trend_strength": 3.0,
-                "confidence_min": 60,  # Higher for multi-year commitment
-                "volatility_quality_min": None,
-                "volatility_guards": {
-                    "extreme_vol_buffer": 4.0,
-                    "min_quality_breakout": 5.0,
-                    "min_quality_normal": 6.0
-                },
-                "volatility_bands_atr_pct": {
-                    "min": 1.0,
-                    "ideal": 6.0,
-                    "max": 20.0
+                "opportunity": {
+                    "confidence": {"min": 60},
+                    "rrRatio": {"min": 2.0},
+                    "fundamentalScore": {"min": 8.0},
+                    "hybridScore": {"min": None}
                 },
                 
-                "setup_gate_overrides": {
-                    "QUALITY_ACCUMULATION": {
-                        "confidence_min": 60  # Higher conviction needed
-                    },
-                    "DEEP_VALUE_PLAY": {
-                        "confidence_min": 55
-                    },
-                    "VALUE_TURNAROUND": {
-                        "confidence_min": 65  # Highest conviction
-                    },
-                    "GENERIC": {
-                        "confidence_min": 40
-                    }
-                }
-            },
-            "confidence": {
-                "horizon_discount": 0,
-                "floors": {"buy": 65, "wait": 50},
-                "base_floors": {
-                    "MOMENTUM_BREAKOUT": 65,
-                    "MOMENTUM_BREAKDOWN": 65,
-                    "TREND_PULLBACK": 60,
-                    "DEEP_PULLBACK": 58,
-                    "QUALITY_ACCUMULATION": 60,
-                    "VOLATILITY_SQUEEZE": 60,
-                    "TREND_FOLLOWING": 60,
-                    "BEAR_TREND_FOLLOWING": 60,
-                    "REVERSAL_MACD_CROSS_UP": 60,
-                    "REVERSAL_RSI_SWING_UP": 60,
-                    "REVERSAL_ST_FLIP_UP": 65
-                },
-                "volume_penalty": {
-                    "rvol_drought_penalty": -5,
-                    "ignore_for_squeeze": True
-                }
-            },
-            "setup_confidence": {
-                "confidence_clamp": [45, 99],
-                "penalties": {
-                    "insufficient_growth": {
-                        "condition": "eps_growth_5y < 15 or revenue_growth_5y < 15",
-                        "amount": 20,
-                        "reason": "Growth too low for multibagger profile"
-                    },
-                    "weak_quality": {
-                        "condition": "roe < 15 or roce < 18",
-                        "amount": 30,
-                        "reason": "Insufficient quality for multibagger thesis"
-                    },
-                    "high_leverage": {
-                        "condition": "de_ratio > 1.2",
-                        "amount": 20,
-                        "reason": "High debt risk for long-term hold"
-                    },
-                    "bearish_trend": {
-                        "condition": "trend_strength < 3.0 and momentum_strength < 3.0",
-                        "amount": 25,
-                        "reason": "Bearish trend - wait for reversal"
-                    }
-                },
-                "bonuses": {
-                    "exceptional_quality_growth": {
-                        "condition": "roe >= 25 and roce >= 30 and eps_growth_5y >= 20 and revenue_growth_5y >= 20",
-                        "amount": 20,
-                        "reason": "Exceptional quality + growth combo"
-                    },
-                    "early_stage_leader": {
-                        "condition": "rel_strength_nifty >= 1.2 and market_cap_cagr >= 25",
-                        "amount": 15,
-                        "reason": "Outperforming market with strong cap growth"
-                    },
-                    "mega_trend": {
-                        "condition": "trend_strength >= 8.5 and roe >= 25",
-                        "amount": 30,
-                        "reason": "Mega trend with quality fundamentals"
-                    },
-                    "strong_trend": {
-                        "condition": "trend_strength >= 7.0 and trend_strength < 8.5",
-                        "amount": 25,
-                        "reason": "Strong multi-year trend"
-                    },
-                    "quality_emerging_trend": {
-                        "condition": "trend_strength >= 5.0 and trend_strength < 7.0 and roe >= 25 and eps_growth_5y >= 15",
-                        "amount": 20,
-                        "reason": "Quality company with emerging trend - ideal multibagger entry"
-                    }
-                }
-            },
-            "enhancements": {
-                "quality_technical_setup": {
-                    "condition": "setup_type == 'QUALITY_ACCUMULATION' and trend_strength >= 4.0",
-                    "amount": 20.0,
-                    "reason": "Quality stock in early accumulation",
-                    "max_boost": 25.0
-                },
-                "growth_combo": {
-                    "condition": "eps_growth_5y >= 25 and market_cap_cagr >= 25",
-                    "amount": 18.0,
-                    "reason": "Consistent compounding + price performance",
-                    "max_boost": 20.0
-                },
-                "moat_indicators": {
-                    "condition": "roic >= 20 and roe >= 25 and de_ratio < 0.3",
-                    "amount": 15.0,
-                    "reason": "Economic moat indicators present",
-                    "max_boost": 20.0
-                },
-                "undiscovered_gem": {
-                    "condition": "institutional_ownership < 15 and market_cap < 10000",
-                    "amount": 12.0,
-                    "reason": "Under-the-radar quality stock",
-                    "max_boost": 15.0
-                }
-            }
+                # ❌ REMOVED: setup_gate_overrides
+          # ❌ REMOVED: enhancements section (migrated to confidence_config.py)
         }
     }
+    }
 }
+
+# ============================================================================
+# SUMMARY OF CHANGES:
+# ============================================================================
+# ❌ REMOVED FROM MASTER_CONFIG:
+#    - global.entry_gates.setup_gate_specifications (entire section)
+#    - horizons.*.entry_gates.setup_gate_overrides (from all horizons)
+#
+# ✅ KEPT IN MASTER_CONFIG:
+#    - global.entry_gates.structural (universal baseline)
+#    - global.entry_gates.execution_rules (complex validation logic)
+#    - global.entry_gates.opportunity (post-confidence gates)
+#    - horizons.*.entry_gates (horizon-specific defaults)
+#
+# 📦 MOVED TO setup_pattern_matrix.py:
+#    - Setup-specific gate requirements
+#    - Horizon-specific setup overrides
+# ============================================================================
+
+
+
