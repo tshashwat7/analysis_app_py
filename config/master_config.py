@@ -111,7 +111,7 @@ HYBRID_PILLAR_COMPOSITION = {
     "intraday":    {"trendConsistency": 0.40, "priceVsPrimaryTrendPct": 0.20, "fundamentalMomentum": 0.15, "earningsConsistencyIndex": 0.10, "volatilityAdjustedRoe": 0.05, "priceToIntrinsicValue": 0.05, "fcfYieldVsVolatility": 0.05},
     "short_term":  {"trendConsistency": 0.25, "fundamentalMomentum": 0.15, "volatilityAdjustedRoe": 0.15, "priceVsPrimaryTrendPct": 0.15, "earningsConsistencyIndex": 0.10, "priceToIntrinsicValue": 0.10, "fcfYieldVsVolatility": 0.10},
     "long_term":   {"volatilityAdjustedRoe": 0.20, "priceToIntrinsicValue": 0.20, "earningsConsistencyIndex": 0.15, "fcfYieldVsVolatility": 0.15, "fundamentalMomentum": 0.10, "trendConsistency": 0.10, "priceVsPrimaryTrendPct": 0.10},
-    "multibagger": {"fundamentalMomentum": 0.20, "earningsConsistencyIndex": 0.20, "volatilityAdjustedRoe": 0.20, "fcfYieldVsVolatility": 0.15, "priceToIntrinsicValue": 0.15, "trendConsistency": 0.05, "priceVsPrimaryTrendPct": 0.05}
+    "multibagger": {"fundamentalMomentum": 0.25, "earningsConsistencyIndex": 0.25, "priceToIntrinsicValue": 0.20, "fcfYieldVsVolatility": 0.15, "trendConsistency": 0.10, "priceVsPrimaryTrendPct": 0.05}
 }
 
 # STEP 6 LAYER: Global Arbitration (Blueprint)
@@ -172,6 +172,13 @@ GATE_METRIC_REGISTRY = {
         "validation_type": "threshold",
         "description": "RSI momentum indicator",
         "context_paths": [("indicators", "rsi")]
+    },
+    "rsislope": {
+        "type": "numeric",
+        "category": "momentum",
+        "validation_type": "threshold",
+        "description": "RSI slope indicator",
+        "context_paths": [("indicators", "rsislope")]
     },
     
     "macdhistogram": {
@@ -804,6 +811,7 @@ MASTER_CONFIG = {
         },
         
         "risk_management": {
+            "risk_per_trade": 500,
             "max_position_pct": 0.02,
             "setup_size_multipliers": {"default": 1.0},
             "atr_sl_limits": {"max_percent": 0.05, "min_percent": 0.01},

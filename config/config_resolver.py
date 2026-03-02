@@ -1520,11 +1520,17 @@ class ConfigResolver:
         - Math functions (abs, min, max, round)
         - Operators (and, or)
         - Numeric literals
+        - Tokens inside string literals (e.g. 'Squeeze On')
         """
         import re
         
+        # Remove quoted string literals before tokenizing
+        # This prevents 'Squeeze On' from being split into variable tokens
+        cleaned = re.sub(r"'[^']*'", '', condition)
+        cleaned = re.sub(r'"[^"]*"', '', cleaned)
+        
         # Extract all word-like tokens
-        all_tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', condition)
+        all_tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', cleaned)
         
         # Filter out math functions and operators
         excluded = {'abs', 'min', 'max', 'round', 'and', 'or', 'true', 'false', 'True', 'False'}
@@ -2977,8 +2983,9 @@ class ConfigResolver:
         sl_dist = ensure_numeric(ctx["indicators"].get("slDistance"))
 
         risk_cfg = self.extractor.get_risk_management_config()
-        atr_mult = risk_cfg.get("stop_loss_atr_mult", 2.0)
-        target_mult = risk_cfg.get("target_atr_mult", 3.0)
+        exec_cfg = self.extractor.get_execution_rules()
+        atr_mult = exec_cfg.get("stop_loss_atr_mult", 2.0)
+        target_mult = exec_cfg.get("target_atr_mult", 3.0)
 
         rr = None
         rr_source = None
@@ -3003,7 +3010,9 @@ class ConfigResolver:
 
             if pdata.get("found"):
                 pattern_targets = self._calculate_pattern_targets(
-                    primary, pdata, ctx["price_data"]
+                    primary, pdata, ctx["price_data"],
+                    indicators=ctx.get("indicators", {}),
+                    horizon=self.horizon
                 )
 
                 if pattern_targets:
@@ -3897,108 +3906,431 @@ class ConfigResolver:
         self,
         pattern_name: str,
         pattern_data: Dict,
-        price_data: Dict
+        price_data: Dict,
+        indicators: Optional[Dict] = None,
+        horizon: str = "short_term"
     ) -> Optional[Dict[str, float]]:
-        """✅ Calculate pattern-based targets using extractor."""
+        """
+        Pattern-first target calculation with structured fallback chain.
+
+        PRIORITY ORDER (per pattern):
+        1. Pattern structural levels  — from detector meta (rim, box_high, neckline, etc.)
+        2. Ichimoku / MA geometry     — from live indicators (tenkan, kijun, cloud)
+        3. slAtrDynamic SL            — from indicators (pre-calculated, horizon-aware)
+        4. atrDynamic fallback        — last resort, tagged with source="atr_fallback"
+
+        DESIGN RULES:
+        - SL is always derived from the pattern's own invalidation level, not a
+        generic ATR multiple. ATR is only used when no structural level exists.
+        - T1 and T2 are measured-move projections from the structural depth,
+        not arbitrary multiples of ATR.
+        - slAtrDynamic (from indicators) is preferred over atrDynamic * mult
+        because it is already calculated with horizon-aware lookback.
+        - All returned prices are validated: SL < entry < T1 < T2.
+        - source tag is always included for observability.
+
+        Args:
+            pattern_name:  Pattern key (e.g. "ichimokuSignals", "darvasBox")
+            pattern_data:  Full pattern dict from eval_ctx["patterns"][pattern_name]
+            price_data:    eval_ctx["price_data"]  (price, resistance, support, BB levels, etc.)
+            indicators:    eval_ctx["indicators"]  (atrDynamic, slAtrDynamic, ichiTenkan, etc.)
+            horizon:       Active trading horizon
+
+        Returns:
+            {
+                "entry": float,
+                "stop_loss": float,
+                "t1": float,
+                "t2": float,
+                "depth": float,         # structural depth used (for RR calculation)
+                "pattern": str,
+                "source": str,          # "structural" | "geometry" | "atr_fallback"
+                "sl_source": str,       # "pattern_low" | "slAtrDynamic" | "atrDynamic"
+                "t_source": str,        # "measured_move" | "resistance" | "atr_projection"
+            }
+            Returns None only if entry price is missing or zero.
+        """
         try:
             meta = pattern_data.get("raw", {}).get("meta", {})
-            entry = price_data.get("price", 0)
-            
+            entry = _safe_float(price_data.get("price", 0))
+
             if not entry:
                 return None
-            
-            # ✅ Get pattern physics via extractor
-            pattern_ctx = self.extractor.get_pattern_context(pattern_name)
-            if not pattern_ctx:
-                return None
-            
-            target_ratio = pattern_ctx.physics.get("target_ratio", 1.0)
-            
-            # Calculate depth (pattern-specific)
-            depth = None
-            stop_loss = None
-            
-            if pattern_name == "darvasBox":
-                box_high = meta.get("box_high")
-                box_low = meta.get("box_low")
-                if box_high and box_low:
-                    if box_low >= box_high:
-                        self.logger.warning(
-                            f"Invalid Darvas box geometry: low={box_low} >= high={box_high}"
-                        )
-                        return None
-                    depth = box_high - box_low
-                    stop_loss = box_low * 0.995
-            
-            elif pattern_name == "cupHandle":
-                rim = meta.get("rim_level")
-                depth_pct = meta.get("depth_pct")
-                handle_low = meta.get("handle_low") # Check if your detector provides this
-                
-                if rim and depth_pct:
-                    depth = rim * (depth_pct / 100.0)
-                    # Fix: If detector gives handle_low, use it. Otherwise, use handle depth.
-                    if handle_low:
-                        stop_loss = handle_low * 0.99
-                    else:
-                        # Fallback: SL at 30% of cup depth (standard handle area)
-                        stop_loss = rim - (depth * 0.3)
-            
-            elif pattern_name == "flagPennant":
-                pole_pct = meta.get("pole_gain_pct")
-                if pole_pct:
-                    depth = entry * (pole_pct / 100.0)
-                    stop_loss = meta.get("flag_low") or (entry * 0.98)
-            
-            elif pattern_name == "doubleTopBottom":
-                target = meta.get("target")
-                neckline = meta.get("neckline")
-                if target and neckline:
-                    return {
-                        "entry": entry,
-                        "stop_loss": neckline * 0.99,
-                        "t1": target,
-                        "t2": target * 1.5,
-                        "depth": abs(target - neckline),
-                        "pattern": pattern_name
-                    }
-            
-            else:
-                # For GoldenCross, Ichimoku, etc., use ATR-based stop or recent swing
-                # This ensures the Signal Engine always has a Risk/Reward to display
-                atrDynamic = price_data.get("atrDynamic", entry * 0.02)
-                depth = atrDynamic * 3.0 # Default "reward" expectation
-                stop_loss = entry - (atrDynamic * 2.0) # Default 2x ATR Stop
-            # Calculate targets if depth resolved
-            if depth and entry:
-                t1 = round(entry + (depth * target_ratio), 2)
-                t2 = round(entry + (depth * target_ratio * 2), 2)
-                
-                return {
-                    "entry": _safe_float(entry),
-                    "stop_loss": _safe_float(stop_loss),
-                    "t1": _safe_float(t1),
-                    "t2": _safe_float(t2),
-                    "depth": _safe_float(depth),
-                    "pattern": pattern_name
-                }
-            
-            # ATR-based fallback (adapts to stock's actual volatility)
-            atr_fallback = price_data.get("atrDynamic", entry * 0.02)
-            return {
-                "entry": _safe_float(entry),
-                "stop_loss": _safe_float(entry - (atr_fallback * 1.5)),
-                "t1": _safe_float(entry + (atr_fallback * 2.0)),
-                "t2": _safe_float(entry + (atr_fallback * 4.0)),
-                "depth": _safe_float(atr_fallback * 2.0),
-                "pattern": pattern_name,
-                "source": "atr_fallback"
-            }
-        
-        except Exception as e:
-            self.logger.error(f"Pattern target calculation failed: {e}")
-            return None
 
+            # ── Helper: resolve SL from slAtrDynamic or atrDynamic ──────────────
+            ind = indicators or {}
+
+            def _sl_from_atr(mult: float = 2.0) -> tuple:
+                """Returns (sl_price, sl_source)."""
+                sl_atr = _safe_float(ind.get("slAtrDynamic"))
+                if sl_atr and sl_atr > 0:
+                    return round(entry - sl_atr, 2), "slAtrDynamic"
+                atr = _safe_float(price_data.get("atrDynamic") or ind.get("atrDynamic"))
+                if atr and atr > 0:
+                    return round(entry - (atr * mult), 2), f"atrDynamic*{mult}"
+                return round(entry * 0.97, 2), "pct_fallback_3pct"
+
+            def _validate_and_build(
+                sl: float, t1: float, t2: float,
+                depth: float, source: str, sl_source: str, t_source: str
+            ) -> Optional[Dict]:
+                """Validates geometry and returns result dict or None."""
+                if sl >= entry:
+                    self.logger.warning(
+                        f"[{pattern_name}] SL {sl} >= entry {entry} — using ATR fallback"
+                    )
+                    return None
+                if t1 <= entry:
+                    self.logger.warning(
+                        f"[{pattern_name}] T1 {t1} <= entry {entry} — skipping"
+                    )
+                    return None
+                if t2 <= t1:
+                    t2 = round(t1 + (t1 - entry), 2)  # extend by same delta
+                return {
+                    "entry":     _safe_float(entry),
+                    "stop_loss": _safe_float(sl),
+                    "t1":        _safe_float(t1),
+                    "t2":        _safe_float(t2),
+                    "depth":     _safe_float(depth),
+                    "pattern":   pattern_name,
+                    "source":    source,
+                    "sl_source": sl_source,
+                    "t_source":  t_source,
+                }
+
+            # ════════════════════════════════════════════════════════════════════
+            # PATTERN-SPECIFIC STRUCTURAL TARGETS
+            # ════════════════════════════════════════════════════════════════════
+
+            # ── darvasBox ────────────────────────────────────────────────────────
+            # Physics: T1 = entry + 2x box depth, T2 = entry + 4x box depth
+            # SL: below box_low (breakout level is box_high)
+            if pattern_name == "darvasBox":
+                box_high = _safe_float(meta.get("box_high"))
+                box_low  = _safe_float(meta.get("box_low"))
+                if box_high and box_low and box_low < box_high:
+                    depth = box_high - box_low
+                    if depth <= 0:
+                        self.logger.warning(f"[darvasBox] Invalid depth {depth}")
+                        return None
+                    sl = round(box_low * 0.995, 2)          # 0.5% below box floor
+                    t1 = round(entry + depth * 2.0, 2)      # 2x measured move
+                    t2 = round(entry + depth * 4.0, 2)      # 4x measured move
+                    result = _validate_and_build(sl, t1, t2, depth,
+                        source="structural", sl_source="box_low", t_source="measured_move")
+                    if result:
+                        return result
+
+            # ── cupHandle ────────────────────────────────────────────────────────
+            # Physics: T1 = rim + cup_depth (full measured move from cup)
+            # SL: below handle_low if available, else just below rim (breakout level)
+            # NOTE: if already above rim (as in this GESHIP case), T1 is still
+            #       rim + cup_depth projected from the breakout, not from current price.
+            elif pattern_name == "cupHandle":
+                rim        = _safe_float(meta.get("rim_level"))
+                depth_pct  = _safe_float(meta.get("depth_pct"))
+                handle_low = _safe_float(meta.get("handle_low"))
+                cup_low    = _safe_float(meta.get("cup_low"))
+
+                if rim and depth_pct:
+                    cup_depth = rim * (depth_pct / 100.0)
+
+                    # SL priority: handle_low → cup_low → rim * 0.99
+                    if handle_low and handle_low < entry:
+                        sl = round(handle_low * 0.99, 2)
+                        sl_src = "handle_low"
+                    elif cup_low and cup_low < entry:
+                        sl = round(cup_low * 0.99, 2)
+                        sl_src = "cup_low"
+                    else:
+                        sl = round(rim * 0.99, 2)
+                        sl_src = "rim_level"
+
+                    # T1 = rim + cup_depth (classic measured move)
+                    # T2 = rim + cup_depth * 1.618 (Fibonacci extension)
+                    t1 = round(rim + cup_depth, 2)
+                    t2 = round(rim + cup_depth * 1.618, 2)
+
+                    result = _validate_and_build(sl, t1, t2, cup_depth,
+                        source="structural", sl_source=sl_src, t_source="measured_move")
+                    if result:
+                        return result
+
+            # ── flagPennant ───────────────────────────────────────────────────────
+            # Physics: T1 = entry + pole_gain (flag projects the pole move)
+            # target_ratio = 0.5 → conservative first target at 50% of pole
+            # SL: below flag_low (base of consolidation)
+            elif pattern_name == "flagPennant":
+                pole_pct  = _safe_float(meta.get("pole_gain_pct"))
+                flag_low  = _safe_float(meta.get("flag_low"))
+                flag_high = _safe_float(meta.get("flag_high"))
+
+                if pole_pct and pole_pct > 0:
+                    pole_depth = entry * (pole_pct / 100.0)
+
+                    # SL: flag_low is the structural floor of the consolidation
+                    if flag_low and flag_low < entry:
+                        sl = round(flag_low * 0.995, 2)
+                        sl_src = "flag_low"
+                    else:
+                        sl, sl_src = _sl_from_atr(1.5)
+
+                    # T1 = 50% of pole (conservative, pattern physics target_ratio=0.5)
+                    # T2 = 100% of pole (full measured move)
+                    t1 = round(entry + pole_depth * 0.5, 2)
+                    t2 = round(entry + pole_depth * 1.0, 2)
+
+                    result = _validate_and_build(sl, t1, t2, pole_depth,
+                        source="structural", sl_source=sl_src, t_source="pole_projection")
+                    if result:
+                        return result
+
+            # ── doubleTopBottom ───────────────────────────────────────────────────
+            # Physics: target is already pre-calculated by detector (pattern height from neckline)
+            # SL: just above/below neckline depending on direction
+            elif pattern_name == "doubleTopBottom":
+                target   = _safe_float(meta.get("target"))
+                neckline = _safe_float(meta.get("neckline"))
+                pattern_type = meta.get("type", "bullish")  # "bullish" = double bottom
+
+                if target and neckline:
+                    depth = abs(target - neckline)
+                    if pattern_type == "bullish":
+                        sl = round(neckline * 0.99, 2)
+                        t1 = round(target, 2)
+                        t2 = round(target + depth * 0.618, 2)   # Fib extension
+                    else:
+                        # bearish double top — short setup, return None for now
+                        # (system handles long-only; skip bearish patterns)
+                        return None
+
+                    result = _validate_and_build(sl, t1, t2, depth,
+                        source="structural", sl_source="neckline", t_source="pattern_target")
+                    if result:
+                        return result
+
+            # ── bollingerSqueeze ──────────────────────────────────────────────────
+            # Physics: squeeze releases into expansion — T1 = BB upper band
+            # SL: below BB lower band (squeeze boundary)
+            # T2 = BB upper + 50% of band width (expansion overshoot)
+            elif pattern_name == "bollingerSqueeze":
+                bb_high = _safe_float(price_data.get("bbHigh"))
+                bb_low  = _safe_float(price_data.get("bbLow"))
+                bb_mid  = _safe_float(price_data.get("bbMid"))
+
+                if bb_high and bb_low and bb_high > bb_low:
+                    band_width = bb_high - bb_low
+                    sl = round(bb_low * 0.998, 2)              # just below lower band
+                    t1 = round(bb_high, 2)                     # upper band = T1
+                    t2 = round(bb_high + band_width * 0.5, 2)  # expansion overshoot = T2
+                    depth = bb_high - entry
+
+                    result = _validate_and_build(sl, t1, t2, depth,
+                        source="structural", sl_source="bb_low", t_source="band_expansion")
+                    if result:
+                        return result
+
+            # ── ichimokuSignals ───────────────────────────────────────────────────
+            # Physics: trend-confirmation pattern. No single "depth" from detector.
+            # SL logic:
+            #   - short_term: slAtrDynamic (tight, horizon-matched)
+            #   - long_term:  below Tenkan (structural fast line)
+            #   - multibagger: below Kijun (structural baseline)
+            # Target logic: Tenkan-to-entry distance as measured move (structural depth)
+            #   price has already travelled from Kijun to Tenkan to current price.
+            #   The projected continuation = (entry - Tenkan) added to entry.
+            # If price is extended above Tenkan, use resistance levels instead.
+            elif pattern_name == "ichimokuSignals":
+                tenkan = _safe_float(ind.get("ichiTenkan") or price_data.get("ichiTenkan"))
+                kijun  = _safe_float(ind.get("ichiKijun")  or price_data.get("ichiKijun"))
+                span_a = _safe_float(ind.get("ichiSpanA")  or price_data.get("ichiSpanA"))
+
+                # SL by horizon — progressively wider as horizon lengthens
+                if horizon == "multibagger":
+                    if kijun and kijun < entry:
+                        sl = round(kijun * 0.99, 2)
+                        sl_src = "kijun"
+                    else:
+                        sl, sl_src = _sl_from_atr(2.5)
+                elif horizon == "long_term":
+                    if tenkan and tenkan < entry:
+                        sl = round(tenkan * 0.995, 2)
+                        sl_src = "tenkan"
+                    elif kijun and kijun < entry:
+                        sl = round(kijun * 0.995, 2)
+                        sl_src = "kijun_fallback"
+                    else:
+                        sl, sl_src = _sl_from_atr(2.0)
+                else:
+                    # short_term / intraday — use slAtrDynamic (tightest structural stop)
+                    sl, sl_src = _sl_from_atr(2.0)
+
+                risk = entry - sl
+                if risk <= 0:
+                    self.logger.warning(f"[ichimokuSignals] Zero/negative risk, sl={sl}")
+                    sl, sl_src = _sl_from_atr(2.0)
+                    risk = entry - sl
+
+                # Structural depth = entry distance above Tenkan
+                # (how far price has already moved through the cloud structure)
+                if tenkan and tenkan < entry:
+                    depth = entry - tenkan       # price amplitude above fast line
+                elif kijun and kijun < entry:
+                    depth = entry - kijun
+                else:
+                    # No structural depth available — use ATR-based depth
+                    atr = _safe_float(ind.get("atrDynamic") or price_data.get("atrDynamic", entry * 0.02))
+                    depth = atr * 2.5
+
+                # T1 = entry + 1x depth (measured move continuation)
+                # T2 = entry + 1.618x depth (Fib extension of the cloud move)
+                # Cap T1 at nearest resistance if available (prevents fantasy targets)
+                r1 = _safe_float(price_data.get("resistance1"))
+                r2 = _safe_float(price_data.get("resistance2"))
+                r3 = _safe_float(price_data.get("resistance3"))
+
+                t1_raw = round(entry + depth * 1.0, 2)
+                t2_raw = round(entry + depth * 1.618, 2)
+
+                # If resistance is closer than the projected T1, use resistance as T1
+                # (market-reality anchoring — targets must be achievable near-term)
+                if r1 and r1 > entry:
+                    if r1 < t1_raw:
+                        # T1 is at nearest resistance, T2 at next
+                        t1 = r1
+                        t2 = r2 if (r2 and r2 > r1) else t2_raw
+                        t_src = "resistance_capped"
+                    else:
+                        t1 = t1_raw
+                        t2 = t2_raw
+                        t_src = "measured_move"
+                else:
+                    t1 = t1_raw
+                    t2 = t2_raw
+                    t_src = "measured_move"
+
+                result = _validate_and_build(sl, t1, t2, depth,
+                    source="geometry", sl_source=sl_src, t_source=t_src)
+                if result:
+                    return result
+
+            # ── goldenCross ───────────────────────────────────────────────────────
+            # Physics: target_ratio=0 in config (intentional — no fixed depth target)
+            # Use MA geometry: distance fast MA has cleared above slow MA = depth
+            # SL: below fast MA (invalidation = fast crosses back under slow)
+            elif pattern_name == "goldenCross":
+                ma_fast = _safe_float(ind.get("maFast") or price_data.get("maFast"))
+                ma_slow = _safe_float(ind.get("maSlow") or price_data.get("maSlow"))
+
+                if ma_fast and ma_slow and ma_fast > ma_slow:
+                    depth = ma_fast - ma_slow       # cross spread = structural depth
+                    sl = round(ma_fast * 0.995, 2)  # just below fast MA
+                    t1 = round(entry + depth * 1.0, 2)
+                    t2 = round(entry + depth * 2.0, 2)
+
+                    result = _validate_and_build(sl, t1, t2, depth,
+                        source="geometry", sl_source="ma_fast", t_source="ma_spread_projection")
+                    if result:
+                        return result
+
+            # ── minerviniStage2 ───────────────────────────────────────────────────
+            # Physics: tight VCP contraction. SL below pivot point.
+            # Depth from contraction_pct or ATR.
+            elif pattern_name == "minerviniStage2":
+                contraction_pct = _safe_float(meta.get("contraction_pct"))
+                pivot = _safe_float(price_data.get("pivotPoint"))
+                ma_fast = _safe_float(ind.get("maFast") or price_data.get("maFast"))
+
+                # SL: below the most recent contraction's MA (10-day for minervini)
+                if ma_fast and ma_fast < entry:
+                    sl = round(ma_fast * 0.97, 2)
+                    sl_src = "ma_fast_stage2"
+                else:
+                    sl, sl_src = _sl_from_atr(1.5)
+
+                risk = entry - sl
+                if contraction_pct and contraction_pct > 0:
+                    depth = entry * (contraction_pct / 100.0)
+                else:
+                    atr = _safe_float(ind.get("atrDynamic") or price_data.get("atrDynamic", entry * 0.02))
+                    depth = atr * 3.0
+
+                t1 = round(entry + depth * 1.0, 2)
+                t2 = round(entry + depth * 2.0, 2)
+
+                result = _validate_and_build(sl, t1, t2, depth,
+                    source="structural", sl_source=sl_src, t_source="contraction_projection")
+                if result:
+                    return result
+
+            # ── threeLineStrike ───────────────────────────────────────────────────
+            # Physics: short-duration reversal. SL = strike candle low.
+            # Depth = prior 3 candles' range (reversal magnitude).
+            elif pattern_name == "threeLineStrike":
+                strike_low  = _safe_float(meta.get("strike_low"))
+                strike_high = _safe_float(meta.get("strike_high"))
+                prior_range = _safe_float(meta.get("prior_range"))
+
+                if strike_low and strike_low < entry:
+                    sl = round(strike_low * 0.998, 2)
+                    sl_src = "strike_low"
+                else:
+                    sl, sl_src = _sl_from_atr(1.5)
+
+                risk = entry - sl
+                depth = prior_range or (risk * 1.5)
+                t1 = round(entry + depth * 0.5, 2)
+                t2 = round(entry + depth, 2)
+
+                result = _validate_and_build(sl, t1, t2, depth,
+                    source="structural", sl_source=sl_src, t_source="reversal_range")
+                if result:
+                    return result
+
+            # ════════════════════════════════════════════════════════════════════
+            # FINAL FALLBACK — slAtrDynamic SL + ATR projection
+            # Reached only if:
+            #   (a) pattern name not recognised above, OR
+            #   (b) all structural calculations above returned None
+            # Tagged clearly so UI/monitoring knows it is not structural.
+            # ════════════════════════════════════════════════════════════════════
+            atr = _safe_float(
+                ind.get("atrDynamic") or
+                price_data.get("atrDynamic") or
+                (entry * 0.02)
+            )
+            sl_atr, sl_atr_src = _sl_from_atr(2.0)
+            risk_atr = entry - sl_atr
+            if risk_atr <= 0:
+                self.logger.error(f"[{pattern_name}] ATR fallback produced invalid SL {sl_atr}")
+                return None
+
+            t1_atr = round(entry + atr * 2.0, 2)
+            t2_atr = round(entry + atr * 4.0, 2)
+
+            self.logger.warning(
+                f"[{pattern_name}][{horizon}] Using ATR fallback targets — "
+                f"no structural levels resolved. SL={sl_atr} T1={t1_atr} T2={t2_atr}"
+            )
+            return {
+                "entry":     _safe_float(entry),
+                "stop_loss": _safe_float(sl_atr),
+                "t1":        _safe_float(t1_atr),
+                "t2":        _safe_float(t2_atr),
+                "depth":     _safe_float(atr * 2.0),
+                "pattern":   pattern_name,
+                "source":    "atr_fallback",
+                "sl_source": sl_atr_src,
+                "t_source":  "atr_projection",
+            }
+
+        except Exception as e:
+            self.logger.error(
+                f"[{pattern_name}] _calculate_pattern_targets failed: {e}",
+                exc_info=True
+            )
+            return None
     def _build_order_model(self, eval_ctx: Dict) -> Dict[str, Any]:
         """
         FINAL execution order model.

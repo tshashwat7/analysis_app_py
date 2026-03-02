@@ -515,7 +515,27 @@ def compute_all_profiles(
                 # 5️⃣ FINAL ASSEMBLY
                 # --------------------------------------------------
                 final_score = opportunity["final_decision_score"]
-                category = "BUY" if final_score >= 7 else "HOLD"
+
+                # ── PROFILE SIGNAL: Pure score-based stock quality rating ──────
+                # Independent of patterns, gates, RR, or execution context.
+                # Answers: "Is this stock worth tracking/accumulating?"
+                if final_score >= 8.5:
+                    profile_signal = "STRONG"
+                elif final_score >= 7.0:
+                    profile_signal = "MODERATE"
+                elif final_score >= 5.5:
+                    profile_signal = "WEAK"
+                else:
+                    profile_signal = "AVOID"
+
+                # Legacy compat: map profile_signal → category
+                _category_legacy_map = {
+                    "STRONG": "STRONG",
+                    "MODERATE": "WATCH",
+                    "WEAK": "HOLD",
+                    "AVOID": "AVOID"
+                }
+                category = _category_legacy_map[profile_signal]
 
                 # Get weights via extractor
                 weights = _get_horizon_pillar_weights(extractor)
@@ -537,15 +557,14 @@ def compute_all_profiles(
                     },
                     "final_decision_score": final_score,
                     "final_score": final_score,
+                    "profile_signal": profile_signal,
                     "category": category,
-                    "can_trade": opportunity.get("trade_context", {}).get(
-                        "gate_passed", False
-                    ),
-                    "strategy": eval_ctx.get("strategy", {}),  # ✅ NEW: For UI mapping
-                    "eval_ctx": eval_ctx,  # 🔧 FIXED OWNERSHIP
+                    "can_trade": False,  # Always False at profile level; set by execution plan
+                    "strategy": eval_ctx.get("strategy", {}),
+                    "eval_ctx": eval_ctx,
                     "metric_details": scoring.get("metric_details", []),
                     "applied_penalties": tech_penalties,
-                    "architecture": "v14.1-resilient",
+                    "architecture": "v15.0-signal-separation",
                     "timestamp": datetime.now().timestamp(),
                     "status": "SUCCESS",
                 }
@@ -630,51 +649,125 @@ def compute_all_profiles(
 # ============================================================================
 # 2. TRADE PLAN GENERATION (Clean Orchestrator with Extractor)
 # ============================================================================
-def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict , extractor = None) -> None:
+def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extractor=None) -> None:
     """
-    Final trade decision logic.
-    Must be called after exec_ctx is fully enhanced.
-    """
+    SETUP SIGNAL: Execution-based trade decision.
 
+    Answers: "Can I trade this stock RIGHT NOW, given current market structure?"
+
+    Signal vocabulary:
+      BUY     — Valid entry. Setup matched. Pattern confirmed. RR passes.
+      SELL    — Valid short. (bearish setups only)
+      WATCH   — Strong stock but NO entry structure right now.
+      HOLD    — Active position management signal. (not entry)
+      BLOCKED — Setup + pattern present but execution gate failed.
+
+    Four layers, evaluated in strict order. No layer can override a higher layer.
+    """
+    logger = logging.getLogger(__name__)
+
+    # ── Extract core inputs ──────────────────────────────────────────────
     confidence = plan.get("final_confidence", 0)
-    direction = plan.get("metadata", {}).get("direction", "neutral")
+    direction  = plan.get("metadata", {}).get("direction", "neutral")
 
-    # ✅ NEW: Get thresholds from config (using proper accessor methods)
     if extractor:
         try:
             min_tradeable = extractor.get_min_tradeable_confidence()
         except Exception:
-            min_tradeable = 60  # Fallback
+            min_tradeable = 60
         try:
             hco = extractor.get_high_confidence_override()
-            high_confidence_threshold = hco.get("threshold", 80) if isinstance(hco, dict) else float(hco)
+            high_conf_threshold = hco.get("threshold", 80) if isinstance(hco, dict) else float(hco)
         except Exception:
-            high_confidence_threshold = 80  # Fallback
+            high_conf_threshold = 80
     else:
-        min_tradeable = 60  # Fallback
-        high_confidence_threshold = 80  # Fallback
+        min_tradeable = 60
+        high_conf_threshold = 80
 
-    can_execute = exec_ctx.get("can_execute", {})
+    can_execute     = exec_ctx.get("can_execute", {})
     execution_blocked = not can_execute.get("can_execute", True)
-    failures = can_execute.get("failures", [])
+    failures        = can_execute.get("failures", [])
 
-    market = exec_ctx.get("market_adjusted_targets", {})
-    rr_t1 = market.get("execution_rr_t1", 0)
-    rr_t2 = market.get("execution_rr_t2", 0)
+    market          = exec_ctx.get("market_adjusted_targets", {})
+    rr_t1           = market.get("execution_rr_t1", 0)
+    rr_t2           = market.get("execution_rr_t2", 0)
+    rr_source       = market.get("rr_source", "") or eval_ctx.get("risk_candidates", {}).get("rr_source", "")
+    target_source   = market.get("target_source", "") or market.get("source", "")
 
-    setup_type = eval_ctx["setup"]["type"]
+    setup_type      = eval_ctx.get("setup", {}).get("type", "GENERIC")
 
-    # ------------------------------------
-    # LAYER A: BASE DECISION (robust core)
-    # ------------------------------------
+    # ── Setup intent classification ──────────────────────────────────────
+    if "BREAKOUT" in setup_type or "MOMENTUM" in setup_type:
+        signal_intent = "BREAKOUT"
+    elif "TREND" in setup_type or "PULLBACK" in setup_type:
+        signal_intent = "TREND_FOLLOWING"
+    elif "ACCUMULATION" in setup_type or "VALUE" in setup_type:
+        signal_intent = "ACCUMULATION"
+    else:
+        signal_intent = "GENERIC"
+
+    # ── Resolve primary pattern presence ─────────────────────────────────
+    primary_found = bool(
+        eval_ctx.get("pattern_validation", {})
+        .get("by_setup", {})
+        .get(setup_type, {})
+        .get("primary_found", [])
+    )
+
+    # ── ATR fallback detection ───────────────────────────────────────────
+    is_atr_fallback = (
+        "atr_fallback" in str(rr_source) or
+        "atr_fallback" in str(target_source) or
+        rr_source == "generic_atr"
+    )
+
+    # ════════════════════════════════════════════════════════════════════
+    # LAYER 0: STRUCTURE GATE  (highest priority — no overrides)
+    # "Does a tradeable entry structure exist?"
+    # ════════════════════════════════════════════════════════════════════
+    if setup_type == "GENERIC" and not primary_found:
+        plan.update({
+            "trade_signal":      "WATCH",
+            "setup_signal":      "WATCH",
+            "signal":            signal_intent,
+            "status":            "NO_PATTERN",
+            "reason":            (
+                f"No primary pattern detected for {setup_type} setup. "
+                f"Strong profile but no active entry structure. "
+                f"Monitor for pattern formation."
+            ),
+            "execution_blocked": True,
+            "can_trade":         False,
+        })
+        plan.setdefault("block_gates", []).append(
+            "STRUCTURE_GATE: GENERIC fallback with no primary pattern cannot generate BUY"
+        )
+        logger.info(
+            f"[{plan.get('symbol')}] \U0001F441  WATCH — No pattern. "
+            f"Setup={setup_type}, Confidence={confidence}%."
+        )
+        plan["signal_context"] = {
+            "direction":        direction,
+            "confidence":       confidence,
+            "setup_type":       setup_type,
+            "primary_found":    primary_found,
+            "signal_intent":    signal_intent,
+            "rr_t1":            rr_t1,
+            "rr_t2":            rr_t2,
+            "execution_status": "no_pattern",
+        }
+        return
+
+    # ════════════════════════════════════════════════════════════════════
+    # LAYER 1: EXECUTION GATE
+    # "Setup exists, pattern exists, but execution is gated"
+    # ════════════════════════════════════════════════════════════════════
     if execution_blocked:
-        base_signal = "HOLD"
+        base_signal = "BLOCKED"
         base_status = "BLOCKED"
-
-    elif confidence < min_tradeable:  # ✅ CONFIGURABLE
+    elif confidence < min_tradeable:
         base_signal = "HOLD"
         base_status = "LOW_CONFIDENCE"
-
     else:
         if direction == "bullish":
             base_signal = "BUY"
@@ -686,64 +779,82 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict , extract
             base_signal = "HOLD"
             base_status = "NEUTRAL"
 
-    # ------------------------------------
-    # LAYER B: SETUP / STRATEGY INTENT
-    # ------------------------------------
-    if "BREAKOUT" in setup_type or "MOMENTUM" in setup_type:
-        signal_intent = "BREAKOUT"
-    elif "TREND" in setup_type or "PULLBACK" in setup_type:
-        signal_intent = "TREND_FOLLOWING"
-    elif "ACCUMULATION" in setup_type or "VALUE" in setup_type:
-        signal_intent = "ACCUMULATION"
-    else:
-        signal_intent = "GENERIC"
-
-    # ------------------------------------
-    # LAYER C: RESCUE / OVERRIDES
-    # ------------------------------------
+    # ════════════════════════════════════════════════════════════════════
+    # LAYER 2: STRUCTURAL RESCUES  (only from structural targets, never ATR)
+    # ════════════════════════════════════════════════════════════════════
     final_signal = base_signal
     final_status = base_status
-    reason = f"Decision based on {direction} bias"
+    reason = f"Decision based on {direction} direction"
 
     is_rr_failure = any("RR" in f for f in failures)
 
-    if base_status == "BLOCKED" and is_rr_failure:
-        # High confidence override
-        if confidence >= high_confidence_threshold and rr_t1 >= 1.2:  # ✅ CONFIGURABLE
-            final_signal = base_signal if base_signal != "HOLD" else "BUY"
+    if base_status == "BLOCKED" and is_rr_failure and not is_atr_fallback:
+        # Rescue A: High confidence + near-passing T1
+        if confidence >= high_conf_threshold and rr_t1 >= 1.2:
+            final_signal = "BUY" if direction == "bullish" else base_signal
             final_status = "READY"
-            reason = f"High confidence override ({confidence}% >= {high_confidence_threshold}%)"
-            plan.setdefault("boost_reasons", []).append(
-                {"reason": "High confidence RR override"}
+            reason = (
+                f"High confidence override: {confidence}% >= {high_conf_threshold}% "
+                f"with structural T1 RR {rr_t1:.2f}"
+            )
+            plan.setdefault("boost_reasons", []).append({
+                "reason": "High confidence structural override",
+                "source": rr_source
+            })
+            logger.info(
+                f"[{plan.get('symbol')}] \u2705 High-conf rescue: "
+                f"conf={confidence}%, RR_T1={rr_t1:.2f}"
             )
 
-        # T2 asymmetry override
+        # Rescue B: Structural T2 asymmetry
         elif rr_t2 >= 2.5:
-            final_signal = base_signal if base_signal != "HOLD" else "BUY"
+            final_signal = "BUY" if direction == "bullish" else base_signal
             final_status = "READY"
-            reason = f"T2 asymmetry override (RR {rr_t2:.2f})"
-            plan.setdefault("boost_reasons", []).append(
-                {"reason": "Target-2 asymmetry override"}
+            reason = f"Structural T2 asymmetry override (RR {rr_t2:.2f}, source={rr_source})"
+            plan.setdefault("boost_reasons", []).append({
+                "reason": f"T2 asymmetry override (structural, RR={rr_t2:.2f})",
+                "source": rr_source
+            })
+            logger.info(
+                f"[{plan.get('symbol')}] \u2705 T2 structural rescue: "
+                f"RR_T2={rr_t2:.2f} from {rr_source}"
             )
 
-    # ------------------------------------
-    # FINALIZE PLAN
-    # ------------------------------------
+    elif base_status == "BLOCKED" and is_rr_failure and is_atr_fallback:
+        # ATR fallback targets — no rescue allowed
+        final_signal = "BLOCKED"
+        final_status = "BLOCKED"
+        reason = (
+            f"RR gate failed (T1={rr_t1:.2f}) and targets are ATR-based — "
+            f"no structural level to justify rescue."
+        )
+        logger.debug(
+            f"[{plan.get('symbol')}] \u26d4 ATR rescue suppressed: "
+            f"RR_T1={rr_t1:.2f}, RR_T2={rr_t2:.2f} (source={rr_source})"
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # LAYER 3: FINALIZE
+    # ════════════════════════════════════════════════════════════════════
     plan.update({
-        "trade_signal": final_signal,
-        "signal": signal_intent,
-        "status": final_status,
-        "reason": reason
+        "trade_signal":  final_signal,
+        "setup_signal":  final_signal,
+        "signal":        signal_intent,
+        "status":        final_status,
+        "reason":        reason,
     })
 
     plan["signal_context"] = {
-        "direction": direction,
-        "confidence": confidence,
-        "setup_type": setup_type,
-        "signal_intent": signal_intent,
-        "rr_t1": rr_t1,
-        "rr_t2": rr_t2,
-        "execution_status": final_status.lower()
+        "direction":        direction,
+        "confidence":       confidence,
+        "setup_type":       setup_type,
+        "primary_found":    primary_found,
+        "signal_intent":    signal_intent,
+        "rr_t1":            rr_t1,
+        "rr_t2":            rr_t2,
+        "rr_source":        rr_source,
+        "is_atr_fallback":  is_atr_fallback,
+        "execution_status": final_status.lower(),
     }
 
 def apply_rr_validation(exec_ctx: Dict[str, Any], extractor) -> None:

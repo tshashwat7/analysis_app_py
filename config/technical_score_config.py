@@ -113,11 +113,6 @@ METRIC_REGISTRY = {
         },
         "description": "MACD histogram"
     },
-    "relStrengthNifty": {
-        "type": "numeric", "category": "momentum", "scoring_type": "linear_range",
-        "params": {"min_val": -10.0, "max_val": 20.0, "score_at_min": 0, "score_at_max": 10},
-        "description": "Alpha relative to benchmark"
-    },
 
     # ===========================
     # TREND METRICS
@@ -949,12 +944,12 @@ TECHNICAL_BONUSES = [
         "reason": "Strong outperformance vs Nifty"
     },
     {
-        "condition": "ttmSqueeze == 0 AND rvol >= 2.0",
+        "condition": "ttmSqueeze == 5 AND rvol >= 2.0",
         "bonus": 0.15,
         "reason": "Squeeze release with volume expansion"
     },
     {
-        "condition": "cmfSignal >= 0.15 AND obvDiv >= 8",
+        "condition": "cmfSignal >= 0.15",
         "bonus": 0.12,
         "reason": "Institutional accumulation confirmed"
     },
@@ -1566,7 +1561,7 @@ def extract_metric_score(metric_data: Any, metric_name: str, indicators: Dict = 
         Score between 0-10
     """
     if metric_data is None:
-        return 5.0
+        return 0.0   # No warning — metric simply not computed for this horizon
 
     # Handle dict format
     if isinstance(metric_data, dict):
@@ -1826,20 +1821,29 @@ def apply_technical_penalties(indicators: dict, horizon: str) -> tuple:
 
     return round(total, 2), reasons
 
-def apply_technical_bonuses(indicators: dict) -> tuple:
-    """
-    Returns:
-        (total_bonus, list_of_reasons)
-    """
+def _extract_metrics_from_condition(condition: str) -> list:
+    """Extract metric names from a condition like 'trendStrength >= 8.0 AND rvol >= 2.5'."""
+    import re
+    # Match word sequences before operators
+    return re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:>=|<=|==|!=|>|<)', condition)
+
+
+def apply_technical_bonuses(indicators: dict, horizon: str = "short_term") -> tuple:
     total = 0.0
     reasons = []
+    excluded = set(HORIZON_METRIC_INCLUSION.get(horizon, {}).get("exclude", [])) 
 
     for rule in TECHNICAL_BONUSES:
+        # ← ADD THIS GUARD: skip bonus rules referencing excluded metrics
+        rule_metrics = _extract_metrics_from_condition(rule["condition"])
+        if any(m in excluded for m in rule_metrics):
+            continue
         if _evaluate_condition(rule["condition"], indicators):
             total += rule["bonus"]
             reasons.append(rule["reason"])
 
     return round(total, 2), reasons
+    
 
 def compute_technical_score(indicators: dict, horizon: str) -> dict:
     """
@@ -1875,7 +1879,7 @@ def compute_technical_score(indicators: dict, horizon: str) -> dict:
     penalty, penalty_reasons = apply_technical_penalties(indicators, horizon)
 
     # Bonuses
-    bonus, bonus_reasons = apply_technical_bonuses(indicators)
+    bonus, bonus_reasons = apply_technical_bonuses(indicators , horizon)
 
     # Liquidity penalty
     liq_penalty, liq_reason = check_liquidity_penalty(indicators, horizon)
@@ -1906,7 +1910,6 @@ def compute_technical_score(indicators: dict, horizon: str) -> dict:
     }
     # logger.debug(f"compute technical score result : {out} calculated for indicators dict with values {indicators}")
     return out
-
 
 
 # ==============================================================================

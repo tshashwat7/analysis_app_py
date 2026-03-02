@@ -40,7 +40,17 @@ from services.summaries import build_all_summaries
 from services.metrics_ext import compute_extended_metrics_sync
 from services.flowchart_helper import build_flowchart_payload
 from sqlalchemy.orm import Session
-from services.db import SessionLocal, SignalCache, init_db
+from services.db import SessionLocal, SignalCache, init_db, PaperTrade
+
+class PaperTradeRequest(BaseModel):
+    symbol: str
+    entry_price: float
+    target_1: float = None
+    target_2: float = None
+    stop_loss: float = None
+    estimated_hold_days: int = None
+    horizon: str = None
+    position_size: int = None
 
 # Environment-configurable parameters
 WARMER_BATCH_SIZE = int(os.getenv("WARMER_BATCH_SIZE", "5"))
@@ -588,7 +598,7 @@ def set_cached(symbol: str, value: Dict[str, Any]):
                 "fitting_strategies": value.get("fitting_strategies"),
                 "top_pattern": value.get("top_pattern"),
                 "bull_score": value.get("bull_score"),
-                "profile_category": value.get("profile_category"),  # ✅ NEW: for conflict detection
+                "profile_category": value.get("profile_category"),
             }
 
             # Helper to safely get float
@@ -1153,10 +1163,10 @@ async def quick_scores(payload: QuickScoresRequest):
                 "symbol": sym,
                 "score": int(final_score * 10) if final_score else 0,
                 "confidence": confidence,
-                "recommendation": (best_profile.get("category", "HOLD") + "--" + full_rep.get("best_fit", "")),
+                "recommendation": (best_profile.get("profile_signal", best_profile.get("category", "HOLD")) + "--" + full_rep.get("best_fit", "")),
                 "bull_score": bull_score,
-                "bull_signal": trade_signal_clean,            # ✅ FIX: clean BUY/SELL/HOLD
-                "profile_category": best_profile.get("category", "HOLD"),  # ✅ NEW: raw profile category for conflict detection
+                "bull_signal": trade_signal_clean,
+                "profile_category": best_profile.get("profile_signal", best_profile.get("category", "HOLD")),
                 "setup_signal": signal_str.replace("_", " "), # ✅ NEW: full label e.g. "BOLLINGER SQUEEZE BUY"
                 "rr_ratio": rr if rr else 0,
                 "entry_trigger": entry_val if entry_val else 0,
@@ -1321,6 +1331,74 @@ async def analyze_common(
             # The accordion reads: profile_report.eval_ctx.strategy.all_strategies
             # all_candidates already contains every strategy with breakdown + rejection_reasons.
             eval_ctx = profile_report.get("eval_ctx")
+
+            # ── SETUP CARD DATA ──────────────────────────────────────────────
+            # eval_ctx["setup"] from _classify_setup already contains:
+            #   best, candidates, ranked, rejected, top, type
+            # Enrich rejected entries with human-readable labels and group
+            # so the template doesn't need inline logic.
+            SETUP_META = {
+                "PATTERN_DARVAS_BREAKOUT":         {"label": "Darvas Box Breakout",      "group": "Breakout",  "icon": "bi-box-arrow-up-right"},
+                "PATTERN_VCP_BREAKOUT":            {"label": "VCP Breakout",             "group": "Breakout",  "icon": "bi-graph-up-arrow"},
+                "PATTERN_CUP_BREAKOUT":            {"label": "Cup & Handle",             "group": "Breakout",  "icon": "bi-cup-hot"},
+                "PATTERN_FLAG_BREAKOUT":           {"label": "Flag / Pennant",           "group": "Breakout",  "icon": "bi-flag"},
+                "PATTERN_GOLDEN_CROSS":            {"label": "Golden Cross",             "group": "Breakout",  "icon": "bi-stars"},
+                "PATTERN_STRIKE_REVERSAL":         {"label": "3-Line Strike",            "group": "Reversal",  "icon": "bi-arrow-counterclockwise"},
+                "MOMENTUM_BREAKOUT":               {"label": "Momentum Breakout",        "group": "Breakout",  "icon": "bi-lightning-charge"},
+                "MOMENTUM_BREAKDOWN":              {"label": "Momentum Breakdown",       "group": "Short",     "icon": "bi-arrow-down-circle"},
+                "TREND_PULLBACK":                  {"label": "Buy the Dip",              "group": "Trend",     "icon": "bi-arrow-down-up"},
+                "DEEP_PULLBACK":                   {"label": "Deep Pullback Entry",      "group": "Trend",     "icon": "bi-arrow-bar-down"},
+                "TREND_FOLLOWING":                 {"label": "Trend Following",          "group": "Trend",     "icon": "bi-graph-up"},
+                "BEAR_TREND_FOLLOWING":            {"label": "Bear Trend (Short)",       "group": "Short",     "icon": "bi-graph-down"},
+                "QUALITY_ACCUMULATION":            {"label": "Quality Accumulation",     "group": "Value",     "icon": "bi-gem"},
+                "DEEP_VALUE_PLAY":                 {"label": "Deep Value",               "group": "Value",     "icon": "bi-currency-rupee"},
+                "VALUE_TURNAROUND":                {"label": "Value Turnaround",         "group": "Value",     "icon": "bi-arrow-repeat"},
+                "VOLATILITY_SQUEEZE":              {"label": "Volatility Squeeze",       "group": "Breakout",  "icon": "bi-arrows-angle-contract"},
+                "REVERSAL_MACD_CROSS_UP":          {"label": "MACD Cross Reversal",      "group": "Reversal",  "icon": "bi-arrow-up-circle"},
+                "REVERSAL_RSI_SWING_UP":           {"label": "RSI Oversold Bounce",      "group": "Reversal",  "icon": "bi-activity"},
+                "REVERSAL_ST_FLIP_UP":             {"label": "Supertrend Flip",          "group": "Reversal",  "icon": "bi-toggles"},
+                "QUALITY_ACCUMULATION_DOWNTREND":  {"label": "Quality in Downtrend",     "group": "Value",     "icon": "bi-safe2"},
+                "SELL_AT_RANGE_TOP":               {"label": "Sell at Range Top",        "group": "Exit",      "icon": "bi-door-open"},
+                "TAKE_PROFIT_AT_MID":              {"label": "Take Profit at Mid",       "group": "Exit",      "icon": "bi-cash-coin"},
+                "GENERIC":                         {"label": "Generic (No Match)",       "group": "Other",     "icon": "bi-question-circle"},
+            }
+
+            REASON_LABELS = {
+                "pattern_detection_failed":       "Pattern not detected",
+                "technical_conditions_failed":    "Technical conditions not met",
+                "fundamental_conditions_failed":  "Fundamental conditions not met",
+                "blocked_by_horizon":             "Not valid for this horizon",
+                "missing_fundamentals":           "Fundamental data unavailable",
+                "context_validation_failed":      "Context requirements not met",
+            }
+
+            if isinstance(eval_ctx, dict) and "setup" in eval_ctx:
+                raw_setup = eval_ctx["setup"]
+
+                def _enrich_setup_entry(entry):
+                    stype = entry.get("type", "GENERIC")
+                    meta  = SETUP_META.get(stype, {"label": stype.replace("_", " ").title(), "group": "Other", "icon": "bi-circle"})
+                    raw_reason = entry.get("reason", "")
+                    # Prefer the detailed reason (e.g. "rsi 68.80 > max 35") over generic bucket
+                    friendly   = REASON_LABELS.get(raw_reason, raw_reason.replace("_", " ").title())
+                    return {**entry, "label": meta["label"], "group": meta["group"],
+                            "icon": meta["icon"], "reason_label": friendly, "reason_raw": raw_reason}
+
+                enriched_candidates = [_enrich_setup_entry(c) for c in raw_setup.get("candidates", [])]
+                enriched_rejected   = [_enrich_setup_entry(r) for r in raw_setup.get("rejected",   [])]
+
+                eval_ctx["setup"]["candidates_enriched"] = enriched_candidates
+                eval_ctx["setup"]["rejected_enriched"]   = enriched_rejected
+
+                if raw_setup.get("best"):
+                    best_raw = raw_setup["best"]
+                    best_meta = SETUP_META.get(best_raw.get("type","GENERIC"),
+                                               {"label": best_raw.get("type",""), "group": "Other", "icon": "bi-circle"})
+                    eval_ctx["setup"]["best"]["label"] = best_meta["label"]
+                    eval_ctx["setup"]["best"]["group"] = best_meta["group"]
+                    eval_ctx["setup"]["best"]["icon"]  = best_meta["icon"]
+            # ── END SETUP CARD DATA ──────────────────────────────────────────
+
             if isinstance(eval_ctx, dict):
                 eval_ctx_strategy = eval_ctx.get("strategy")
                 if isinstance(eval_ctx_strategy, dict):
@@ -1562,6 +1640,103 @@ async def flowchart_payload(symbol: str, index: str = Query("NIFTY50")):
         return await loop.run_in_executor(get_api_executor(), build_flowchart_payload, symbol, index)
     except Exception as e:
         return {"error": str(e)}
+
+@app.post("/api/paper_trade/add")
+async def add_paper_trade(req: PaperTradeRequest):
+    try:
+        db = SessionLocal()
+        trade = PaperTrade(
+            symbol=req.symbol,
+            entry_price=req.entry_price,
+            target_1=req.target_1,
+            target_2=req.target_2,
+            stop_loss=req.stop_loss,
+            estimated_hold_days=req.estimated_hold_days,
+            horizon=req.horizon,
+            position_size=req.position_size
+        )
+        db.add(trade)
+        db.commit()
+        db.refresh(trade)
+        return {"status": "success", "id": trade.id}
+        return {"status": "success", "id": trade.id}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        db.close()
+
+class PaperTradeRemoveRequest(BaseModel):
+    symbol: str
+    horizon: str
+
+@app.post("/api/paper_trade/remove")
+async def remove_paper_trade(req: PaperTradeRemoveRequest):
+    try:
+        db = SessionLocal()
+        # Remove ALL open paper trades matching symbol and horizon
+        trades = db.query(PaperTrade).filter(
+            PaperTrade.symbol == req.symbol,
+            PaperTrade.horizon == req.horizon,
+            PaperTrade.status == "OPEN"
+        ).all()
+        for t in trades:
+            db.delete(t)
+        db.commit()
+        return {"status": "success", "deleted": len(trades)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        db.close()
+
+@app.get("/api/paper_trade/status")
+async def get_paper_trade_status(symbol: str = Query(...), horizon: str = Query(...)):
+    try:
+        db = SessionLocal()
+        trade = db.query(PaperTrade).filter(
+            PaperTrade.symbol == symbol,
+            PaperTrade.horizon == horizon,
+            PaperTrade.status == "OPEN"
+        ).first()
+        return {"active": trade is not None}
+    except Exception as e:
+        return {"active": False, "error": str(e)}
+    finally:
+        db.close()
+
+@app.get("/paper_trades", response_class=HTMLResponse)
+async def view_paper_trades(request: Request):
+    db: Session = SessionLocal()
+    trades = db.query(PaperTrade).order_by(PaperTrade.created_at.desc()).all()
+    db.close()
+    return templates.TemplateResponse("paper_trades.html", {"request": request, "trades": trades})
+
+@app.get("/api/paper_trade/cmp")
+async def get_paper_trade_cmp(symbols: str = Query("")):
+    if not symbols:
+        return {}
+    import yfinance as yf
+    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+    if not sym_list:
+        return {}
+    
+    try:
+        loop = asyncio.get_running_loop()
+        def _fetch_cmp():
+            res = {}
+            for s in sym_list:
+                try:
+                    tkr = yf.Ticker(s)
+                    h = tkr.history(period="1d")
+                    if not h.empty:
+                        res[s] = float(h['Close'].iloc[-1])
+                except:
+                    pass
+            return res
+            
+        prices = await loop.run_in_executor(get_api_executor(), _fetch_cmp)
+        return prices
+    except Exception as e:
+        return {}
 
 if __name__ == "__main__":
     init_db()

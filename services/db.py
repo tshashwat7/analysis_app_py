@@ -202,7 +202,32 @@ def enforce_timezone_on_performance(target, context):
     if target.updated_at and target.updated_at.tzinfo is None:
         target.updated_at = target.updated_at.replace(tzinfo=timezone.utc)
 
-# 3. Create Tables
+# 3. Paper Trading Model
+class PaperTrade(Base):
+    __tablename__ = "paper_trades"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(50), index=True, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    target_1 = Column(Float, nullable=True)
+    target_2 = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    estimated_hold_days = Column(Integer, nullable=True)
+    horizon = Column(String(50), nullable=True)    # NEW
+    position_size = Column(Integer, nullable=True) # NEW
+    status = Column(String(20), default="OPEN")  # OPEN, WIN, LOSS, PARTIAL
+    
+    created_at = Column(DateTime, default=utc_now, index=True)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+
+@event.listens_for(PaperTrade, 'load')
+def enforce_timezone_on_paper_trade(target, context):
+    """Ensure datetime fields are timezone-aware."""
+    if target.created_at and target.created_at.tzinfo is None:
+        target.created_at = target.created_at.replace(tzinfo=timezone.utc)
+    if target.updated_at and target.updated_at.tzinfo is None:
+        target.updated_at = target.updated_at.replace(tzinfo=timezone.utc)
+
+# 4. Create Tables
 def init_db():
     # [FIX] Use Base.metadata directly. No invalid import.
     Base.metadata.create_all(bind=engine)

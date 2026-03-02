@@ -13,6 +13,7 @@ from typing import Any, Dict, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
+SCORE_FIELD_UNRELIABLE = {"deRatio", "ocfVsProfit", "promoterpledge", "beta"}
 
 # ==============================================================================
 # METRIC REGISTRY (Metadata for fundamental metrics)
@@ -57,6 +58,7 @@ METRIC_REGISTRY = {
     "fcfYield": {"type": "numeric","category": "financial_health","description": "Free cash flow yield"},
     "fcfMargin": {"type": "numeric","category": "financial_health","description": "Free cash flow margin"},
     "ocfVsProfit": {"type": "numeric","category": "financial_health","description": "OCF vs Net Income ratio"},
+    "beta": {"type": "numeric","category": "financial_health","description": "Beta (volatility vs market)"},
     
     # ===========================
     # QUALITY METRICS
@@ -85,7 +87,6 @@ METRIC_REGISTRY = {
     # MARKET METRICS
     # ===========================
     "marketCap": {"type": "numeric","category": "market","description": "Market capitalization"},
-    "beta": {"type": "numeric","category": "market","description": "Beta (volatility vs market)"},
     "position52w": {"type": "numeric","category": "market","description": "Distance from 52-week high"},
     "shortInterest": {"type": "numeric","category": "market","description": "Short interest metrics"},
     "analystRating": {"type": "text","category": "market","description": "Analyst recommendation"},
@@ -108,10 +109,10 @@ HORIZON_METRIC_INCLUSION = {
         "valuation": ["peRatio", "pbRatio", "pegRatio", "psRatio"],
         "profitability": ["roe", "roce", "netProfitMargin", "operatingMargin"],
         "growth": ["quarterlyGrowth", "epsGrowth5y"],
-        "financial_health": ["deRatio", "currentRatio", "fcfYield"],
+        "financial_health": ["deRatio", "currentRatio", "fcfYield", "beta"],
         "quality": ["piotroskiF"],
         "ownership": ["promoterHolding", "institutionalOwnership"],
-        "market": ["marketCap", "position52w", "beta"],
+        "market": ["marketCap", "position52w"],
         
         "exclude": [
 "marketCapCagr", 
@@ -124,11 +125,11 @@ HORIZON_METRIC_INCLUSION = {
         "valuation": ["peRatio", "pbRatio", "pegRatio", "peVsSector"],
         "profitability": ["roe", "roce", "roic", "netProfitMargin", "operatingMargin", "ebitdaMargin"],
         "growth": ["profitGrowth3y", "epsGrowth5y", "revenueGrowth5y", "fcfGrowth3y"],
-        "financial_health": ["deRatio", "interestCoverage", "currentRatio", "fcfYield", "fcfMargin", "ocfVsProfit"],
+        "financial_health": ["deRatio", "interestCoverage", "currentRatio", "fcfYield", "fcfMargin", "ocfVsProfit", "beta"],
         "quality": ["piotroskiF", "earningsStability", "assetTurnover"],
         "ownership": ["promoterHolding", "institutionalOwnership", "promoterpledge"],
         "dividend": ["dividendyield", "dividendPayout"],
-        "market": ["marketCap", "beta"],
+        "market": ["marketCap"],
         
         "exclude": [
             "quarterlyGrowth",  # Too short-term
@@ -225,9 +226,10 @@ METRIC_WEIGHTS = {
         "epsGrowth5y": 0.40,
         
         # FINANCIAL HEALTH (15%)
-        "deRatio": 0.40,
-        "currentRatio": 0.30,
-        "fcfYield": 0.30,
+        "deRatio": 0.35,
+        "currentRatio": 0.25,
+        "fcfYield": 0.25,
+        "beta": 0.15,
         
         # QUALITY (10%)
         "piotroskiF": 1.0,
@@ -237,9 +239,8 @@ METRIC_WEIGHTS = {
         "institutionalOwnership": 0.40,
         
         # MARKET (5%)
-        "marketCap": 0.50,
-        "position52w": 0.30,
-        "beta": 0.20
+        "marketCap": 0.70,
+        "position52w": 0.30
     },
     
     # ==========================================================================
@@ -267,12 +268,13 @@ METRIC_WEIGHTS = {
         "fcfGrowth3y": 0.20,
         
         # FINANCIAL HEALTH (20%)
-        "deRatio": 0.25,
-        "interestCoverage": 0.20,
-        "currentRatio": 0.15,
-        "fcfYield": 0.20,
+        "deRatio": 0.20,
+        "interestCoverage": 0.15,
+        "currentRatio": 0.10,
+        "fcfYield": 0.15,
         "fcfMargin": 0.10,
         "ocfVsProfit": 0.10,
+        "beta": 0.20,
         
         # QUALITY (10%)
         "piotroskiF": 0.50,
@@ -289,8 +291,7 @@ METRIC_WEIGHTS = {
         "dividendPayout": 0.40,
         
         # MARKET (2%)
-        "marketCap": 0.60,
-        "beta": 0.40
+        "marketCap": 1.0
     },
     
     # ==========================================================================
@@ -485,41 +486,6 @@ SECTOR_SPECIFIC_EXCLUSIONS = {
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def extract_fundamental_score(metric_data: Any, metric_name: str = None) -> float:
-    """
-    Extract score from fundamental metric data.
-    Fundamentals.py already calculates scores, so this is straightforward.
-    
-    Args:
-        metric_data: Metric data from fundamentals dict
-        metric_name: Name of the metric (for logging)
-    
-    Returns:
-        Score between 0-10
-    """
-    if metric_data is None:
-        return 0.0
-    
-    # Handle dict format
-    if isinstance(metric_data, dict):
-        # Primary: Use hardcoded score from fundamentals.py
-        score = metric_data.get("score")
-        if score is not None:
-            return float(score)
-        
-        # Fallback: Try raw value if it's numeric
-        raw = metric_data.get("raw")
-        if isinstance(raw, (int, float)):
-            return float(raw)
-    
-    # Handle primitive value
-    elif isinstance(metric_data, (int, float)):
-        return float(metric_data)
-    
-    logger.warning(f"No score found for {metric_name}, using neutral")
-    return 0.0
-
-
 def _evaluate_condition(condition: str, fundamentals: Dict) -> bool:
     """Evaluate a simple condition on fundamental metrics."""
     if " AND " not in condition:
@@ -616,7 +582,7 @@ def compute_category_score(
             continue
         
         metric_data = fundamentals.get(metric)
-        score = extract_fundamental_score(metric_data, metric)
+        score = extract_normalized_score(metric_data, metric, horizon)
         
         score = max(0.0, min(10.0, score))  # Defensive clamp
         
@@ -760,7 +726,6 @@ def compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
             "total": round(bonus, 2),
             "reasons": bonus_reasons
         },
-        "bonuses": bonus_reasons,
         "breakdown": category_breakdown
     }
 
@@ -770,40 +735,32 @@ def extract_normalized_score(
     metric_name: str,
     horizon: str = "short_term"
 ) -> float:
-    """
-    Extract and normalize fundamental metric score (0-10 scale).
-    Mirrors technical_score_config's extraction logic.
-    
-    Args:
-        metric_data: Metric from fundamentals dict
-        metric_name: Metric key (e.g., "roe", "dividendyield")
-        horizon: Trading timeframe
-    
-    Returns:
-        Normalized score (0-10)
-    """
-    # 1. Extract raw score from dict structure
     if isinstance(metric_data, dict):
+        # For metrics with known inverted directionality, always re-normalize from raw
+        if metric_name in SCORE_FIELD_UNRELIABLE:
+            raw = metric_data.get("raw") or metric_data.get("value")
+            if raw is not None:
+                return _normalize_fundamental_metric(metric_name, float(raw), horizon)
+            return 0.0
+
+        # For all other metrics, trust the pre-computed score field
         score = metric_data.get("score")
         if score is not None:
             return max(0.0, min(10.0, float(score)))
-        
-        # Fallback to raw value if score missing
+
+        # Fallback: re-normalize from raw value
         raw = metric_data.get("raw") or metric_data.get("value")
         if raw is None:
             logger.warning(f"No score/raw for {metric_name}")
             return 0.0
-    
+
     elif isinstance(metric_data, (int, float)):
         raw = metric_data
-    
     else:
         logger.warning(f"Invalid type for {metric_name}: {type(metric_data)}")
         return 0.0
-    
-    # 2. Apply metric-specific normalization
-    return _normalize_fundamental_metric(metric_name, raw, horizon)
 
+    return _normalize_fundamental_metric(metric_name, raw, horizon)
 
 def _normalize_fundamental_metric(
     metric_name: str,
@@ -896,20 +853,34 @@ def _normalize_health_quality(metric: str, val: float) -> float:
     if metric == "deRatio":  # Lower is better
         if val <= 0.3: return 10
         elif val <= 0.5: return 8
-        elif val <= 1.0: return 6
-        elif val <= 2.0: return 4
-        else: return 2
+        elif val <= 1.0: return 5
+        elif val <= 2.0: return 3
+        else: return 1
+
+    elif metric == "ocfVsProfit":     # ← ADD: Higher is better (OCF > profit = quality earnings)
+        if val >= 1.2: return 10      # OCF significantly exceeds profit (high quality)
+        elif val >= 1.0: return 8     # OCF roughly matches profit
+        elif val >= 0.8: return 5     # Slight shortfall
+        elif val >= 0.5: return 3     # Notable gap
+        else: return 1                # OCF far below profit (earnings quality concern)
     
     elif metric == "currentRatio":  # Higher is better
         if val >= 2.0: return 10
         elif val >= 1.5: return 8
         elif val >= 1.0: return 6
         else: return 4
+
+    elif metric == "beta":
+        # Lower beta = more stable. Score inverts at extremes.
+        if 0.5 <= val <= 0.9: return 10   # Low vol, less market risk
+        elif 0.9 < val <= 1.2: return 7   # Market neutral
+        elif 1.2 < val <= 1.5: return 4   # Elevated volatility
+        else: return 2                    # High beta or near-zero (illiquid)
     
     elif metric == "piotroskiF":  # 0-9 scale
         return val * (10/9)  # Convert to 0-10
     
-    return 5.0
+    return 5.0  # Neutral for marketCap, position52w, etc.
 
 
 def _normalize_ownership(metric: str, val: float) -> float:

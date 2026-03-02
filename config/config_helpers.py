@@ -301,9 +301,24 @@ def build_evaluation_context_v5(
         # Log summary at end
         summary = METRICS.get_summary()
         if summary["total_issues"] > 0:
+            # Build details from issue categories
+            details = []
+            if summary.get("missing_keys"):
+                details.append(f"missing_keys={list(summary['missing_keys'].keys())}")
+            if summary.get("failed_methods"):
+                details.append(f"failed_methods={list(summary['failed_methods'].keys())}")
+            if summary.get("none_returns"):
+                details.append(f"none_returns={list(summary['none_returns'].keys())}")
+            if summary.get("validation_failures"):
+                details.append(f"validation_failures={list(summary['validation_failures'].keys())}")
+            gates = summary.get("gates", {})
+            failed_gates = [g for g, v in gates.items() if v.get("failed", 0) > 0]
+            if failed_gates:
+                details.append(f"failed_gates={failed_gates}")
+            detail_str = " | ".join(details) if details else "unknown"
             logger.warning(
                 f"[{ticker}] ⚠️ EVALUATION SUMMARY: "
-                f"{summary['total_issues']} issues detected"
+                f"{summary['total_issues']} issues detected — {detail_str}"
             )
         else:
             logger.info(f"[{ticker}] ✅ EVALUATION CLEAN: No issues")

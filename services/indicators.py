@@ -603,13 +603,15 @@ def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         low = df["Low"].iloc[-1]
         close = df["Close"].iloc[-1]
         
-        if high == low: raise ValueError("Zero range candle")
+        if high == low: 
+            logger.debug("Zero range candle — skipping priceAction")
+            return {}
         pos = (close - low) / (high - low)
         
         if pos >= 0.75: sig, score = "Strong Bullish Close", 10
         elif pos >= 0.5: sig, score = "Moderate Close", 5
         else: sig, score = "Weak Close", 0
-        
+
         return {"priceAction": {"value": round(pos*100, 1), "score": score, "signal": sig, "desc": f"priceAction -> {round(pos*100, 1)}"}}
     return _wrap_calc(_inner, "Price Action")
 
@@ -1289,7 +1291,7 @@ def compute_indicators(
         "macd", "adx", "rsi", "maFastSlope", "cmfSignal", # Changed ma_slopes -> maFastSlope
         "obvDiv", "priceVsPrimaryTrendPct", "gapPercent", "maTrendSignal", # Changed maTrendSetup -> maTrendSignal
         "supertrendSignal", "psarTrend", "ttmSqueeze", "bbWidth", 
-        "bbpercentb", "volSpikeRatio", "pivotPoint",
+        "bbpercentb", "volSpikeRatio", "pivotPoint","regSlope",
         "maCrossSignal", # Changed maCrossSetup -> maCrossSignal
         "wickRejection", "atrDynamic", "slAtrDynamic","ichiCloud","trueRange","hv10","stochK", "stochD","position52w","relStrengthNifty"
     }
@@ -1314,7 +1316,7 @@ def compute_indicators(
 
     benchmark_df = None
     try:
-        raw_bench = get_benchmark_data("long_term", benchmark_symbol)
+        raw_bench = get_benchmark_data(horizon, benchmark_symbol)
         if raw_bench is not None and not raw_bench.empty:
             benchmark_df = raw_bench.copy()
             benchmark_df.index = pd.to_datetime(benchmark_df.index)
@@ -1487,7 +1489,7 @@ indicators_keys = {
         'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_200ema_pct', 'priceAction',
         'cmfSignal', 'bollingerSqueeze', 'bollinger_squeeze_intraday', 'ichimokuSignals',
         'ichimoku_signals_intraday', 'goldenCross', 'golden_cross_intraday', 'doubleTopBottom',
-        'double_top_bottom_intraday', 'technicalScore', 'Horizon','diSpread','hvTrend','trueRangeConsistency','trendStrength','momentumStrength'.'volatilityQuality'
+        'double_top_bottom_intraday', 'technicalScore', 'Horizon','diSpread','hvTrend','trueRangeConsistency','trendStrength','momentumStrength','volatilityQuality'
     ],
     'short_term': [
         'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',

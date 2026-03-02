@@ -17,7 +17,8 @@
     }
 
     .wrap {
-      max-width: 1250px;
+      max-width: 95%;
+      /* Expanded for full width usage */
       margin: auto;
       padding: 20px;
     }
@@ -225,10 +226,10 @@
 
         <div class="text-end">
           {% set fs = profile_report.final_score | default(0) %}
-          {% set cat = profile_report.category | default('HOLD') %}
+          {% set cat = profile_report.profile_signal | default(profile_report.category | default('HOLD')) %}
           <div class="d-flex flex-column align-items-end">
             <span
-              class="badge rounded-pill fs-6 px-3 py-2 mb-1 {{ 'bg-buy' if cat=='BUY' else ('bg-sell' if cat=='SELL' else 'bg-hold') }}">
+              class="badge rounded-pill fs-6 px-3 py-2 mb-1 {{ 'bg-buy' if cat in ('STRONG','BUY') else ('bg-sell' if cat in ('AVOID','SELL') else 'bg-hold') }}">
               {{ cat }} ({{ fs }}/10)
             </span>
             <div style="width: 140px;">
@@ -247,34 +248,34 @@
     {% else %}
 
     {# ── EXECUTION CONFLICT BANNER ──────────────────────────────────────────
-       Shows when the best-fit profile scored BUY (score ≥ 7) but the actual
-       trade plan returned HOLD due to real-time gate failures (RR, confidence,
-       execution block).  Also shows when another horizon has a better signal.
+    Shows when the best-fit profile scored BUY (score ≥ 7) but the actual
+    trade plan returned HOLD due to real-time gate failures (RR, confidence,
+    execution block). Also shows when another horizon has a better signal.
     #}
     {% set tr = trade_recommendation %}
-    {% set prof_cat     = profile_report.category | default('HOLD') %}
-    {% set trade_sig    = tr.trade_signal | default('HOLD') %}
-    {% set sig_ctx      = tr.signal_context | default({}) %}
-    {% set best_fit_h   = best_fit_horizon | default(selected_horizon) %}
-    {% set conflict     = (prof_cat == 'BUY' and trade_sig == 'HOLD') %}
+    {% set prof_cat = profile_report.profile_signal | default(profile_report.category | default('HOLD')) %}
+    {% set trade_sig = tr.trade_signal | default('HOLD') %}
+    {% set sig_ctx = tr.signal_context | default({}) %}
+    {% set best_fit_h = best_fit_horizon | default(selected_horizon) %}
+    {% set conflict = (prof_cat in ('STRONG', 'MODERATE') and trade_sig in ('WATCH', 'HOLD', 'BLOCKED')) %}
 
     {# Find an alt horizon that has trade_signal == BUY #}
     {% set ns = namespace(alt_horizon='', alt_score=0) %}
     {% for h in ['short_term', 'intraday', 'long_term', 'multibagger'] %}
-      {% if h != selected_horizon %}
-        {% set hp = full_report.profiles.get(h, {}) if full_report.profiles is defined else {} %}
-        {% if hp.get('category') == 'BUY' and hp.get('can_trade') %}
-          {% if ns.alt_horizon == '' %}
-            {% set ns.alt_horizon = h %}
-            {% set ns.alt_score   = hp.get('final_score', 0) %}
-          {% endif %}
-        {% endif %}
-      {% endif %}
+    {% if h != selected_horizon %}
+    {% set hp = full_report.profiles.get(h, {}) if full_report.profiles is defined else {} %}
+    {% if hp.get('profile_signal', hp.get('category')) in ('STRONG', 'MODERATE', 'BUY') and hp.get('can_trade') %}
+    {% if ns.alt_horizon == '' %}
+    {% set ns.alt_horizon = h %}
+    {% set ns.alt_score = hp.get('final_score', 0) %}
+    {% endif %}
+    {% endif %}
+    {% endif %}
     {% endfor %}
 
     {% if conflict %}
     <div class="alert mb-3 d-flex align-items-start gap-3"
-         style="background:#fefce8;border-left:5px solid #f59e0b;border-radius:10px;padding:14px 18px;">
+      style="background:#fefce8;border-left:5px solid #f59e0b;border-radius:10px;padding:14px 18px;">
       <i class="bi bi-exclamation-triangle-fill text-warning fs-4 mt-1 flex-shrink-0"></i>
       <div class="flex-grow-1">
         <div class="fw-bold" style="color:#92400e;">
@@ -282,19 +283,19 @@
         </div>
         <div class="small mt-1" style="color:#78350f;">
           The <b>{{ selected_horizon | replace('_',' ') | title }}</b> profile scored
-          <b>{{ profile_report.final_score | default(0) | round(1) }}/10</b> (BUY eligible),
-          but the trade plan returned <b>HOLD</b> because:
+          <b>{{ profile_report.final_score | default(0) | round(1) }}/10</b> ({{ prof_cat }}),
+          but the trade plan returned <b>{{ trade_sig }}</b> because:
           {% set status = tr.status | default('') %}
           {% if status == 'BLOCKED' %}
-            real-time execution gates failed
-            {% if sig_ctx.rr_t1 is defined %}
-              (R:R T1 = {{ sig_ctx.rr_t1 | round(2) }})
-            {% endif %}.
+          real-time execution gates failed
+          {% if sig_ctx.rr_t1 is defined %}
+          (R:R T1 = {{ sig_ctx.rr_t1 | round(2) }})
+          {% endif %}.
           {% elif status == 'LOW_CONFIDENCE' %}
-            confidence <b>{{ sig_ctx.confidence | default(tr.final_confidence) }}%</b>
-            is below the minimum tradeable threshold.
+          confidence <b>{{ sig_ctx.confidence | default(tr.final_confidence) }}%</b>
+          is below the minimum tradeable threshold.
           {% else %}
-            direction is <b>{{ sig_ctx.direction | default('neutral') }}</b> — no actionable bias.
+          direction is <b>{{ sig_ctx.direction | default('neutral') }}</b> — no actionable bias.
           {% endif %}
         </div>
         {% if tr.block_reason %}
@@ -305,7 +306,7 @@
         {% if ns.alt_horizon %}
         <div class="mt-2">
           <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ ns.alt_horizon }}"
-             class="btn btn-sm btn-success">
+            class="btn btn-sm btn-success">
             <i class="bi bi-arrow-right-circle me-1"></i>
             Better execution fit: {{ ns.alt_horizon | replace('_',' ') | title }}
             (score {{ ns.alt_score | round(1) }})
@@ -315,8 +316,8 @@
       </div>
       {# Mini signal context pill #}
       <div class="text-end flex-shrink-0" style="min-width:90px;">
-        <div class="badge bg-warning text-dark mb-1 d-block">Profile: BUY</div>
-        <div class="badge bg-secondary d-block">Signal: HOLD</div>
+        <div class="badge bg-warning text-dark mb-1 d-block">Profile: {{ prof_cat }}</div>
+        <div class="badge bg-secondary d-block">Signal: {{ trade_sig }}</div>
         {% if sig_ctx.rr_t1 is defined %}
         <div class="text-muted mt-1" style="font-size:0.65rem;">R:R {{ sig_ctx.rr_t1 | round(2) }}</div>
         {% endif %}
@@ -358,15 +359,18 @@
             {% if bd %}
             <div class="d-flex gap-2 mt-2 mb-1">
               <div class="flex-fill text-center p-1 rounded" style="background:#e0f2fe;">
-                <div class="fw-bold text-primary" style="font-size:0.85rem;">{{ bd.dna_fit_score | default(bd.base_score) | round(0) | int }}%</div>
+                <div class="fw-bold text-primary" style="font-size:0.85rem;">{{ bd.dna_fit_score |
+                  default(bd.base_score) | round(0) | int }}%</div>
                 <div style="font-size:0.65rem;color:#0369a1;">DNA Fit</div>
               </div>
               <div class="flex-fill text-center p-1 rounded" style="background:#dcfce7;">
-                <div class="fw-bold text-success" style="font-size:0.85rem;">{{ bd.setup_quality_score | default(0) | round(0) | int }}%</div>
+                <div class="fw-bold text-success" style="font-size:0.85rem;">{{ bd.setup_quality_score | default(0) |
+                  round(0) | int }}%</div>
                 <div style="font-size:0.65rem;color:#166534;">Setup Now</div>
               </div>
               <div class="flex-fill text-center p-1 rounded" style="background:#fef9c3;">
-                <div class="fw-bold text-warning" style="font-size:0.85rem;">{{ best.horizon_multiplier | default(1.0) }}x</div>
+                <div class="fw-bold text-warning" style="font-size:0.85rem;">{{ best.horizon_multiplier | default(1.0)
+                  }}x</div>
                 <div style="font-size:0.65rem;color:#854d0e;">Horizon</div>
               </div>
             </div>
@@ -504,16 +508,18 @@
                           </td>
                           <td class="text-center">
                             {% if bd %}
-                              <span class="text-primary fw-bold">{{ bd.dna_fit_score | default(bd.base_score) | round(0) | int }}%</span>
+                            <span class="text-primary fw-bold">{{ bd.dna_fit_score | default(bd.base_score) | round(0) |
+                              int }}%</span>
                             {% else %}
-                              <span class="text-muted">-</span>
+                            <span class="text-muted">-</span>
                             {% endif %}
                           </td>
                           <td class="text-center">
                             {% if bd %}
-                              <span class="text-success fw-bold">{{ bd.setup_quality_score | default(0) | round(0) | int }}%</span>
+                            <span class="text-success fw-bold">{{ bd.setup_quality_score | default(0) | round(0) | int
+                              }}%</span>
                             {% else %}
-                              <span class="text-muted">-</span>
+                            <span class="text-muted">-</span>
                             {% endif %}
                           </td>
                           <td class="text-center fw-bold">{{ strat.weighted_score | round(0) | int }}%</td>
@@ -550,32 +556,34 @@
               <tbody>
                 {# metric_details can be a list [{metric, score}] OR a dict {metric: score} #}
                 {% if profile_report.metric_details %}
-                  {% if profile_report.metric_details is mapping %}
-                    {# Dict path (legacy) #}
-                    {% for key, score in profile_report.metric_details.items() | sort(attribute=1, reverse=True) %}
-                    {% if loop.index <= 5 %}
-                    <tr>
-                      <td>{{ key | replace('_', ' ') | title }}</td>
-                      <td class="text-end fw-bold {{ 'text-success' if score >= 7 else ('text-danger' if score <= 3 else 'text-muted') }}">{{ score }}</td>
-                    </tr>
-                    {% endif %}
-                    {% endfor %}
-                  {% else %}
-                    {# List path: [{metric: str, score: float, ...}] #}
-                    {% for item in profile_report.metric_details | sort(attribute='score', reverse=True) %}
-                    {% if loop.index <= 5 %}
-                    <tr>
-                      <td>{{ item.metric | default(item.name) | replace('_', ' ') | title }}</td>
-                      <td class="text-end fw-bold {{ 'text-success' if item.score >= 7 else ('text-danger' if item.score <= 3 else 'text-muted') }}">{{ item.score | round(1) }}</td>
-                    </tr>
-                    {% endif %}
-                    {% endfor %}
-                  {% endif %}
-                {% else %}
-                  <tr>
-                    <td colspan="2" class="text-muted">No metric details available</td>
+                {% if profile_report.metric_details is mapping %}
+                {# Dict path (legacy) #}
+                {% for key, score in profile_report.metric_details.items() | sort(attribute=1, reverse=True) %}
+                {% if loop.index <= 5 %} <tr>
+                  <td>{{ key | replace('_', ' ') | title }}</td>
+                  <td
+                    class="text-end fw-bold {{ 'text-success' if score >= 7 else ('text-danger' if score <= 3 else 'text-muted') }}">
+                    {{ score }}</td>
                   </tr>
-                {% endif %}
+                  {% endif %}
+                  {% endfor %}
+                  {% else %}
+                  {# List path: [{metric: str, score: float, ...}] #}
+                  {% for item in profile_report.metric_details | sort(attribute='score', reverse=True) %}
+                  {% if loop.index <= 5 %} <tr>
+                    <td>{{ item.metric | default(item.name) | replace('_', ' ') | title }}</td>
+                    <td
+                      class="text-end fw-bold {{ 'text-success' if item.score >= 7 else ('text-danger' if item.score <= 3 else 'text-muted') }}">
+                      {{ item.score | round(1) }}</td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                    {% endif %}
+                    {% else %}
+                    <tr>
+                      <td colspan="2" class="text-muted">No metric details available</td>
+                    </tr>
+                    {% endif %}
               </tbody>
             </table>
           </div>
@@ -623,9 +631,9 @@
           {% set tr = trade_recommendation %}
 
           {# NEW MAPPING: Use 'trade_signal' for the main Buy/Sell/Hold text #}
-          {% set ts = tr.trade_signal | default('HOLD') %}
+          {% set ts = tr.trade_signal | default(tr.setup_signal | default('HOLD')) %}
           <h3
-            class="fw-bold {{ 'text-success' if 'BUY' in ts else ('text-danger' if 'SHORT' in ts else 'text-muted') }}">
+            class="fw-bold {{ 'text-success' if ts == 'BUY' else ('text-danger' if ts in ('SELL','BLOCKED') else ('text-warning' if ts == 'WATCH' else 'text-muted')) }}">
             {{ ts }}
           </h3>
 
@@ -711,6 +719,168 @@
 
     </div>
 
+    {# ── SETUP EVALUATION CARD ──────────────────────────────────────────────
+    Shows the selected setup, all qualifying candidates, and all rejected
+    setups with the specific reason each one failed.
+    #}
+    {% set setup_data = profile_report.eval_ctx.setup if profile_report.eval_ctx else None %}
+    {% if setup_data %}
+    <div class="card mb-3 p-3">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="section-title mb-0">
+          <i class="bi bi-funnel-fill me-2"></i>
+          Setup Evaluation
+          <span class="badge bg-light text-dark border ms-2">{{ selected_horizon | upper }}</span>
+        </h5>
+        <div class="d-flex gap-2 align-items-center">
+          {% set n_pass = setup_data.candidates_enriched | default([]) | length %}
+          {% set n_fail = setup_data.rejected_enriched | default([]) | length %}
+          <span class="badge bg-success-subtle text-success border border-success-subtle">{{ n_pass }} qualified</span>
+          <span class="badge bg-secondary-subtle text-secondary border">{{ n_fail }} rejected</span>
+        </div>
+      </div>
+
+      {# ── SELECTED SETUP (best) ── #}
+      {% if setup_data.best and setup_data.best.type != 'GENERIC' %}
+      {% set best = setup_data.best %}
+      <div class="p-3 rounded mb-3"
+        style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border-left:4px solid #3b82f6;">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="text-muted small mb-1">Selected Setup</div>
+            <h6 class="fw-bold text-primary mb-0">
+              <i class="bi {{ best.icon | default('bi-check2-circle') }} me-1"></i>
+              {{ best.label | default(best.type | replace('_',' ') | title) }}
+            </h6>
+            <div class="text-muted small mt-1">
+              <span class="badge bg-primary-subtle text-primary border border-primary-subtle me-1">{{ best.group |
+                default('') }}</span>
+              Priority {{ best.priority }} &nbsp;·&nbsp; Fit {{ best.fit_score | round(1) }}% &nbsp;·&nbsp; Composite {{
+              best.composite_score | round(1) }}
+            </div>
+          </div>
+          <div class="text-end">
+            <div class="fw-bold text-primary fs-5">{{ best.fit_score | round(0) | int }}%</div>
+            <div class="text-muted" style="font-size:0.65rem;">Fit Score</div>
+          </div>
+        </div>
+        {# Pattern requirements #}
+        {% if best.patterns_primary %}
+        <div class="mt-2 d-flex flex-wrap gap-1">
+          <span class="text-muted small me-1">Needs:</span>
+          {% for p in best.patterns_primary %}
+          <span class="badge bg-primary" style="font-size:0.65rem;">{{ p | replace('_',' ') | title }}</span>
+          {% endfor %}
+          {% for p in best.patterns_confirming | default([]) %}
+          <span class="badge bg-light text-dark border" style="font-size:0.65rem;">{{ p | replace('_',' ') | title
+            }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% else %}
+      {# GENERIC fallback — no setup matched #}
+      <div class="alert alert-warning py-2 mb-3 d-flex align-items-center gap-2">
+        <i class="bi bi-exclamation-triangle-fill text-warning"></i>
+        <div>
+          <strong>No specific setup qualified.</strong>
+          <span class="text-muted small ms-1">Stock is being evaluated under the generic fallback — no active trade
+            structure exists. Await a pattern or setup trigger.</span>
+        </div>
+      </div>
+      {% endif %}
+
+      {# ── TWO COLUMNS: qualified | rejected ── #}
+      <div class="row g-3">
+
+        {# Qualifying setups (other than the winner) #}
+        <div class="col-md-4">
+          <div class="text-muted small fw-semibold mb-2">
+            <i class="bi bi-check-circle text-success me-1"></i> Also Qualified
+          </div>
+          {% set other_candidates = setup_data.candidates_enriched | default([]) | selectattr("type", "ne",
+          setup_data.best.type if setup_data.best else "") | list %}
+          {% if other_candidates %}
+          {% for c in other_candidates %}
+          <div class="p-2 rounded mb-2" style="background:#f0fdf4;border:1px solid #bbf7d0;">
+            <div class="d-flex justify-content-between align-items-center">
+              <div>
+                <i class="bi {{ c.icon }} me-1 text-success" style="font-size:0.75rem;"></i>
+                <strong style="font-size:0.8rem;">{{ c.label }}</strong>
+                <span class="badge bg-success-subtle text-success border ms-1" style="font-size:0.6rem;">{{ c.group
+                  }}</span>
+              </div>
+              <span class="badge bg-success" style="font-size:0.7rem;">{{ c.fit_score | round(0) | int }}%</span>
+            </div>
+            <div class="text-muted mt-1" style="font-size:0.7rem;">
+              Priority {{ c.priority }} &nbsp;·&nbsp; Composite {{ c.composite_score | round(1) }}
+            </div>
+          </div>
+          {% endfor %}
+          {% else %}
+          <div class="text-muted small fst-italic">No other setups qualified.</div>
+          {% endif %}
+        </div>
+
+        {# Rejected setups — grouped by reason #}
+        <div class="col-md-8">
+          <div class="text-muted small fw-semibold mb-2">
+            <i class="bi bi-x-circle text-secondary me-1"></i> Rejected Setups
+          </div>
+
+          {% set rejected = setup_data.rejected_enriched | default([]) %}
+          {% if rejected %}
+
+          <div style="max-height:280px;overflow-y:auto;">
+            {% for reason_label, group in rejected | groupby('reason_label') %}
+
+            {# Colour-code by reason type #}
+            {% if 'not detected' in reason_label or 'Pattern' in reason_label %}
+            {% set pill_cls = 'bg-warning-subtle text-warning border-warning-subtle' %}
+            {% set icon_cls = 'bi-grid-3x3-gap text-warning' %}
+            {% elif 'Technical' in reason_label or 'technical' in reason_label %}
+            {% set pill_cls = 'bg-info-subtle text-info border-info-subtle' %}
+            {% set icon_cls = 'bi-bar-chart text-info' %}
+            {% elif 'Fundamental' in reason_label or 'fundamental' in reason_label %}
+            {% set pill_cls = 'bg-secondary-subtle text-secondary border' %}
+            {% set icon_cls = 'bi-building text-secondary' %}
+            {% elif 'horizon' in reason_label %}
+            {% set pill_cls = 'bg-secondary-subtle text-secondary border-secondary-subtle' %}
+            {% set icon_cls = 'bi-clock text-secondary' %}
+            {% else %}
+            {% set pill_cls = 'bg-light text-dark border' %}
+            {% set icon_cls = 'bi-slash-circle text-muted' %}
+            {% endif %}
+
+            <div class="mb-2">
+              <div class="d-flex align-items-center gap-1 mb-1">
+                <i class="bi {{ icon_cls }}" style="font-size:0.75rem;"></i>
+                <span class="badge {{ pill_cls }} border" style="font-size:0.65rem;">
+                  {{ reason_label }}
+                </span>
+                <span class="text-muted" style="font-size:0.65rem;">({{ group | list | length }})</span>
+              </div>
+              <div class="d-flex flex-wrap gap-1 ps-3">
+                {% for r in group %}
+                <span class="badge bg-light text-dark border" style="font-size:0.65rem;" title="{{ r.reason_raw }}">
+                  <i class="bi {{ r.icon }} me-1"></i>{{ r.label }}
+                </span>
+                {% endfor %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+
+          {% else %}
+          <div class="text-muted small fst-italic">No rejection data available.</div>
+          {% endif %}
+        </div>
+
+      </div>{# end row #}
+    </div>
+    {% endif %}
+    {# ── END SETUP EVALUATION CARD ────────────────────────────────────────── #}
+
     <div class="card mb-3">
       <div class="card-header">
         <h5 class="mb-0">
@@ -737,10 +907,19 @@
         <div class="row g-0">
 
           <div class="col-md-6 p-4 border-end">
-            <h5 class="section-title text-primary"><i class="bi bi-crosshair me-2"></i> Trade Plan</h5>
-
             {% set tr = trade_recommendation %}
-            {% set has_trade = "BUY" in tr.signal or "SHORT" in tr.signal %}
+            {% set has_trade = ("BUY" in tr.signal or "SHORT" in tr.signal) or (tr.trade_signal in ['BUY', 'SELL']) %}
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h5 class="section-title text-primary mb-0"><i class="bi bi-crosshair me-2"></i> Trade Plan</h5>
+              {% if has_trade %}
+              <div>
+                <a href="/paper_trades" class="btn btn-sm btn-outline-secondary shadow-sm" target="_blank"
+                  title="View Paper Trades">
+                  <i class="bi bi-table"></i> View Dashboard
+                </a>
+              </div>
+              {% endif %}
+            </div>
             {% if trade_recommendation.entry and trade_recommendation.stop_loss and trade_recommendation.targets.t1 %}
             <div class="my-3 px-2">
               <div class="position-relative mt-4 mb-2" style="height: 6px; background: #e9ecef; border-radius: 4px;">
@@ -791,7 +970,8 @@
                   {}).get("t1") else '-' }}</div>
                 {# ✅ NEW: profit % to T1 #}
                 {% if tr.entry and tr.get("targets", {}).get("t1") and tr.entry > 0 %}
-                <div class="small {{ 'text-success' if ((tr.get('targets', {}).get('t1') - tr.entry) / tr.entry * 100) > 0 else 'text-danger' }}">
+                <div
+                  class="small {{ 'text-success' if ((tr.get('targets', {}).get('t1') - tr.entry) / tr.entry * 100) > 0 else 'text-danger' }}">
                   {{ "%.1f" | format(((tr.get("targets", {}).get("t1") - tr.entry) / tr.entry * 100)) }}%
                 </div>
                 {% endif %}
@@ -803,7 +983,8 @@
                   {}).get("t2") else '-' }}</div>
                 {# ✅ NEW: profit % to T2 #}
                 {% if tr.entry and tr.get("targets", {}).get("t2") and tr.entry > 0 %}
-                <div class="small {{ 'text-success' if ((tr.get('targets', {}).get('t2') - tr.entry) / tr.entry * 100) > 0 else 'text-danger' }}">
+                <div
+                  class="small {{ 'text-success' if ((tr.get('targets', {}).get('t2') - tr.entry) / tr.entry * 100) > 0 else 'text-danger' }}">
                   {{ "%.1f" | format(((tr.get("targets", {}).get("t2") - tr.entry) / tr.entry * 100)) }}%
                 </div>
                 {% endif %}
@@ -1188,30 +1369,59 @@
       }
     }
 
-    function toggleTradeState(el) {
-      const key = `trade_active_{{ symbol }}_${rawHorizon}`;
+    async function toggleTradeState(el) {
       const label = el.nextElementSibling;
+      const OriginalText = label.innerText;
+
+      // Lock UI
+      el.disabled = true;
+      label.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Syncing...';
 
       if (el.checked) {
-        localStorage.setItem(key, "true");
-        label.innerText = "Running";
-        label.classList.add("text-success");
+        // Attempt to Add
+        const success = await addPaperTrade();
+        if (success) {
+          label.innerText = "Running";
+          label.classList.add("text-success");
+        } else {
+          el.checked = false; // Revert
+          label.innerText = "Mark Active";
+          label.classList.remove("text-success");
+        }
       } else {
-        localStorage.removeItem(key);
-        label.innerText = "Mark Active";
-        label.classList.remove("text-success");
+        // Attempt to Remove
+        const success = await removePaperTrade();
+        if (success) {
+          label.innerText = "Mark Active";
+          label.classList.remove("text-success");
+        } else {
+          el.checked = true; // Revert
+          label.innerText = "Running";
+          label.classList.add("text-success");
+        }
       }
+      el.disabled = false;
     }
 
-    window.addEventListener('DOMContentLoaded', () => {
+    window.addEventListener('DOMContentLoaded', async () => {
       calcSize();
-
-      const key = `trade_active_{{ symbol }}_${rawHorizon}`;
       const el = document.getElementById('paperTradeCheck');
-      if (el && localStorage.getItem(key) === "true") {
-        el.checked = true;
-        el.nextElementSibling.innerText = "Running";
-        el.nextElementSibling.classList.add("text-success");
+      if (el) {
+        try {
+          const res = await fetch(`/api/paper_trade/status?symbol={{ symbol }}&horizon=${rawHorizon}`);
+          const data = await res.json();
+          if (data.active) {
+            el.checked = true;
+            el.nextElementSibling.innerText = "Running";
+            el.nextElementSibling.classList.add("text-success");
+          } else {
+            el.checked = false;
+            el.nextElementSibling.innerText = "Mark Active";
+            el.nextElementSibling.classList.remove("text-success");
+          }
+        } catch (e) {
+          console.error("Failed to fetch paper trade status", e);
+        }
       }
     });
 
@@ -1554,6 +1764,70 @@
       }
     }
 
+  </script>
+  <script>
+    async function addPaperTrade() {
+      // Parse est_time_str to roughly extract days
+      let days = null;
+      let estStr = "{{ trade_recommendation.est_time_str | default('') }}";
+      if (estStr) {
+        let m = estStr.match(/(\d+)/);
+        if (m && m[1]) {
+          days = parseInt(m[1], 10);
+          if (estStr.toLowerCase().includes('week')) days *= 7;
+          if (estStr.toLowerCase().includes('month')) days *= 30;
+        }
+      }
+
+      const payload = {
+        symbol: "{{ symbol }}",
+        entry_price: parseFloat("{{ trade_recommendation.entry or 0 }}") || 0,
+        target_1: parseFloat("{{ trade_recommendation.targets.t1 if (trade_recommendation.targets and trade_recommendation.targets.t1) else 0 }}") || null,
+        target_2: parseFloat("{{ trade_recommendation.targets.t2 if (trade_recommendation.targets and trade_recommendation.targets.t2) else 0 }}") || null,
+        stop_loss: parseFloat("{{ trade_recommendation.stop_loss or 0 }}") || null,
+        estimated_hold_days: days,
+        horizon: rawHorizon,
+        position_size: parseInt(document.getElementById('qtyDisplay')?.innerText) || null
+      };
+
+      try {
+        const res = await fetch("/api/paper_trade/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          return true;
+        } else {
+          alert('Error: ' + data.error);
+          return false;
+        }
+      } catch (err) {
+        alert('Failed to save paper trade.');
+        return false;
+      }
+    }
+
+    async function removePaperTrade() {
+      try {
+        const res = await fetch("/api/paper_trade/remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol: "{{ symbol }}", horizon: rawHorizon })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          return true;
+        } else {
+          alert('Error: ' + data.error);
+          return false;
+        }
+      } catch (err) {
+        alert('Failed to remove paper trade.');
+        return false;
+      }
+    }
   </script>
 </body>
 

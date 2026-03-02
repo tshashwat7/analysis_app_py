@@ -81,7 +81,8 @@ def _is_market_open_now():
 
 def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
     """
-    ✅ PATCHED: UTC-aware comparison to match Parquet Store's UTC index.
+    ✅UTC-aware comparison + interval-aware TTL windows.
+    Handles daily, weekly, and monthly bars correctly.
     """
     if not ENABLE_CACHE: return False
     if df is None or getattr(df, "empty", True): return False
@@ -98,38 +99,51 @@ def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
             
         # 3. Get current time in UTC
         now = datetime.datetime.now(datetime.timezone.utc)
-        
-        # Total minutes since the last candle
+
+        # 4. Age in minutes
         age_minutes = (now - last_ts).total_seconds() / 60
         
         # 5. Future protection (clock skew)
-        if age_minutes < -10: 
-            logger.warning(f"Data timestamp is in the future by {abs(age_minutes):.0f}m - possible clock skew")
-            return False 
-
-        is_intraday = "m" in interval
-        
-        if is_intraday:
-            # Note: _is_market_open_now relies on local server time
-            if _is_market_open_now():
-                return age_minutes < 30 # Must be recent
-            
-            # If market is CLOSED, any data from the last close is fine
-            # (Logic: If it's 8 PM, data from 3:30 PM is still "fresh")
-            if age_minutes < (18 * 60): # Within last 18 hours
-                return True
+        if age_minutes < -10:
+            logger.warning(
+                f"Data timestamp is in the future by {abs(age_minutes):.0f}m "
+                f"- possible clock skew"
+            )
             return False
-            
-        else: # Daily
-            if now.weekday() >= 5: 
-                return age_minutes < (72 * 60) # 3 days buffer
-            
-            # Weekday: Data must be from today or yesterday
-            return age_minutes < (24 * 60)
+
+        is_intraday = "m" in interval  # matches "15m", "5m", "1m" etc.
+
+        if is_intraday:
+            if _is_market_open_now():
+                return age_minutes < 30          # Must be recent during live market
+            return age_minutes < (18 * 60)       # Any data from last 18h is fine after close
+
+        elif interval == "1d":
+            # Daily bar — stale after market hours next trading day
+            if now.weekday() >= 5:               # Weekend: last bar is Friday's
+                return age_minutes < (72 * 60)   # 3-day buffer
+            return age_minutes < (28 * 60)       # Weekday: allow a full session + 4h buffer
+                                                 # (28h instead of 24h avoids edge cases near open)
+
+        elif interval == "1wk":
+            # Weekly bar — always stamped at week open (Monday)
+            # A Wednesday fetch will see a "3-day-old" candle, which is perfectly fresh
+            return age_minutes < (8 * 24 * 60)   # 8 days: covers Mon→Mon safely
+
+        elif interval == "1mo":
+            # Monthly bar — stamped at month start
+            # A mid-month fetch sees a bar 15+ days old, which is still valid
+            return age_minutes < (35 * 24 * 60)  # 35 days: covers full month + buffer
+
+        else:
+            # Unknown interval — conservative 48h fallback
+            logger.debug(f"Unknown interval '{interval}' in freshness check, using 48h window")
+            return age_minutes < (48 * 60)
 
     except Exception as e:
         logger.debug(f"Freshness check failed: {e}")
         return False
+
 # -----------------------------
 # Retry wrapper
 # -----------------------------
@@ -543,7 +557,7 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
     # --- TIER 2: L2 PARQUET CACHE ---
     if ENABLE_CACHE:
         max_age_mins = ttl / 60
-        lookback_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "5y": 1825}
+        lookback_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
         target_days = lookback_map.get(period, 730)
         
         df_parquet = ParquetStore.load_ohlcv(symbol, interval, max_age_minutes=max_age_mins, lookback_days=target_days)
@@ -599,7 +613,7 @@ def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NS
     # --- TIER 2: L2 PARQUET (Disk) ---
     if ENABLE_CACHE:
         max_age_mins = 720 
-        lookback_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "5y": 1825}
+        lookback_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
         target_days = lookback_map.get(period, 730)
         df_parquet = ParquetStore.load_ohlcv(benchmark_symbol, interval, max_age_minutes=max_age_mins, lookback_days=target_days)
         
