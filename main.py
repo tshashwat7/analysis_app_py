@@ -37,8 +37,6 @@ from services.signal_engine import (
 )
 from services.corporate_actions import get_corporate_actions
 from services.summaries import build_all_summaries
-from services.metrics_ext import compute_extended_metrics_sync
-from services.flowchart_helper import build_flowchart_payload
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, SignalCache, init_db, PaperTrade
 
@@ -1625,21 +1623,7 @@ async def corporate_actions(ticker: str):
                 flat.append(a)
     return JSONResponse(flat)
 
-@app.get("/metrics_ext")
-async def metrics_ext_route(ticker: str):
-    return await compute_extended_metrics_sync(ticker)
 
-@app.get("/flowchart", response_class=HTMLResponse)
-async def show_flowchart(request: Request):
-    return templates.TemplateResponse("Stock_Buy-sell_Flowcharts.html", {"request": request})
-
-@app.get("/flowchart_payload")
-async def flowchart_payload(symbol: str, index: str = Query("NIFTY50")):
-    try:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(get_api_executor(), build_flowchart_payload, symbol, index)
-    except Exception as e:
-        return {"error": str(e)}
 
 @app.post("/api/paper_trade/add")
 async def add_paper_trade(req: PaperTradeRequest):

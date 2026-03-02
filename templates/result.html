@@ -648,10 +648,6 @@
             {{ tr.reason | truncate(60) }}
           </div>
 
-          <button id="viewFlowchart" class="btn btn-outline-primary btn-sm mt-3 w-100">
-            <i class="bi bi-diagram-2"></i> Logic Flow
-          </button>
-
           {% if summaries.gate_validation %}
           <div class="accordion driver-accordion mt-2" id="accordionSignal">
             <div class="accordion-item">
@@ -1431,17 +1427,6 @@
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return await res.json();
     }
-    document.getElementById('viewFlowchart')?.addEventListener('click', async () => {
-      const ticker = "{{ symbol }}";
-      const idx = "{{ current_index }}";
-      try {
-        const payload = await fetchJson(`/flowchart_payload?symbol=${encodeURIComponent(ticker)}&index=${idx}`);
-        sessionStorage.setItem("flowData", JSON.stringify(payload));
-        window.location.href = "/flowchart";
-      } catch (err) {
-        alert("Flowchart load failed: " + err.message);
-      }
-    });
 
     async function loadCorporateActions() {
       const ticker = "{{ symbol }}";
