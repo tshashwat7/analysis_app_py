@@ -35,7 +35,12 @@ from services.signal_engine import (
     score_quality_profile,
     score_momentum_profile,
 )
-from services.corporate_actions import get_corporate_actions
+from services.corporate_actions import (
+    get_corporate_actions,
+    build_corp_actions_summary_cache,
+    get_corp_actions_summary,
+)
+from services.world_bank_provider import get_macro_metrics
 from services.summaries import build_all_summaries
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, SignalCache, init_db, PaperTrade
@@ -291,7 +296,7 @@ async def periodic_warmer():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global API_EXECUTOR, COMPUTE_EXECUTOR, BACKGROUND_EXECUTOR
-    global cache_warmer_task, _SHUTDOWN_IN_PROGRESS
+    global cache_warmer_task, _SHUTDOWN_IN_PROGRESS, _CORP_ACTIONS_CACHE_READY
     
     # 1. Startup
     _SHUTDOWN_IN_PROGRESS = False
@@ -315,6 +320,29 @@ async def lifespan(app: FastAPI):
         logger.info("⏸️  Cache Warmer: DISABLED")
 
     try:
+        def _warm_corp_actions_cache():
+            """Runs in background thread at startup to pre-build corp actions summary."""
+            global _CORP_ACTIONS_CACHE_READY, _LAST_CORP_FETCH_TIME
+            try:
+                # Collect actual stock tickers from all index data files
+                all_tickers = set()
+                for idx_name in INDEX_TICKERS.keys():
+                    stocks = load_or_create_index(idx_name)
+                    for s in stocks:
+                        all_tickers.add(s[0])  # s is (symbol, name) tuple
+                all_tickers = list(all_tickers)
+                if not all_tickers:
+                    logger.warning("[STARTUP] No tickers found in data files, skipping corp actions cache.")
+                    return
+                logger.info("[STARTUP] Building corp actions summary for %d tickers...", len(all_tickers))
+                build_corp_actions_summary_cache(all_tickers)
+                _CORP_ACTIONS_CACHE_READY = True
+                _LAST_CORP_FETCH_TIME = time.time()
+                logger.info("[STARTUP] Corp actions summary cache ready.")
+            except Exception as e:
+                logger.warning("[STARTUP] Corp actions cache build failed: %s", e)
+        
+        threading.Thread(target=_warm_corp_actions_cache, daemon=True, name="CorpActionsWarmer").start()
         yield
     finally:
         # 2. Robust Shutdown
@@ -454,6 +482,9 @@ NSE_STOCKS_FILE = os.path.join(DATA_DIR, "nse_stocks.json")
 
 # Global reference
 cache_warmer_task = None
+_CORP_ACTIONS_CACHE_READY = False  # True once startup warmer finishes
+_LAST_CORP_FETCH_TIME = 0.0        # epoch timestamp of last successful corp actions fetch
+_CORP_FETCH_COOLDOWN_SEC = 3600    # 1 hour cooldown between fetches
 CACHE_TTL = 60 * 60
 CACHE_LOCK = threading.Lock()
 STOCK_TO_INDEX_MAP: Dict[str, str] = {}
@@ -1196,7 +1227,20 @@ async def load_index_endpoint(index_name: str):
         stocks = [("RELIANCE.NS", "Reliance Industries"), ("TCS.NS", "TCS")]
     tickers = [s[0] for s in stocks]
     pairs = {s[0]: s[1] for s in stocks}
-    return {"index": index_name, "count": len(stocks), "tickers": tickers, "pairs": pairs}
+    # Include corp actions from cache if available
+    corp_map = {}
+    corp_ready = _CORP_ACTIONS_CACHE_READY
+    if corp_ready:
+        try:
+            corp_map = get_corp_actions_summary(tickers)
+        except Exception:
+            pass
+    return {
+        "index": index_name, "count": len(stocks),
+        "tickers": tickers, "pairs": pairs,
+        "corp_actions": corp_map,
+        "corp_actions_ready": corp_ready,
+    }
 
 @app.get("/analyze", response_class=HTMLResponse)
 async def analyze_common(
@@ -1565,42 +1609,83 @@ async def home(request: Request):
 
 @app.post("/corporate_action_summary")
 async def corporate_action_summary(payload: CorpActionsRequest):
+    """
+    Returns a flat {ticker: display_string} map for the given tickers.
+    Reads from pre-built disk cache — instant response, no live fetches.
+    """
     try:
         tickers = payload.tickers
-        if not tickers: return JSONResponse({})
-        summary = {}
-        loop = asyncio.get_running_loop()
-        def fetch_acts(t): return t, get_corporate_actions([t], mode="upcoming", lookback_days=7)
-        tasks = [loop.run_in_executor(get_api_executor(), fetch_acts, t) for t in tickers]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for res in results:
-            if isinstance(res, tuple):
-                t, acts = res
-                try:
-                    if acts and acts[0].get("actions"):
-                        valid_action = None
-                        today = datetime.date.today()
-                        for action in acts[0]["actions"]:
-                            ex_date_str = action.get("ex_date")
-                            if ex_date_str:
-                                try:
-                                    if datetime.date.fromisoformat(ex_date_str) >= today:
-                                        valid_action = action
-                                        break
-                                except ValueError: pass
-                        if valid_action:
-                            a = valid_action
-                            typ = a.get("type", "").replace("Upcoming ", "")
-                            amt, exd = a.get("amount", ""), a.get("ex_date", "")
-                            parts = []
-                            if "Dividend" in typ: parts.append("Dividend Announced")
-                            else: parts.append(typ)
-                            if amt: parts.append(f"₹{amt}")
-                            if exd: parts.append(f"(Ex: {exd})")
-                            summary[t] = " ".join(parts)
-                except Exception: pass
+        if not tickers:
+            return JSONResponse({})
+
+        # This reads from cache/corp_actions_summary.json — sub-millisecond
+        summary = get_corp_actions_summary(tickers)
         return JSONResponse(summary)
-    except Exception: return JSONResponse({})
+
+    except Exception as e:
+        logger.warning("corporate_action_summary error: %s", e)
+        return JSONResponse({})
+
+@app.get("/api/corp_actions_status")
+async def corp_actions_status():
+    """
+    Returns readiness state of the corp actions summary cache.
+    """
+    cache_path = "cache/corp_actions_summary.json"
+    ready = _CORP_ACTIONS_CACHE_READY and os.path.exists(cache_path)
+    count = 0
+    if ready:
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                count = len(json.load(f))
+        except Exception:
+            pass
+    return JSONResponse({"ready": ready, "count": count})
+
+
+@app.post("/api/fetch_corp_actions")
+async def fetch_corp_actions_endpoint():
+    """
+    On-demand fetch of upcoming corp actions (split, bonus, dividend).
+    Runs on BACKGROUND_EXECUTOR (ThreadPoolExecutor). 1-hour cooldown.
+    """
+    global _CORP_ACTIONS_CACHE_READY, _LAST_CORP_FETCH_TIME
+
+    # Cooldown — skip if <1hr AND cache file actually exists on disk
+    now = time.time()
+    elapsed = now - _LAST_CORP_FETCH_TIME
+    cache_exists = os.path.exists("cache/corp_actions_summary.json")
+    if elapsed < _CORP_FETCH_COOLDOWN_SEC and _CORP_ACTIONS_CACHE_READY and cache_exists:
+        mins_left = int((_CORP_FETCH_COOLDOWN_SEC - elapsed) / 60)
+        # return JSONResponse({"status": "cooldown", "minutes_left": mins_left})
+
+    loop = asyncio.get_running_loop()
+
+    def _do_fetch():
+        # Safe: BACKGROUND_EXECUTOR is ThreadPoolExecutor, globals shared in-process.
+        global _CORP_ACTIONS_CACHE_READY, _LAST_CORP_FETCH_TIME
+        # Collect actual stock tickers from all index data files
+        all_tickers = set()
+        for idx_name in INDEX_TICKERS.keys():
+            stocks = load_or_create_index(idx_name)
+            for s in stocks:
+                all_tickers.add(s[0])
+        all_tickers = list(all_tickers)
+        if not all_tickers:
+            raise ValueError("No tickers found in data files")
+        # Always force=True — cooldown gate above ensures we don't hammer NSE
+        summary = build_corp_actions_summary_cache(all_tickers, force=True)
+        _CORP_ACTIONS_CACHE_READY = True
+        _LAST_CORP_FETCH_TIME = time.time()
+        return len(summary)
+
+    try:
+        count = await loop.run_in_executor(get_background_executor(), _do_fetch)
+        return JSONResponse({"status": "ok", "count": count})
+    except Exception as e:
+        logger.error("fetch_corp_actions failed: %s", e)
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
 
 @app.get("/corporate_actions")
 async def corporate_actions(ticker: str):
@@ -1623,7 +1708,14 @@ async def corporate_actions(ticker: str):
                 flat.append(a)
     return JSONResponse(flat)
 
-
+@app.get("/api/macro_metrics")
+async def macro_metrics_api():
+    try:
+        metrics = get_macro_metrics()
+        return JSONResponse(metrics)
+    except Exception as e:
+        logger.error(f"Error fetching macro metrics: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.post("/api/paper_trade/add")
 async def add_paper_trade(req: PaperTradeRequest):

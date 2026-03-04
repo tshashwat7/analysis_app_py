@@ -54,6 +54,7 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
             border-radius: 8px;
             overflow: hidden;
+            /* AG Grid manages its own scroll */
         }
 
         .progress {
@@ -176,11 +177,40 @@
             color: #9ca3af;
             font-style: italic;
         }
+
+        /* Corp actions readiness banner */
+        #corpActionsBanner {
+            text-align: center;
+            padding: 6px 12px;
+            margin: 4px auto 0;
+            font-size: 13px;
+            font-weight: 600;
+            border-radius: 6px;
+            max-width: 960px;
+            transition: background 0.3s;
+        }
+
+        #corpActionsBanner.loading {
+            background: #fef3c7;
+            color: #92400e;
+            border: 1px solid #fcd34d;
+        }
+
+        #corpActionsBanner.ready {
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #86efac;
+        }
     </style>
 </head>
 
 <body>
     <h1>📈 NSE Stock Analyzer</h1>
+
+    <!-- ✅ NEW: Macro Metrics Widget -->
+    <div id="macroWidget"
+        style="text-align:center; padding: 10px; background: #fff; margin: 0 auto 15px auto; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); max-width: 800px; display: none; gap: 15px; justify-content: center; flex-wrap: wrap;">
+    </div>
 
     <div class="controls">
         <form action="/analyze" method="get" style="display:inline-block;">
@@ -200,6 +230,10 @@
         </select>
         <button id="loadBtn" onclick="loadIndex()">🔄 Load Index</button>
 
+        <!-- ✅ NEW: Fetch Corp Actions (separate pool) -->
+        <button id="fetchCorpBtn" onclick="fetchCorpActions()" style="background:#0ea5e9;">📋 Fetch Corp
+            Actions</button>
+
         <!-- ✅ NEW: Confidence floor filter -->
         <label style="margin-left:12px;font-weight:600;">Conf ≥</label>
         <input type="number" id="confFloor" min="0" max="100" step="5"
@@ -218,6 +252,10 @@
         </a>
     </div>
 
+    <div id="corpActionsBanner" class="loading">
+        💡 Click 'Fetch Corp Actions' to load upcoming splits, bonus & dividends.
+    </div>
+
     <div class="progress">
         <div id="progressBar" class="progress-bar"></div>
     </div>
@@ -227,7 +265,10 @@
 
     <script>
         let gridApi;
-        let isAutoAnalysisActive = false; // Master switch for Auto-Analysis
+        let isAutoAnalysisActive = false;
+
+        // ── Corp actions readiness state ──────────────────────────────────
+        let _corpActionsReady = false;
         let isPageAnalyzing = false;      // Lock to prevent self-triggering loops
         let lastAnalyzedPage = -1;        // Track which page we finished
 
@@ -242,134 +283,30 @@
         }
 
         // --- 2. Column Definitions ---
+        // Groups:
+        //   A. Identity    — Ticker (pinned), Company Name
+        //   B. Profile     — Rec, Horizon, Signal, Exec Gate, Score, Align, Conf%
+        //   C. Trade Setup — Pattern, Setup, Strategy, Profit%, T1, R:R, Risk
+        //   D. Events      — Corp Actions (upcoming dividends / splits / bonus)
+        //   E. Hidden      — raw scores, fitting_strategies, profile_category
         const columnDefs = [
-            // 1. Ticker (Keep Text Filter - too many unique values for checkboxes)
+
+            // ── A. IDENTITY ───────────────────────────────────────────────────
             {
                 field: "symbol",
                 headerName: "Ticker",
                 pinned: 'left',
-                width: 100,
-                filter: 'agTextColumnFilter', // Explicitly text
+                width: 115,
+                flex: 0,
+                filter: 'agTextColumnFilter',
                 cellRenderer: p => `<a href="/analyze?symbol=${p.value}" class="ticker-link" target="_blank">${p.value}</a>`
             },
+
+
+            // ── B. PROFILE & SIGNAL ───────────────────────────────────────────
             {
-                field: "top_pattern",
-                headerName: "Pattern",
-                width: 120,
-                filter: 'agSetColumnFilter', // Checkbox filtering!
-                cellRenderer: p => {
-                    if (!p.value) return '<span style="color:#ccc">-</span>';
-
-                    // Color coding based on pattern type
-                    let color = "gray";
-                    let bg = "#f3f4f6";
-                    const v = p.value.toLowerCase();
-
-                    if (v.includes("gold") || v.includes("cup") || v.includes("vcp")) {
-                        color = "#166534"; bg = "#dcfce7"; // Green
-                    } else if (v.includes("death") || v.includes("top")) {
-                        color = "#991b1b"; bg = "#fee2e2"; // Red
-                    } else if (v.includes("squeeze")) {
-                        color = "#854d0e"; bg = "#fef9c3"; // Yellow
-                    } else {
-                        color = "#1e40af"; bg = "#dbeafe"; // Blue
-                    }
-
-                    return `<span style="background:${bg}; color:${color}; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:600; border:1px solid rgba(0,0,0,0.05)">${p.value}</span>`;
-                }
-            },
-            // 2. Top Strategy -> PERFECT for Set Filter (Checkboxes)
-            {
-                field: "best_strategy",
-                headerName: "Top Strategy",
-                width: 130,
-                sortable: true,
-                filter: 'agSetColumnFilter', // <--- ENABLE CHECKBOXES
-                filterParams: {
-                    buttons: ['reset', 'apply'], // Optional: Add Apply buttons
-                    closeOnApply: true
-                },
-                tooltipValueGetter: p => `Fits: ${p.data.fitting_strategies || 'None'}`,
-                cellRenderer: p => {
-                    const s = p.value;
-                    if (!s || s === "N/A" || s === "unknown") return '<span class="strat-none">-</span>';
-
-                    let cls = "strat-none";
-                    let icon = "";
-
-                    if (s.includes("swing")) { cls = "strat-swing"; icon = "🌊"; }
-                    else if (s.includes("day")) { cls = "strat-day"; icon = "⚡"; }
-                    else if (s.includes("trend")) { cls = "strat-trend"; icon = "📈"; }
-                    else if (s.includes("momentum")) { cls = "strat-momentum"; icon = "🚀"; }
-                    else if (s.includes("value")) { cls = "strat-value"; icon = "💰"; }
-                    else if (s.includes("income")) { cls = "strat-income"; icon = "💵"; }
-                    else if (s.includes("position")) { cls = "strat-position"; icon = "🏛️"; }
-
-                    return `<span class="strat-badge ${cls}">${icon} ${s.replace("_", " ").toUpperCase()}</span>`;
-                }
-            },
-
-            // 3. Align (With Set Filter Logic)
-            {
-                headerName: "Align",
-                width: 90,
-
-                // 1. Enable Checkbox Filter
+                field: "recommendation", headerName: "Rec.", width: 115, flex: 0, sortable: true,
                 filter: 'agSetColumnFilter',
-
-                // 2. Define logic to count green dots for the filter list
-                filterValueGetter: params => {
-                    if (!params.data) return "N/A";
-
-                    // Count how many scores are >= 7
-                    const i = (params.data.intra_score || 0) >= 7 ? 1 : 0;
-                    const s = (params.data.short_score || 0) >= 7 ? 1 : 0;
-                    const l = (params.data.long_score || 0) >= 7 ? 1 : 0;
-                    const count = i + s + l;
-
-                    // Return a readable string for the checkbox list
-                    if (count === 3) return "3/3 (Full Align)";
-                    if (count === 2) return "2/3 (Strong)";
-                    if (count === 1) return "1/3 (Weak)";
-                    return "0/3 (No Align)";
-                },
-
-                // 3. Filter Params (Optional styling for the list)
-                filterParams: {
-                    buttons: ['reset', 'apply'],
-                    closeOnApply: true,
-                    // Sort the filter list so "3/3" appears at the top
-                    comparator: (a, b) => {
-                        const valA = parseInt(a.charAt(0)) || 0;
-                        const valB = parseInt(b.charAt(0)) || 0;
-                        return valB - valA; // Descending order (3 down to 0)
-                    }
-                },
-
-                // 4. The Visual Renderer (The Dots) - unchanged
-                cellRenderer: params => {
-                    if (!params.data) return '';
-                    const i = (params.data.intra_score || 0) >= 7;
-                    const s = (params.data.short_score || 0) >= 7;
-                    const l = (params.data.long_score || 0) >= 7;
-                    const dot = (active) => `<span style="font-size:16px; margin:0 1px; color:${active ? '#22c55e' : '#e5e7eb'};">●</span>`;
-                    const tip = `Intra: ${params.data.intra_score || '-'} | Short: ${params.data.short_score || '-'} | Long: ${params.data.long_score || '-'}`;
-                    return `<div title="${tip}" style="cursor:help; letter-spacing: -2px;">${dot(i)}${dot(s)}${dot(l)}</div>`;
-                }
-            },
-
-            // 4. Overall Score (Keep Number Filter)
-            {
-                field: "score", headerName: "Score", width: 80, sortable: true,
-                filter: 'agNumberColumnFilter', // Slider/Range is better for numbers
-                cellClass: p => p.value >= 70 ? 'score-buy' : p.value < 40 ? 'score-sell' : 'score-hold'
-            },
-
-            // 5. Recommendation -> fix parsing of "BUY--multibagger" format
-            {
-                field: "recommendation", headerName: "Rec.", width: 100, sortable: true,
-                filter: 'agSetColumnFilter',
-                // ✅ FIX: recommendation stores "BUY--multibagger" — extract category before --
                 valueGetter: p => (p.data.recommendation || "").split("--")[0] || p.data.recommendation,
                 tooltipValueGetter: p => {
                     const cat = (p.data.recommendation || "").split("--")[0];
@@ -379,17 +316,13 @@
                 },
                 cellClass: p => {
                     const v = (p.data.recommendation || "").split("--")[0];
-                    // If profile=BUY but signal=HOLD, render as amber (conflict) not green
                     if (v === 'BUY' && p.data.bull_signal === 'HOLD') return 'hold-cell';
                     return v === 'BUY' ? 'buy-cell' : v === 'SELL' ? 'sell-cell' : 'hold-cell';
                 }
             },
-
-            // 5b. Horizon — which timeframe is best fit for this stock
             {
-                field: "best_fit_horizon", headerName: "Horizon", width: 100, sortable: true,
+                field: "best_fit_horizon", headerName: "Horizon", width: 135, flex: 0, sortable: true,
                 filter: 'agSetColumnFilter',
-                // ✅ NEW: show best_fit_horizon; fall back to parsing recommendation
                 valueGetter: p => {
                     if (p.data.best_fit_horizon) return p.data.best_fit_horizon;
                     const parts = (p.data.recommendation || "").split("--");
@@ -407,32 +340,26 @@
                     const c = colors[v] || { bg: "#f3f4f6", color: "#555" };
                     const label = map[v] || v;
                     if (!label) return '<span style="color:#ccc">-</span>';
-                    return `<span style="background:${c.bg};color:${c.color};padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">${label}</span>`;
+                    return `<span style="background:${c.bg};color:${c.color};padding:2px 7px;border-radius:12px;font-size:11px;font-weight:600;">${label}</span>`;
                 }
             },
-
-            // 6. Signal — show clean BUY/SELL/HOLD direction (bull_signal is now the clean value)
             {
-                field: "bull_signal", headerName: "Signal", width: 100, sortable: true,
+                field: "bull_signal", headerName: "Signal", width: 115, flex: 0, sortable: true,
                 filter: 'agSetColumnFilter',
                 cellRenderer: p => {
                     const sig = p.value || 'HOLD';
-                    // Use profile_category if present, else fall back to parsing recommendation
                     const profCat = p.data.profile_category || (p.data.recommendation || "").split("--")[0];
                     const conflict = (profCat === 'BUY' && sig === 'HOLD');
                     const cls = sig === 'BUY' ? 'buy-cell' : sig === 'SELL' ? 'sell-cell' : 'hold-cell';
                     const conflictIcon = conflict
-                        ? `<span title="Profile qualified BUY but execution blocked. Check detail page." 
-                             style="cursor:help;margin-left:4px;font-size:11px;">⚠️</span>`
+                        ? `<span title="Profile qualified BUY but execution blocked. Check detail page."
+                                 style="cursor:help;margin-left:4px;font-size:11px;">⚠️</span>`
                         : '';
                     return `<span class="${cls}">${sig}</span>${conflictIcon}`;
                 }
             },
-
-            // 6c. Conflict indicator — only shows when profile=BUY but signal=HOLD
             {
-                headerName: "Exec",
-                width: 65,
+                headerName: "Exec", width: 115, flex: 0,
                 filter: 'agSetColumnFilter',
                 filterValueGetter: p => {
                     if (!p.data) return "OK";
@@ -445,16 +372,81 @@
                     const sig = p.data.bull_signal || 'HOLD';
                     if (profCat === 'BUY' && sig === 'HOLD') {
                         return `<span title="Profile BUY but execution gated — click ticker for details"
-                                  style="background:#fef3c7;color:#92400e;padding:2px 6px;
-                                         border-radius:10px;font-size:10px;font-weight:700;cursor:help;">⛔ Gate</span>`;
+                                      style="background:#fef3c7;color:#92400e;padding:2px 6px;
+                                             border-radius:10px;font-size:10px;font-weight:700;cursor:help;">⛔ Gate</span>`;
                     }
                     return `<span style="color:#d1d5db;font-size:11px;">✓</span>`;
                 }
             },
-
-            // 6b. Setup — full setup type label e.g. "BOLLINGER SQUEEZE BUY"
             {
-                field: "setup_signal", headerName: "Setup", width: 150, sortable: true,
+                field: "score", headerName: "Score", width: 115, flex: 0, sortable: true,
+                filter: 'agNumberColumnFilter',
+                cellClass: p => p.value >= 70 ? 'score-buy' : p.value < 40 ? 'score-sell' : 'score-hold'
+            },
+            {
+                headerName: "Align", width: 115, flex: 0,
+                filter: 'agSetColumnFilter',
+                filterValueGetter: params => {
+                    if (!params.data) return "N/A";
+                    const i = (params.data.intra_score || 0) >= 7 ? 1 : 0;
+                    const s = (params.data.short_score || 0) >= 7 ? 1 : 0;
+                    const l = (params.data.long_score || 0) >= 7 ? 1 : 0;
+                    const count = i + s + l;
+                    if (count === 3) return "3/3 (Full Align)";
+                    if (count === 2) return "2/3 (Strong)";
+                    if (count === 1) return "1/3 (Weak)";
+                    return "0/3 (No Align)";
+                },
+                filterParams: {
+                    buttons: ['reset', 'apply'], closeOnApply: true,
+                    comparator: (a, b) => (parseInt(b.charAt(0)) || 0) - (parseInt(a.charAt(0)) || 0)
+                },
+                cellRenderer: params => {
+                    if (!params.data) return '';
+                    const i = (params.data.intra_score || 0) >= 7;
+                    const s = (params.data.short_score || 0) >= 7;
+                    const l = (params.data.long_score || 0) >= 7;
+                    const dot = active => `<span style="font-size:16px;margin:0 1px;color:${active ? '#22c55e' : '#e5e7eb'};">●</span>`;
+                    const tip = `Intra: ${params.data.intra_score || '-'} | Short: ${params.data.short_score || '-'} | Long: ${params.data.long_score || '-'}`;
+                    return `<div title="${tip}" style="cursor:help;letter-spacing:-2px;">${dot(i)}${dot(s)}${dot(l)}</div>`;
+                }
+            },
+            {
+                field: "confidence", headerName: "Conf %", width: 110, flex: 0, sortable: true,
+                filter: 'agNumberColumnFilter',
+                tooltipValueGetter: p => `Confidence: ${p.value || 0}%`,
+                cellRenderer: params => {
+                    const val = params.value || 0;
+                    const color = val > 70 ? '#22c55e' : val > 40 ? '#facc15' : '#ef4444';
+                    return `<span style="font-size:11px;font-weight:700;margin-right:4px;">${val}%</span>
+                        <span style="display:inline-block;width:40px;background:#eee;height:6px;border-radius:3px;vertical-align:middle;">
+                          <span style="display:block;width:${val}%;background:${color};height:100%;border-radius:3px;"></span>
+                        </span>`;
+                }
+            },
+
+            // ── C. TRADE SETUP ────────────────────────────────────────────────
+            {
+                field: "top_pattern", headerName: "Pattern", width: 165, flex: 0,
+                filter: 'agSetColumnFilter',
+                cellRenderer: p => {
+                    if (!p.value) return '<span style="color:#ccc">-</span>';
+                    let color = "gray", bg = "#f3f4f6";
+                    const v = p.value.toLowerCase();
+                    if (v.includes("gold") || v.includes("cup") || v.includes("vcp")) {
+                        color = "#166534"; bg = "#dcfce7";
+                    } else if (v.includes("death") || v.includes("top")) {
+                        color = "#991b1b"; bg = "#fee2e2";
+                    } else if (v.includes("squeeze")) {
+                        color = "#854d0e"; bg = "#fef9c3";
+                    } else {
+                        color = "#1e40af"; bg = "#dbeafe";
+                    }
+                    return `<span style="background:${bg};color:${color};padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;border:1px solid rgba(0,0,0,0.05)">${p.value}</span>`;
+                }
+            },
+            {
+                field: "setup_signal", headerName: "Setup", width: 165, flex: 0, sortable: true,
                 filter: 'agSetColumnFilter',
                 cellRenderer: p => {
                     const val = (p.value || "").toString();
@@ -465,16 +457,31 @@
                     return `<span style="font-size:11px;color:#666">${val}</span>`;
                 }
             },
-
-            // ✅ NEW: Profit % — (T1 - entry) / entry * 100
             {
-                field: "profit_pct", headerName: "Profit %", width: 95, sortable: true,
+                field: "best_strategy", headerName: "Top Strategy", width: 165, flex: 0, sortable: true,
+                filter: 'agSetColumnFilter',
+                filterParams: { buttons: ['reset', 'apply'], closeOnApply: true },
+                tooltipValueGetter: p => `Fits: ${p.data.fitting_strategies || 'None'}`,
+                cellRenderer: p => {
+                    const s = p.value;
+                    if (!s || s === "N/A" || s === "unknown") return '<span class="strat-none">-</span>';
+                    let cls = "strat-none", icon = "";
+                    if (s.includes("swing")) { cls = "strat-swing"; icon = "🌊"; }
+                    else if (s.includes("day")) { cls = "strat-day"; icon = "⚡"; }
+                    else if (s.includes("trend")) { cls = "strat-trend"; icon = "📈"; }
+                    else if (s.includes("momentum")) { cls = "strat-momentum"; icon = "🚀"; }
+                    else if (s.includes("value")) { cls = "strat-value"; icon = "💰"; }
+                    else if (s.includes("income")) { cls = "strat-income"; icon = "💵"; }
+                    else if (s.includes("position")) { cls = "strat-position"; icon = "🏛️"; }
+                    return `<span class="strat-badge ${cls}">${icon} ${s.replace("_", " ").toUpperCase()}</span>`;
+                }
+            },
+            {
+                field: "profit_pct", headerName: "Profit %", width: 145, flex: 0, sortable: true,
                 filter: 'agNumberColumnFilter',
-                sort: 'desc',  // default sort: highest profit first
+                sort: 'desc',
                 valueGetter: p => {
-                    // Use pre-computed server value if present
                     if (p.data.profit_pct !== null && p.data.profit_pct !== undefined) return p.data.profit_pct;
-                    // Fallback: compute client-side from entry_trigger + t1
                     const e = parseFloat(p.data.entry_trigger), t = parseFloat(p.data.t1);
                     if (e > 0 && t > 0) return parseFloat(((t - e) / e * 100).toFixed(2));
                     return null;
@@ -488,55 +495,107 @@
                 },
                 comparator: (a, b) => (a ?? -Infinity) - (b ?? -Infinity)
             },
-
-            // ✅ NEW: T1 price
             {
-                field: "t1", headerName: "T1 ₹", width: 90, sortable: true,
+                field: "t1", headerName: "T1 ₹", width: 115, flex: 0, sortable: true,
                 filter: 'agNumberColumnFilter',
                 valueFormatter: p => p.value ? "₹" + parseFloat(p.value).toLocaleString('en-IN', { maximumFractionDigits: 1 }) : "-"
             },
-
-            // 7. R:R (Number Filter)
             {
-                field: "rr_ratio", headerName: "R:R", width: 70, sortable: true,
+                field: "rr_ratio", headerName: "R:R", width: 115, flex: 0, sortable: true,
                 filter: 'agNumberColumnFilter',
                 cellClass: p => p.value >= 2.0 ? 'buy-cell' : 'hold-cell',
                 valueFormatter: p => p.value ? p.value + "R" : "-"
             },
-            // 8. Risk (Number Filter)
             {
-                field: "sl_dist", headerName: "Risk", width: 70,
-                cellStyle: { 'color': '#dc2626', 'font-weight': '500', 'font-size': '12px' }
+                field: "sl_dist", headerName: "Risk", width: 115, flex: 0,
+                cellStyle: { color: '#dc2626', fontWeight: '500', fontSize: '12px' }
             },
 
-            // 9. Confidence — bar + numeric value shown in tooltip
+            // ── D. EVENTS (Corp Actions) ──────────────────────────────────────
             {
-                field: "confidence", headerName: "Conf %", width: 90, sortable: true,
-                filter: 'agNumberColumnFilter',
-                tooltipValueGetter: p => `Confidence: ${p.value || 0}%`,
-                cellRenderer: params => {
-                    const val = params.value || 0;
-                    const color = val > 70 ? '#22c55e' : val > 40 ? '#facc15' : '#ef4444';
-                    return `<span style="font-size:11px;font-weight:700;margin-right:4px;">${val}%</span>
-                        <span style="display:inline-block;width:40px;background:#eee;height:6px;border-radius:3px;vertical-align:middle;">
-                          <span style="display:block;width:${val}%;background:${color};height:100%;border-radius:3px;"></span>
-                        </span>`;
+                field: "corp_action",
+                headerName: "Events",
+                width: 185,
+                flex: 0,
+                sortable: true,
+                filter: 'agSetColumnFilter',
+                filterParams: {
+                    valueFormatter: p => {
+                        if (!p.value) return "None";
+                        const v = p.value.toLowerCase();
+                        if (v.includes("div")) return "Dividend";
+                        if (v.includes("bonus")) return "Bonus";
+                        if (v.includes("split")) return "Split";
+                        return "Other";
+                    },
+                    buttons: ['reset', 'apply'], closeOnApply: true,
+                },
+                filterValueGetter: p => {
+                    const v = (p.data.corp_action || "").toLowerCase();
+                    if (!v) return "None";
+                    if (v.includes("div")) return "Dividend";
+                    if (v.includes("bonus")) return "Bonus";
+                    if (v.includes("split")) return "Split";
+                    return "Other";
+                },
+                tooltipValueGetter: p => {
+                    if (p.data.corp_action) return p.data.corp_action;
+                    return _corpActionsReady ? "No upcoming actions" : "Click Fetch Corp Actions above";
+                },
+                cellRenderer: p => {
+                    const raw = p.value || "";
+                    if (!raw || raw === "-") {
+                        // Distinguish: not-yet-fetched vs confirmed-no-actions
+                        if (!_corpActionsReady) {
+                            return '<span title="Click Fetch Corp Actions above" style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:10px;font-size:10px;cursor:help;">⏳</span>';
+                        }
+                        return '<span style="color:#d1d5db;font-size:11px;">—</span>';
+                    }
+                    const v = raw.toLowerCase();
+                    let bg, color, icon, label;
+                    if (v.includes("div")) {
+                        bg = "#dcfce7"; color = "#166534"; icon = "💰";
+                        const amt = raw.match(/Rs([\d.]+)/i);
+                        const exd = raw.match(/Ex:(\d{4}-\d{2}-\d{2})/);
+                        label = "Div" + (amt ? ` ₹${amt[1]}` : "") + (exd ? ` · ${exd[1]}` : "");
+                    } else if (v.includes("bonus")) {
+                        bg = "#dbeafe"; color = "#1e40af"; icon = "🎁";
+                        const ratio = raw.match(/Bonus\s+([\d:]+)/i);
+                        const exd = raw.match(/Ex:(\d{4}-\d{2}-\d{2})/);
+                        label = "Bonus" + (ratio ? ` ${ratio[1]}` : "") + (exd ? ` · ${exd[1]}` : "");
+                    } else if (v.includes("split")) {
+                        bg = "#ffedd5"; color = "#9a3412"; icon = "✂️";
+                        const ratio = raw.match(/Split\s+([\d.:]+)/i);
+                        const exd = raw.match(/Ex:(\d{4}-\d{2}-\d{2})/);
+                        label = "Split" + (ratio ? ` ${ratio[1]}` : "") + (exd ? ` · ${exd[1]}` : "");
+                    } else {
+                        bg = "#f3f4f6"; color = "#374151"; icon = "📋";
+                        label = raw.replace(/\[.*?\]/g, "").trim();
+                    }
+                    return `<span title="${raw}"
+                                  style="background:${bg};color:${color};padding:2px 7px;
+                                         border-radius:10px;font-size:11px;font-weight:600;
+                                         white-space:nowrap;border:1px solid rgba(0,0,0,0.06);">
+                                ${icon} ${label}
+                            </span>`;
                 }
             },
+            {
+                field: "name",
+                headerName: "Company Name",
+                width: 235,
+                flex: 0,
+                filter: 'agTextColumnFilter',
+                cellStyle: { fontSize: '12px' }
+            },
 
-            // 10. Company Name (Text Filter)
-            { field: "name", headerName: "Company Name", width: 140, filter: 'agTextColumnFilter' },
-
-            // 11. Hidden Fields
+            // ── E. HIDDEN (used by filters / renderers only) ──────────────────
             { field: "intra_score", hide: true },
             { field: "short_score", hide: true },
             { field: "long_score", hide: true },
             { field: "multi_score", hide: true },
             { field: "fitting_strategies", hide: true },
-            { field: "profile_category", hide: true },   // ✅ NEW: raw profile category (pre-execution)
-
-            // 12. Corp Actions (Text or Set)
-            { field: "corp_action", headerName: "Events", width: 150, sortable: true, filter: 'agTextColumnFilter' },
+            { field: "profile_category", hide: true },
         ];
 
         // --- 3. Grid Options ---
@@ -548,7 +607,7 @@
             pagination: true,
             paginationPageSize: 50,
             paginationPageSizeSelector: [20, 50, 100, 500],
-            defaultColDef: { resizable: true, sortable: true, filter: true, flex: 1, minWidth: 80 },
+            defaultColDef: { resizable: true, sortable: true, filter: true, flex: 0, minWidth: 60 },
             getRowId: params => params.data.symbol,
             enableBrowserTooltips: true,
             onPaginationChanged: onPageChange,
@@ -567,7 +626,42 @@
         document.addEventListener('DOMContentLoaded', () => {
             const gridDiv = document.querySelector('#myGrid');
             gridApi = agGrid.createGrid(gridDiv, gridOptions);
+            loadMacroMetrics(); // Fetch on load
         });
+
+        // --- ✅ NEW: Load Macro Metrics from WorldBank ---
+        async function loadMacroMetrics() {
+            try {
+                const response = await fetch('/api/macro_metrics');
+                if (!response.ok) throw new Error('Failed to fetch macro metrics');
+
+                const data = await response.json();
+                const widget = document.getElementById('macroWidget');
+
+                if (Object.keys(data).length > 0 && !data.error) {
+                    let html = '';
+                    for (const [key, info] of Object.entries(data)) {
+                        let colorStr = "#333";
+                        if (info.value === "N/A") {
+                            colorStr = "#999";
+                        } else if (key.includes("Growth")) {
+                            colorStr = info.value > 0 ? "#16a34a" : "#dc2626";
+                        }
+
+                        html += `
+                            <div style="display:flex; flex-direction:column; align-items:center; min-width:90px;">
+                                <span style="font-size:11px; color:#666; font-weight:600; text-transform:uppercase;">${key.replace(" (%)", "").replace(" ($)", "")}</span>
+                                <span style="font-size:15px; font-weight:bold; color:${colorStr}">${info.value}${key.includes("(%)") && info.value !== "N/A" ? '%' : ''}</span>
+                            </div>
+                        `;
+                    }
+                    widget.innerHTML = html;
+                    widget.style.display = 'flex';
+                }
+            } catch (err) {
+                console.error("Macro metrics error:", err);
+            }
+        }
 
         // --- 5. Pagination Event Handler ---
         function onPageChange() {
@@ -732,6 +826,12 @@
                     return;
                 }
 
+                // corp_actions included directly in load_index response if cache is ready
+                const corpMap = j.corp_actions || {};
+                if (j.corp_actions_ready) {
+                    _corpActionsReady = true;
+                }
+
                 const rowData = j.tickers.map(t => ({
                     symbol: t,
                     name: j.pairs ? j.pairs[t] : t,
@@ -739,28 +839,79 @@
                     best_strategy: null,
                     recommendation: "--",
                     bull_signal: "--",
-                    profile_category: null,    // ✅ NEW: raw profile BUY/HOLD before execution gates
+                    profile_category: null,
                     setup_signal: null,
                     best_fit_horizon: null,
                     profit_pct: null,
                     t1: null,
-                    corp_action: ""
+                    corp_action: corpMap[t] || ""   // pre-populated from cache if available
                 }));
 
                 gridApi.setGridOption('rowData', rowData);
 
                 lastAnalyzedPage = -1;
                 setProgress(100);
-                setStatus(`Loaded ${rowData.length} tickers. Ready to analyze.`);
-                document.getElementById("startBtn").disabled = false;
 
-                populateCorporateActions(j.tickers);
+                const corpCount = Object.keys(corpMap).length;
+                if (corpCount > 0) {
+                    setStatus(`Loaded ${rowData.length} tickers (${corpCount} with upcoming events). Ready to analyze.`);
+                } else if (!_corpActionsReady) {
+                    setStatus(`Loaded ${rowData.length} tickers. Click 'Fetch Corp Actions' to load events.`);
+                } else {
+                    setStatus(`Loaded ${rowData.length} tickers. Ready to analyze.`);
+                }
+                document.getElementById("startBtn").disabled = false;
 
             } catch (err) {
                 console.error(err);
                 setStatus("Failed to load index");
             }
             document.getElementById("loadBtn").disabled = false;
+        }
+
+        // ── Fetch Corp Actions (manual, separate pool) ──────────────────
+        async function fetchCorpActions() {
+            const btn = document.getElementById('fetchCorpBtn');
+            const banner = document.getElementById('corpActionsBanner');
+            btn.disabled = true;
+            btn.innerText = '⏳ Fetching...';
+            banner.className = 'loading';
+            banner.innerText = '⏳ Fetching corp actions from NSE/BSE... this may take a minute.';
+
+            try {
+                const res = await fetch('/api/fetch_corp_actions', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'cooldown') {
+                    banner.className = 'ready';
+                    banner.innerText = `↩ Already fetched recently. ${data.minutes_left}m cooldown left.`;
+                } else if (data.status === 'ok') {
+                    _corpActionsReady = true;
+                    banner.className = 'ready';
+                    banner.innerText = `✅ Corp actions ready — ${data.count} tickers with upcoming events.`;
+
+                    // Update grid if loaded — re-fetch corp actions for current tickers
+                    if (gridApi) {
+                        const tickers = [];
+                        gridApi.forEachNode(n => { if (n.data) tickers.push(n.data.symbol); });
+                        if (tickers.length > 0) {
+                            await populateCorporateActions(tickers);
+                        }
+                        // Refresh cells so ⏳ → — or badge
+                        gridApi.refreshCells({ columns: ['corp_action'], force: true });
+                    }
+                } else {
+                    banner.className = 'loading';
+                    banner.innerText = `❌ Fetch failed: ${data.message || 'Unknown error'}`;
+                }
+            } catch (e) {
+                console.error('Fetch corp actions error:', e);
+                banner.className = 'loading';
+                banner.innerText = '❌ Network error fetching corp actions.';
+            }
+
+            btn.disabled = false;
+            btn.innerText = '📋 Fetch Corp Actions';
         }
 
         async function populateCorporateActions(tickers) {

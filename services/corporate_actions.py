@@ -1,12 +1,18 @@
 """
-Optimized corporate_actions module.
+corporate_actions module.
 
-- Bulk "upcoming" mode: Uses ONLY Equitymaster (no yfinance).
-- Single-stock "past" / "single" mode: Uses yfinance once and caches results per-ticker.
-- JSON sidecar cache for YF results at cache/yf_actions/{TICKER}.json
-- Keeps your Equitymaster caching behavior for bulk API.
-- Safe, resilient, and non-blocking for index loads and quick scans.
-- FIXES: Strict name matching, Schema normalization, Stale data filtering.
+Upcoming bulk mode:
+  PRIMARY  → india-corp-actions library (NSE API, symbol-exact, no name guessing)
+  FALLBACK → Equitymaster (name-based match, preserved for resilience)
+
+Past/single mode:
+  yfinance (cached per ticker at cache/yf_actions/{TICKER}.json, TTL 7d)
+
+Summary cache:
+  cache/corp_actions_summary.json (TTL 24h) — pre-built flat map for fast index loads.
+
+Install the primary library:
+  pip install india-corp-actions
 """
 
 import os
@@ -19,13 +25,26 @@ import requests
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
-
 # Optional (only used in single-stock mode)
 import yfinance as yf
 import pandas as pd
 
 # Helpers from your codebase
 from services.data_fetch import _fmt_date, _retry, safe_float
+
+# Primary data source: india-corp-actions library (pip install india-corp-actions)
+try:
+    from india_corp_actions import IndiaCorpActions as _IndiaCorpActions
+    _LIB_AVAILABLE = True
+except ImportError:
+    _IndiaCorpActions = None
+    _LIB_AVAILABLE = False
+    logger_init = logging.getLogger(__name__)
+    logger_init.warning(
+        "india-corp-actions library not found. "
+        "Run: pip install india-corp-actions  "
+        "Falling back to Equitymaster only."
+    )
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -43,6 +62,19 @@ CACHE_TTL_HOURS = 24
 
 YF_CACHE_DIR = "cache/yf_actions"
 os.makedirs(YF_CACHE_DIR, exist_ok=True)
+
+SUMMARY_CACHE_PATH = "cache/corp_actions_summary.json"
+SUMMARY_CACHE_TTL_HOURS = 24
+
+# Lazy singleton — created once, reused across all bulk calls
+_lib_client = None
+
+def _get_lib_client():
+    """Return a cached IndiaCorpActions client instance."""
+    global _lib_client
+    if _lib_client is None and _LIB_AVAILABLE:
+        _lib_client = _IndiaCorpActions()
+    return _lib_client
 
 # Equitymaster endpoints for different action types
 _API_ENDPOINTS = {
@@ -158,78 +190,162 @@ def _fetch_equitymaster_data() -> List[Dict[str, Any]]:
 
 
 # -------------------------------
+# NSE → library fetch (symbol-exact, primary)
+# -------------------------------
+def _fetch_nse_via_lib(tickers: List[str]) -> Dict[str, List[Dict]]:
+    """
+    Use india-corp-actions library to fetch upcoming actions from NSE.
+    Returns dict keyed by ticker (e.g. "INFY.NS") -> list of action dicts
+    in the same schema as the rest of this module.
+    """
+    client = _get_lib_client()
+    if client is None:
+        return {}
+
+    # Library expects bare NSE symbols ("INFY", "TCS") — strip .NS suffix
+    # We'll re-key results back to original ticker format after
+    bare_symbols = [t.replace(".NS", "").replace(".BSE", "").upper() for t in tickers]
+    ticker_map = {t.replace(".NS", "").replace(".BSE", "").upper(): t for t in tickers}
+
+    result_by_ticker: Dict[str, List[Dict]] = {}
+    try:
+        # get_actions() returns List[CorporateAction] for all symbols at once
+        actions = client.get_actions(
+            from_date=None,   # defaults to today
+            to_date=None,     # defaults to 3 months ahead
+            source="NSE",
+        )
+
+        # Group by symbol and convert to our internal schema
+        cutoff = datetime.now().date() - timedelta(days=7)
+        for action in actions:
+            sym = (action.symbol or "").upper()
+            if sym not in ticker_map:
+                continue
+            original_ticker = ticker_map[sym]
+
+            # Parse ex_date
+            ex_obj = None
+            if action.ex_date:
+                for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%m-%Y"):
+                    try:
+                        ex_obj = datetime.strptime(action.ex_date.strip(), fmt).date()
+                        break
+                    except Exception:
+                        continue
+            if ex_obj is None or ex_obj < cutoff:
+                continue
+
+            entry = {
+                "type": f"Upcoming {action.action_type.title()}",
+                "value": None,
+                "ex_date": ex_obj.strftime("%Y-%m-%d"),
+                "details": action.details or "",
+                "source": "NSE",
+            }
+
+            # Extract numeric dividend value from details
+            if action.action_type == "dividend" and action.details:
+                m = re.search(r"rs\.?\s*([\d.]+)", action.details, re.I)
+                if m:
+                    entry["value"] = safe_float(m.group(1))
+
+            result_by_ticker.setdefault(original_ticker, []).append(entry)
+
+        logger.debug("NSE lib returned actions for %d/%d tickers", len(result_by_ticker), len(tickers))
+    except Exception as e:
+        logger.warning("india-corp-actions library fetch failed: %s", e)
+
+    return result_by_ticker
+
+
+# -------------------------------
 # Bulk upcoming actions (YF-FREE)
 # -------------------------------
 def get_bulk_upcoming_actions(tickers: List[str]) -> List[Dict[str, Any]]:
     """
-    Return upcoming corporate actions for a list of tickers using Equitymaster only.
-    NO yfinance calls here. Safe for bulk/index loads.
+    Return upcoming corporate actions for a list of tickers.
+    PRIMARY:  india-corp-actions library → NSE API (symbol-exact, authoritative)
+    FALLBACK: Equitymaster (name-based match, used only when NSE has no data)
+    NO yfinance calls. Safe for bulk/index loads.
     """
+    # ── PRIMARY: fetch all via library in one call ────────────────────────────
+    nse_by_ticker: Dict[str, List[Dict]] = {}
+    if _LIB_AVAILABLE:
+        nse_by_ticker = _fetch_nse_via_lib(tickers)
+    else:
+        logger.warning("Library unavailable — using Equitymaster only for all tickers.")
+
+    # ── FALLBACK pool: Equitymaster (fetched once, cached 24h) ───────────────
+    em_data: List[Dict] = []
     try:
         em_data = _fetch_equitymaster_data()
     except Exception as e:
         logger.warning("Equitymaster fetch error: %s", e)
-        em_data = []
 
-    results: List[Dict[str, Any]] = []
-    
-    # Pre-calculate threshold for stale data (Option 5)
     cutoff_date = datetime.now().date() - timedelta(days=7)
+    results: List[Dict[str, Any]] = []
+    nse_hits, em_hits = 0, 0
 
     for ticker in tickers:
         try:
-            # FIX 1: Strict Prefix Matching
-            # Clean the ticker key (e.g. "ADANIENT.NS" -> "adanient")
+            # ── Use NSE result if available ───────────────────────────────────
+            if ticker in nse_by_ticker and nse_by_ticker[ticker]:
+                results.append({"ticker": ticker, "actions": nse_by_ticker[ticker], "source": "NSE"})
+                nse_hits += 1
+                continue
+
+            # ── Equitymaster fallback (original name-match logic, preserved) ──
             key = ticker.replace(".NS", "").replace(".BSE", "").lower()
-            
             matches = []
             for item in em_data:
                 try:
-                    # FIX 1: Use normalized prefix match instead of 'in'
-                    # "Adani Enterprises Ltd" -> "adani enterprises"
                     norm_name = normalize_company_name(item["name"])
-                    
-                    # Check 1: Does company name start with ticker key? (e.g. 'adani' starts with 'adani')
-                    # Check 2: Does ticker key start with company first word? (e.g. 'adanient' starts with 'adani' - simplistic)
-                    # We prioritize the User's strict logic:
                     if norm_name.startswith(key):
                         matches.append(item)
-                    # Fallback for strict containment if startswith fails but key is long (e.g. TATASTEEL)
                     elif len(key) > 4 and key in norm_name:
-                         matches.append(item)
+                        matches.append(item)
                 except Exception:
                     continue
 
             upcoming = []
             for m in matches:
-                # FIX 2 & 4: Safe Date Parsing
                 raw_date = m.get("ex_date")
                 ex_obj = None
-                
-                if isinstance(raw_date, (datetime, datetime.date)):
+                if isinstance(raw_date, datetime):
+                    ex_obj = raw_date.date()
+                elif hasattr(raw_date, "year"):
                     ex_obj = raw_date
                 elif isinstance(raw_date, str):
                     try:
                         ex_obj = datetime.strptime(raw_date, "%Y-%m-%d").date()
-                    except: pass
-                
-                # FIX 5: Stale Data Filter
-                if ex_obj and isinstance(ex_obj, (datetime, datetime.date)):
-                    # Ensure we compare date to date
-                    d_check = ex_obj.date() if isinstance(ex_obj, datetime) else ex_obj
-                    if d_check < cutoff_date:
-                        continue
-
+                    except Exception:
+                        pass
+                if not ex_obj or ex_obj < cutoff_date:
+                    continue
                 upcoming.append({
                     "type": f"Upcoming {m['type']}",
                     "value": m.get("value"),
-                    "ex_date": _fmt_date(ex_obj) if ex_obj else str(raw_date)
+                    "ex_date": _fmt_date(ex_obj),
+                    "source": "Equitymaster",
                 })
 
-            results.append({"ticker": ticker, "actions": upcoming, "source": "equitymaster"})
+            if upcoming:
+                em_hits += 1
+            results.append({
+                "ticker": ticker,
+                "actions": upcoming,
+                "source": "equitymaster_fallback" if upcoming else "none",
+            })
+
         except Exception as e:
-            logger.debug("Error matching EM for %s: %s", ticker, e)
-            results.append({"ticker": ticker, "actions": [], "source": "equitymaster"})
+            logger.debug("Error in bulk upcoming for %s: %s", ticker, e)
+            results.append({"ticker": ticker, "actions": [], "source": "error"})
+
+    logger.info(
+        "Bulk upcoming: %d tickers | NSE lib: %d | EM fallback: %d | no data: %d",
+        len(tickers), nse_hits, em_hits, len(tickers) - nse_hits - em_hits,
+    )
     return results
 
 
@@ -369,10 +485,114 @@ def get_corporate_actions(tickers: List[str], mode: str = "past", lookback_days:
     raise ValueError("Unsupported mode for corporate actions: %s" % mode)
 
 
+
+# -------------------------------
+# Summary cache — pre-built flat map for fast index page loads
+# -------------------------------
+def _action_to_display(action: Dict) -> str:
+    """Convert a single action dict to a short grid cell string."""
+    today = datetime.now().date()
+    ex_str = action.get("ex_date", "")
+    try:
+        if ex_str and datetime.strptime(ex_str, "%Y-%m-%d").date() >= today:
+            typ = action.get("type", "").replace("Upcoming ", "")
+            val = action.get("value")
+            src = action.get("source", "")
+            parts = []
+            if "Dividend" in typ:
+                parts.append("Div")
+                if val:
+                    parts.append(f"Rs{val}")
+            elif "Bonus" in typ:
+                parts.append(f"Bonus {val}" if val else "Bonus")
+            elif "Split" in typ:
+                parts.append(f"Split {val}" if val else "Split")
+            else:
+                parts.append(typ)
+            parts.append(f"(Ex:{ex_str})")
+            if src:
+                parts.append(f"[{src}]")
+            return " ".join(parts)
+    except Exception:
+        pass
+    return ""
+
+
+def build_corp_actions_summary_cache(tickers: List[str], force: bool = False) -> Dict[str, str]:
+    """
+    Pre-build and persist a flat {ticker: display_string} map for all tickers.
+    Called once at app startup in a background thread. TTL = SUMMARY_CACHE_TTL_HOURS.
+
+    Args:
+        tickers: All tickers across all indices you want to pre-warm.
+        force:   Bypass TTL and rebuild even if cache is fresh.
+
+    Returns:
+        Dict[ticker, display_string] — only tickers with upcoming actions are included.
+    """
+    if not force and os.path.exists(SUMMARY_CACHE_PATH):
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(SUMMARY_CACHE_PATH))
+            if datetime.now() - mtime < timedelta(hours=SUMMARY_CACHE_TTL_HOURS):
+                with open(SUMMARY_CACHE_PATH, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                logger.info("Summary cache loaded (%d tickers with actions)", len(cached))
+                return cached
+        except Exception as e:
+            logger.warning("Summary cache read failed: %s", e)
+
+    logger.info("Building corp actions summary for %d tickers...", len(tickers))
+    bulk = get_bulk_upcoming_actions(tickers)
+
+    summary: Dict[str, str] = {}
+    for item in bulk:
+        ticker = item.get("ticker", "")
+        actions = item.get("actions", [])
+        for action in actions:
+            label = _action_to_display(action)
+            if label:
+                summary[ticker] = label
+                break  # first valid upcoming action is enough for the grid cell
+
+    try:
+        os.makedirs(os.path.dirname(SUMMARY_CACHE_PATH), exist_ok=True)
+        with open(SUMMARY_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2)
+        logger.info("Summary cache saved: %d/%d tickers have upcoming actions", len(summary), len(tickers))
+    except Exception as e:
+        logger.warning("Failed to write summary cache: %s", e)
+
+    return summary
+
+
+def get_corp_actions_summary(tickers: List[str]) -> Dict[str, str]:
+    """
+    Fast read path for /corporate_action_summary endpoint.
+    Reads the pre-built summary cache. Rebuilds if stale or missing.
+    Returns {ticker: display_string} — only tickers with upcoming actions present.
+    """
+    if os.path.exists(SUMMARY_CACHE_PATH):
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(SUMMARY_CACHE_PATH))
+            if datetime.now() - mtime < timedelta(hours=SUMMARY_CACHE_TTL_HOURS):
+                with open(SUMMARY_CACHE_PATH, "r", encoding="utf-8") as f:
+                    full = json.load(f)
+                return {t: full[t] for t in tickers if t in full}
+        except Exception as e:
+            logger.warning("Summary cache read failed, rebuilding: %s", e)
+
+    # Cache missing or stale — build it now for these tickers
+    return build_corp_actions_summary_cache(tickers)
+
+
 # -------------------------------
 # CLI / debug
 # -------------------------------
 if __name__ == "__main__":
-    # Example quick test
-    print(json.dumps(get_corporate_actions(["INFY.NS"], mode="upcoming"), indent=2))
-    print(json.dumps(get_corporate_actions(["INFY.NS"], mode="single"), indent=2))
+    import sys
+    ticker = sys.argv[1] if len(sys.argv) > 1 else "INFY.NS"
+    print(f"=== Upcoming actions for {ticker} ===")
+    print(json.dumps(get_corporate_actions([ticker], mode="upcoming"), indent=2, default=str))
+    print(f"\n=== Past actions (YF) for {ticker} ===")
+    print(json.dumps(get_corporate_actions([ticker], mode="single"), indent=2, default=str))
+    print(f"\n=== Library available: {_LIB_AVAILABLE} ===")
