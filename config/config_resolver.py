@@ -1104,6 +1104,19 @@ class ConfigResolver:
                 })
                 continue
 
+            # Build enriched technical namespace ONCE for this setup
+            # (Allows metrics from price_data and hybrid to be used in tech conditions and scoring)
+            hybrid_raw = {
+                k: v.get("raw") or v.get("value")
+                for k, v in ctx.get("scoring", {}).get("hybrid", {}).get("metrics", {}).items()
+                if isinstance(v, dict)
+            }
+            tech_namespace = {
+                **ctx.get("price_data", {}),  # price, bbHigh, bbMid, bbLow, etc.
+                **hybrid_raw,                 # priceVsPrimaryTrendPct, etc.
+                **ind,                        # indicators take precedence
+            }
+
             rules = self.extractor.get_setup_classification_rules(setup_name)
             if not rules:
                 continue
@@ -1114,9 +1127,11 @@ class ConfigResolver:
             require_fund = rules.get("require_fundamentals", False)
 
             # Fundamentals availability check
-            if require_fund:
-                required_keys = ["roe", "roce", "deRatio"]
-                if not all(fund.get(k) is not None for k in required_keys):
+            if require_fund and fund_conditions:
+                needed = set()
+                for cond in fund_conditions:
+                    needed.update(self._extract_variables_from_condition(cond))
+                if needed and not any(fund.get(k) is not None for k in needed):
                     rejected.append({
                         "type": setup_name,
                         "reason": "missing_fundamentals"
@@ -1145,7 +1160,7 @@ class ConfigResolver:
 
             # Technical conditions
             if not self._evaluate_conditions_list(
-                tech_conditions, ind, context=setup_name
+                tech_conditions, tech_namespace, context=setup_name
             ):
                 rejected.append({
                     "type": setup_name,
@@ -1166,7 +1181,7 @@ class ConfigResolver:
 
             # ✅ NEW: Calculate fit quality score
             fit_score = self._calculate_setup_fit_quality(
-                setup_name, ind, fund, patterns
+                setup_name, tech_namespace, fund, patterns
             )
 
             # ✅ BUG FIX #3: Skip setups that don't meet minimum fit quality
@@ -1265,7 +1280,7 @@ class ConfigResolver:
     def _calculate_setup_fit_quality(
         self,
         setup_name: str,
-        indicators: Dict,
+        tech_namespace: Dict,
         fundamentals: Dict,
         patterns: Dict
     ) -> float:
@@ -1286,7 +1301,7 @@ class ConfigResolver:
         if tech_conditions:
             passed = sum(
                 1 for cond in tech_conditions
-                if self._evaluate_conditions_list([cond], indicators, setup_name)
+                if self._evaluate_conditions_list([cond], tech_namespace, setup_name)
             )
             # +5 points per passed condition
             score += (passed / len(tech_conditions)) * 30
@@ -2746,6 +2761,29 @@ class ConfigResolver:
                 "reason": "Disabled",
                 "context": {}
             }
+
+        # ───────────────────────────────────────
+        # ✅ NEW: Rule 5: Divergence Entry Gate
+        # ───────────────────────────────────────
+        divergence_gate = self.extractor.get_divergence_entry_gate()
+        if divergence_gate and "severity_bands" in divergence_gate:
+            rsislope = ctx.get("indicators", {}).get("rsislope")
+            if rsislope is not None:
+                severe_band = divergence_gate["severity_bands"].get("severe", {})
+                if not severe_band.get("allow_entry", True):
+                    threshold = severe_band.get("rsislope_threshold", -0.08)
+                    if rsislope <= threshold:
+                        rule_results["divergence_gate"] = _normalize({
+                            "passed": False,
+                            "severity": 100,
+                            "reason": f"Severe divergence blocked entry (rsislope: {rsislope:.3f} <= {threshold})"
+                        }, "divergence_gate")
+                    else:
+                        rule_results["divergence_gate"] = _normalize({"passed": True}, "divergence_gate")
+                else:
+                    rule_results["divergence_gate"] = _normalize({"passed": True}, "divergence_gate")
+            else:
+                rule_results["divergence_gate"] = _normalize({"skipped": True, "reason": "Missing rsislope"}, "divergence_gate")
 
         # ───────────────────────────────────────
         # Aggregate risk score (NOT a decision)

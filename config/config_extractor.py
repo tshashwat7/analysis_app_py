@@ -395,12 +395,14 @@ class ConfigExtractor:
             source="master_config.HORIZON_PILLAR_WEIGHTS"
         )
 
+        # ✅ NEW: Extract divergence entry gate
+        self.sections["divergence_entry_gate"] = ConfigSection(
+            data=global_cfg.get("divergence", {}),
+            source="global.divergence"
+        )
+
         # Calculation Engine
         calc_engine = global_cfg.get("calculation_engine", {})
-        self.sections["setup_classification"] = ConfigSection(
-            data=calc_engine.get("setup_classification", {}),
-            source="global.calculation_engine.setup_classification"
-        )
         self.sections["spread_adjustment"] = ConfigSection(
             data=calc_engine.get("spread_adjustment", {}),
             source="global.calculation_engine.spread_adjustment"
@@ -518,13 +520,6 @@ class ConfigExtractor:
         self.sections["horizon_priority_overrides"] = ConfigSection(
             data=priority_overrides.get(self.horizon, {}),
             source=f"global.calculation_engine.horizon_priority_overrides.{self.horizon}"
-        )
-
-        # Setup classification rules
-        setup_class = calc_engine.get("setup_classification", {})
-        self.sections["setup_classification_rules"] = ConfigSection(
-            data=setup_class,
-            source="global.calculation_engine.setup_classification"
         )
 
     def extract_strategy_sections(self):

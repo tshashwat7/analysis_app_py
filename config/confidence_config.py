@@ -356,7 +356,7 @@ CONFIDENCE_CONFIG = {
                         "reason": "Trend-following setup without trend"
                     },
                     "breakout_low_volume": {
-                        "gates": {"rvol": {"max": 1.5}},
+                        "gates": {"rvol": {"max": 1.4}},
                         "apply_to_setups": ["MOMENTUM_BREAKOUT"],
                         "confidence_penalty": -12,
                         "reason": "Breakout lacks volume conviction"

@@ -189,6 +189,14 @@ GATE_METRIC_REGISTRY = {
         "context_paths": [("indicators", "macdhistogram")]
     },
     
+    "prevmacdhistogram": {
+        "type": "numeric",
+        "category": "momentum",
+        "validation_type": "threshold",
+        "description": "Previous MACD histogram value",
+        "context_paths": [("indicators", "prevmacdhistogram"), ("indicators", "prev_macdhistogram")]
+    },
+    
     # ===========================
     # VOLATILITY GATES
     # ===========================
@@ -249,12 +257,36 @@ GATE_METRIC_REGISTRY = {
         "context_paths": [("indicators", "bbpercentb")]
     },
     
+    "bbWidth": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Bollinger Band Width",
+        "context_paths": [("indicators", "bbWidth")]
+    },
+    
     "position52w": {
         "type": "numeric",
         "category": "structure",
         "validation_type": "threshold",
         "description": "Distance from 52-week high",
         "context_paths": [("indicators", "position52w")]
+    },
+    
+    "priceVs52wHighPct": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Current price as a percentage of 52-week high",
+        "context_paths": [("fundamentals", "priceVs52wHighPct")]
+    },
+    
+    "drawdown52wHigh": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Drawdown percentage from 52-week high",
+        "context_paths": [("fundamentals", "drawdown52wHigh")]
     },
 
     "priceVsPrimaryTrendPct": {
@@ -302,6 +334,30 @@ GATE_METRIC_REGISTRY = {
         "validation_type": "threshold",
         "description": "Piotroski F-Score",
         "context_paths": [("fundamentals", "piotroskiF")]
+    },
+    
+    "peRatio": {
+        "type": "numeric",
+        "category": "valuation",
+        "validation_type": "threshold",
+        "description": "Price to Earnings Ratio",
+        "context_paths": [("fundamentals", "peRatio"), ("fundamentals", "pe")]
+    },
+    
+    "fcfYield": {
+        "type": "numeric",
+        "category": "valuation",
+        "validation_type": "threshold",
+        "description": "Free Cash Flow Yield",
+        "context_paths": [("fundamentals", "fcfYield")]
+    },
+    
+    "dividendyield": {
+        "type": "numeric",
+        "category": "valuation",
+        "validation_type": "threshold",
+        "description": "Dividend Yield",
+        "context_paths": [("fundamentals", "dividendyield"), ("fundamentals", "dividendYield")]
     },
     
     # ===========================
@@ -607,70 +663,6 @@ MASTER_CONFIG = {
                 }
             },
             
-            # Setup Classification (SINGLE SOURCE - NOT in horizons)
-            "setup_classification": {
-                "consolidation": {
-                    "bb_width_threshold": 0.5,
-                    "volume_ratio_max": 0.8
-                },
-                "MOMENTUM_BREAKOUT": {
-                    "bbpercentb": {"min": 0.98},
-                    "rsi": {"min": 60},
-                    "wickRejection":{"max": 2.5},
-                    "rvol": {"min": 1.5}
-                },
-                "MOMENTUM_BREAKDOWN": {
-                    "bbpercentb": {"max": 0.02},
-                    "rsi": {"max": 40},
-                    "rvol": {"min": 1.5}
-                },
-                "TREND_PULLBACK": {
-                    "ma_dist_max": 0.05,
-                    "rsi": {"min": 50}
-                },
-                "bear_pullback": {
-                    "ma_dist_max": 0.05,
-                    "rsi": {"max": 50}
-                },
-                "trend_following": {
-                    "classic": {
-                        "rsi": {"min": 55},
-                        "macdhistogram": {"min": 0}
-                    },
-                    "strong_drift": {
-                        "trendStrength": {"min": 7.0}
-                    }
-                },
-                "VALUE_TURNAROUND": {
-                    "trendStrength": {"min": 3.0, "max": 5.5},
-                    "rsi": {"min": 45}
-                },
-                "DEEP_VALUE_PLAY": {
-                    "peRatio": {"max": 10.0},
-                    "fcfYield": {"min": 5.0}
-                },
-                "QUALITY_ACCUMULATION": {
-                    "consolidation_required": True,
-                    "rsi_range": [40, 60]
-                },
-                "QUALITY_ACCUMULATION_DOWNTREND": {
-                    "fundamental_requirements": {
-                        "roe": {"min": 20},
-                        "roce": {"min": 25},
-                        "deRatio": {"max": 0.5}
-                    },
-                    "bbpercentb": {"min": 0.2, "max": 0.5}
-                },
-                #moved to confidence config
-                # "divergence": { 
-                #     "lookback": 10,
-                #     "slope_diff_min": -0.05,
-                #     "confidence_penalties": {
-                #         # "bearish_divergence": 0.70,
-                #         # "bullish_divergence": 0.70
-                #     }
-                # },
-            },
 
             # Spread Adjustment
             "spread_adjustment": {
@@ -841,11 +833,6 @@ MASTER_CONFIG = {
                 "vol_qual_low_mult": 3.0,
                 "min_distance_mult": 0.5
             },
-            "spread_adjustments": {
-                "large_cap": {"min_mcap": 100000, "spread": 0.001},
-                "mid_cap": {"min_mcap": 10000, "spread": 0.002},
-                "small_cap": {"spread": 0.005}
-            },
             "structure_validation": {
                 "breakout_tolerance": 1.001,
                 "breakdown_tolerance": 0.999
@@ -854,11 +841,9 @@ MASTER_CONFIG = {
         
         "lookback": {"python_data": 600},
         
-        # âš ï¸ DEPRECATED - Use technical_score_config.py instead
-        # Kept for backward compatibility only
-        "scoring": {
-            "thresholds": {"buy": 6.0, "hold": 5.0, "sell": 4.0}
-        },
+        # ❌ DELETED: global.scoring — deprecated, never extracted by any
+        # section in extract_global_sections(). Thresholds owned by
+        # technical_score_config.py.
         
         "strategy_preferences": {
             # This layer controls TRADING preferences per horizon
@@ -1081,17 +1066,17 @@ MASTER_CONFIG = {
                 "severe": {
                     "rsislope_threshold": -0.08,
                     "allow_entry": False,
-                    "confidence_penalty": 1.0
+                    "confidence_penalty": 1.0  # Legacy/unused
                 },
                 "moderate": {
                     "rsislope_threshold": -0.03,
-                    "allow_entry": True,
-                    "confidence_penalty": 0.7
+                    "allow_entry": True,         # Does not block Phase 6 execution
+                    "confidence_penalty": 0.7    # NOTE: Unused. Score penalties live in confidence_config.py
                 },
                 "minor": {
                     "rsislope_threshold": 0.0,
-                    "allow_entry": True,
-                    "confidence_penalty": 0.9
+                    "allow_entry": True,         # Does not block Phase 6 execution
+                    "confidence_penalty": 0.9    # NOTE: Unused. Score penalties live in confidence_config.py
                 }
             }
         }
@@ -1185,11 +1170,6 @@ MASTER_CONFIG = {
                 "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.01},
                 "rrRatio": {"min": 1.2},
                 "horizon_t2_cap": 0.04,
-                "rr_regime_adjustments": {
-                    "strong_trend": {"adx": {"min": 40}, "t1_mult": 2.0, "t2_mult": 4.0},
-                    "normal_trend": {"adx": {"min": 20}, "t1_mult": 1.5, "t2_mult": 3.0},
-                    "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.2, "t2_mult": 2.5}
-                },
                 "rr_gates": { "min_t1": 1.5, "min_t2": 2.2, "min_structural": 2.5, "execution_floor": 1.2 }
             },
             
@@ -1267,11 +1247,6 @@ MASTER_CONFIG = {
                 "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.01},
                 "rrRatio": {"min": 1.4},
                 "horizon_t2_cap": 0.10,
-                "rr_regime_adjustments": {
-                    "strong_trend": {"adx": {"min": 40}, "t1_mult": 2.0, "t2_mult": 4.0},
-                    "normal_trend": {"adx": {"min": 20}, "t1_mult": 1.5, "t2_mult": 3.0},
-                    "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.2, "t2_mult": 2.5}
-                },
                 "rr_gates": { "min_t1": 1.6, "min_t2": 2.5, "min_structural": 3.0, "execution_floor": 1.4 }
             },
             "execution": {

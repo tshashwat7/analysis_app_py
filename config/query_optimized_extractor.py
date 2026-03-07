@@ -282,6 +282,13 @@ class QueryOptimizedExtractor:
             "bullish_slope_min": 0.05
         })
 
+    def get_divergence_entry_gate(self) -> Dict[str, Any]:
+        """
+        ✅ NEW: Get divergence entry gate logic.
+        Returns: The master_config divergence block (if allow_entry is False, it's a hard block).
+        """
+        return self.base_extractor.get("divergence_entry_gate", {})
+
     def get_min_tradeable_confidence(self) -> float:
         """
         Horizon-level confidence floor to even consider trades.

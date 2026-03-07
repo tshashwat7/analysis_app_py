@@ -155,14 +155,15 @@ STRATEGY_MATRIX = {
     },
 
     "trend_following": {
-        "description": "Classic trend alignment with MA and ADX",
+        "description": "Classic trend alignment with MA, ADX, and Momentum",
         "enabled": True,
-        "fit_threshold": 60,
+        "fit_threshold": 70,  # ⬆️ Increased from 60 to prevent acting as generic catch-all
         
         "fit_indicators": {
-            "adx": {"min": 25, "weight": 0.4},
-            "trendStrength": {"min": 6.0, "weight": 0.3},
-            "priceVsMaSlowPct": {"min": 0, "weight": 0.3}
+            "adx": {"min": 30, "weight": 0.25},  # ⬆️ Increased from 25
+            "trendStrength": {"min": 6.5, "weight": 0.25}, # ⬆️ Increased from 6.0
+            "rsi": {"min": 50, "weight": 0.25}, # 🟢 Added to ensure some momentum exists
+            "priceVsMaSlowPct": {"min": 0, "weight": 0.25}
         },
         
         "scoring_rules": {
@@ -620,12 +621,12 @@ STRATEGY_MATRIX = {
             "rsi": {"max": 40, "weight": 0.25, "direction": "invert"},
             "roe": {"min": 15, "weight": 0.20},
             "deRatio": {"max": 0.8, "weight": 0.15, "direction": "invert"},
-            "price_vs_52w_high_pct": {"max": 80, "weight": 0.15, "direction": "invert"}
+            "priceVs52wHighPct": {"max": 80, "weight": 0.15, "direction": "invert"}
         },
         
         "scoring_rules": {
             "quality_in_distress": {
-                "condition": "roe >= 18 and roce >= 20 and price_vs_52w_high_pct <= 75",
+                "condition": "roe >= 18 and roce >= 20 and priceVs52wHighPct <= 75",
                 "points": 40,
                 "reason": "Quality stock 25%+ off highs"
             },

@@ -101,175 +101,169 @@ SETUP_EXPLANATIONS = {
 
 def generate_confidence_narrative(eval_ctx: Dict[str, Any], horizon: str) -> str:
     """
-    ✅ NEW: Generate human-readable confidence calculation explanation.
-    
-    Args:
-        eval_ctx: Evaluation context from resolver
-        horizon: Trading timeframe
-    
-    Returns:
-        Narrative explanation of confidence calculation
+    Generate human-readable confidence calculation explanation.
+    Uses structured_adjustments from resolver (pre-classified dicts).
+    Returns HTML-safe string.
     """
     conf = eval_ctx.get("confidence", {})
     setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
-    
+
     base = conf.get("base", 50)
     final = conf.get("final", 50)
     clamped = conf.get("clamped", 50)
     clamp_range = conf.get("clamp_range", [30, 95])
-    
-    adjustments = conf.get("adjustments", {})
-    breakdown = adjustments.get("breakdown", [])
-    
-    # Start narrative
-    narrative = f"**Confidence Score: {clamped}%** ({horizon})\n\n"
-    
-    # Explain starting point
+    divergence_mult = conf.get("divergence_multiplier", 1.0)
+
+    # Use structured_adjustments — resolver already classified these
+    structured = conf.get("structured_adjustments", [])
+
+    bonuses = [a for a in structured if a.get("direction") == "positive"]
+    penalties = [a for a in structured if a.get("direction") == "negative"]
+
     setup_name = _format_setup_name(setup_type)
-    narrative += f"Started at **{base}%** ({setup_name} baseline for {horizon}).\n\n"
-    
-    # Categorize adjustments
-    positive = []
-    negative = []
-    multipliers = []
-    
-    for entry in breakdown:
-        if isinstance(entry, str):
-            entry_lower = entry.lower()
-            
-            # Detect multipliers (divergence)
-            if '×' in entry or 'multiplier' in entry_lower:
-                multipliers.append(entry)
-            # Detect positive adjustments
-            elif '+' in entry or 'bonus' in entry_lower or 'boost' in entry_lower:
-                positive.append(entry)
-            # Detect negative adjustments
-            elif '-' in entry or 'penalty' in entry_lower or 'warning' in entry_lower:
-                negative.append(entry)
-    
-    # Explain positive factors
-    if positive:
-        narrative += "**✅ Boosting Factors:**\n"
-        for p in positive[:5]:  # Top 5 boosters
-            narrative += f"  • {_humanize_adjustment(p)}\n"
-        narrative += "\n"
-    
-    # Explain negative factors
-    if negative:
-        narrative += "**⚠️ Risk Factors:**\n"
-        for n in negative[:5]:  # Top 5 risks
-            narrative += f"  • {_humanize_adjustment(n)}\n"
-        narrative += "\n"
-    
-    # Explain multipliers (divergence)
-    if multipliers:
-        narrative += "**⚡ Divergence Applied:**\n"
-        for m in multipliers:
-            narrative += f"  • {_humanize_adjustment(m)}\n"
-        narrative += "\n"
-    
-    # Explain clamping
+    narrative = f"<b>Confidence Score: {clamped}%</b> ({horizon})<br><br>"
+    narrative += f"Base floor: <b>{base}%</b> ({setup_name}, {horizon}).<br>"
+    narrative += f"Adjustments: <b>{final - base:+.1f}%</b> → Raw {final:.1f}%<br><br>"
+
+    if bonuses:
+        narrative += "<b>✅ Boosting Factors:</b><br>"
+        for a in bonuses[:5]:
+            narrative += f"&nbsp;&nbsp;• {_humanize_adjustment_structured(a)}<br>"
+        narrative += "<br>"
+
+    if penalties:
+        narrative += "<b>⚠️ Risk Factors:</b><br>"
+        for a in penalties[:5]:
+            narrative += f"&nbsp;&nbsp;• {_humanize_adjustment_structured(a)}<br>"
+        narrative += "<br>"
+
+    if divergence_mult != 1.0:
+        severity = "Severe" if divergence_mult <= 0.55 else ("Moderate" if divergence_mult <= 0.75 else "Minor")
+        narrative += f"<b>⚡ Divergence Dampener:</b> {severity} bearish divergence applied ({divergence_mult:.2f}×)<br><br>"
+
     if clamped != final:
         if clamped == clamp_range[1]:
-            narrative += f"Raw confidence ({final}%) exceeded {horizon} maximum, clamped to **{clamped}%**.\n"
+            narrative += f"Raw score ({final:.1f}%) exceeded {horizon} ceiling, clamped to <b>{clamped}%</b>.<br>"
         elif clamped == clamp_range[0]:
-            narrative += f"Raw confidence ({final}%) below {horizon} minimum, raised to **{clamped}%**.\n"
-    
+            narrative += f"Raw score ({final:.1f}%) below {horizon} floor, raised to <b>{clamped}%</b>.<br>"
+
     return narrative.strip()
+
+
+# Actionable guidance for each gate when it fails
+GATE_GUIDANCE = {
+    "adx": "Trend is too weak — price is choppy, not directional. Wait for ADX > 25.",
+    "rvol": "Volume is below average — institutional interest not yet confirmed. Wait for RVOL > 1.5×.",
+    "trendStrength": "Insufficient momentum. Watch for higher lows + rising MA alignment.",
+    "confidence": "Too many conflicting signals. Wait for a cleaner setup with fewer headwinds.",
+    "rrRatio": "Risk/Reward too thin after costs. Wait for a pullback to improve entry price.",
+    "atrPct": "Volatility outside safe range. Wait for ATR to normalize before entering.",
+    "volatilityQuality": "Choppy price action. Look for smoother trend bars before entry.",
+    "technicalScore": "Technical indicators are mixed. Wait for alignment across RSI, MACD, and MAs.",
+    "fundamentalScore": "Fundamentals don't support the setup. Verify earnings and growth metrics.",
+    "volatility_guards": "Volatility conditions unsafe for this setup type.",
+    "structure_validation": "Price structure doesn't match the required pattern geometry.",
+    "sl_distance_validation": "Stop loss too far from entry — position size would be too small to be meaningful.",
+}
 
 
 def generate_gate_validation_narrative(eval_ctx: Dict[str, Any]) -> str:
     """
-    ✅ NEW: Generate human-readable gate validation explanation.
-    
-    Args:
-        eval_ctx: Evaluation context from resolver
-    
-    Returns:
-        Narrative explanation of which gates passed/failed
+    Generate human-readable gate validation explanation.
+    Reads structural_gates.by_gate, opportunity_gates.gates, and execution_rules.
+    Returns HTML-safe string with actionable guidance for failed gates.
     """
-    gates = eval_ctx.get("entry_gates", {})
-    
-    if not gates:
+    structural_gates = eval_ctx.get("structural_gates", {})
+    opportunity_gates = eval_ctx.get("opportunity_gates", {})
+    execution_rules = eval_ctx.get("execution_rules", {})
+
+    # Check if we have any gate data at all
+    if not structural_gates and not opportunity_gates and not execution_rules:
         return "No entry gate information available."
-    
-    passed = gates.get("passed", False)
-    results = gates.get("results", {})
-    
-    # Start narrative
-    if passed:
-        narrative = "**✅ All Entry Gates Passed**\n\n"
+
+    all_passed = (
+        structural_gates.get("overall", {}).get("passed", True) and
+        opportunity_gates.get("overall", {}).get("passed", True) and
+        execution_rules.get("overall", {}).get("passed", True)
+    )
+
+    if all_passed:
+        narrative = "<b>✅ All Gates Passed</b><br><br>"
     else:
-        narrative = "**⛔ Entry Gates Failed**\n\n"
-    
-    # Group results by category
-    structural = results.get("structural", {})
-    execution = results.get("execution_rules", {})
-    opportunity = results.get("opportunity", {})
-    
-    # Explain structural gates
-    if structural:
-        narrative += "**Structural Gates:**\n"
-        for gate_name, gate_result in structural.items():
-            status = gate_result.get("passed", False)
-            actual = gate_result.get("actual")
-            required = gate_result.get("required", {})
-            
-            icon = "✅" if status else "❌"
-            narrative += f"  {icon} {_format_gate_name(gate_name)}: "
-            
+        narrative = "<b>⛔ Gate Failures Detected</b><br><br>"
+
+    # ── Structural Gates ─────────────────────────────────────────────────
+    by_gate = structural_gates.get("by_gate", {})
+    if by_gate:
+        narrative += "<b>Structural Gates:</b><br>"
+        for gate_name, result in by_gate.items():
+            status = result.get("status", "skipped")
+            actual = result.get("actual")
+            required = result.get("required") or {}
+
+            icon = "✅" if status == "passed" else ("⚠️" if status == "skipped" else "❌")
+            narrative += f"&nbsp;&nbsp;{icon} {_format_gate_name(gate_name)}"
+
             if actual is not None:
-                narrative += f"{actual:.2f}"
-                
-                if required.get("min") is not None:
-                    narrative += f" (required: ≥{required['min']})"
-                elif required.get("max") is not None:
-                    narrative += f" (required: ≤{required['max']})"
-            else:
-                narrative += "N/A"
-            
-            narrative += "\n"
-        narrative += "\n"
-    
-    # Explain opportunity gates
-    if opportunity:
-        narrative += "**Opportunity Gates:**\n"
-        for gate_name, gate_result in opportunity.items():
-            status = gate_result.get("passed", False)
-            actual = gate_result.get("actual")
-            required = gate_result.get("required", {})
-            
-            icon = "✅" if status else "❌"
-            narrative += f"  {icon} {_format_gate_name(gate_name)}: "
-            
+                narrative += f": {actual:.2f}"
+                if isinstance(required, dict):
+                    if required.get("min") is not None:
+                        narrative += f" (need ≥{required['min']})"
+                    elif required.get("max") is not None:
+                        narrative += f" (need ≤{required['max']})"
+
+            if status == "failed" and gate_name in GATE_GUIDANCE:
+                narrative += f'<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#92400e;font-size:0.8em;">💡 {GATE_GUIDANCE[gate_name]}</span>'
+            narrative += "<br>"
+        narrative += "<br>"
+
+    # ── Opportunity Gates ────────────────────────────────────────────────
+    opp_gates = opportunity_gates.get("gates", {})
+    if opp_gates:
+        narrative += "<b>Opportunity Gates:</b><br>"
+        for gate_name, result in opp_gates.items():
+            status = result.get("status", "skipped")
+            actual = result.get("actual")
+            required = result.get("required") or {}
+
+            icon = "✅" if status == "passed" else ("⚠️" if status == "skipped" else "❌")
+            narrative += f"&nbsp;&nbsp;{icon} {_format_gate_name(gate_name)}"
+
             if actual is not None:
-                if gate_name == "confidence":
-                    narrative += f"{actual:.0f}%"
-                else:
-                    narrative += f"{actual:.2f}"
-                
-                if required.get("min") is not None:
-                    narrative += f" (required: ≥{required['min']})"
-            else:
-                narrative += "N/A"
-            
-            narrative += "\n"
-        narrative += "\n"
-    
-    # Explain execution rules
-    if execution:
-        exec_summary = execution.get("summary", {})
-        warnings = exec_summary.get("warnings", [])
-        violations = exec_summary.get("violations", [])
-        
-        if warnings or violations:
-            narrative += "**Execution Warnings:**\n"
-            for w in warnings:
-                narrative += f"  ⚠️ {_format_gate_name(w)}\n"
-            for v in violations:
-                narrative += f"  🚫 {_format_gate_name(v)}\n"
-    
+                fmt = f"{actual:.0f}%" if gate_name == "confidence" else f"{actual:.2f}"
+                narrative += f": {fmt}"
+                if isinstance(required, dict) and required.get("min") is not None:
+                    narrative += f" (need ≥{required['min']})"
+
+            if status == "failed" and gate_name in GATE_GUIDANCE:
+                narrative += f'<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#92400e;font-size:0.8em;">💡 {GATE_GUIDANCE[gate_name]}</span>'
+            narrative += "<br>"
+        narrative += "<br>"
+
+    # ── Execution Rules ─────────────────────────────────────────────────
+    exec_summary = execution_rules.get("summary", {})
+    warnings = exec_summary.get("warnings", [])
+    violations = exec_summary.get("violations", [])
+    if warnings or violations:
+        narrative += "<b>Execution Warnings:</b><br>"
+        for w in warnings:
+            narrative += f"&nbsp;&nbsp;⚠️ {_format_gate_name(w)}<br>"
+        for v in violations:
+            narrative += f"&nbsp;&nbsp;🚫 {_format_gate_name(v)}<br>"
+
     return narrative.strip()
+
+
+# Specific next-action triggers when entry is blocked
+BLOCKED_NEXT_ACTIONS = {
+    "LOW_CONFIDENCE": "Watch for RSI divergence or a volume surge above 2× average to re-trigger.",
+    "GATE_FAILED": "Entry unlocks when failed gates turn green — check the Gate Status panel above.",
+    "NO_PATTERN": "Set an alert for a breakout above the nearest resistance level.",
+    "PATTERN_EXPIRED": "Pattern has aged out. Wait for a fresh setup to form (check back in 3-5 sessions).",
+    "LOW_RR": "Risk/Reward too thin at current price. Wait for a pullback to improve entry.",
+    "DIRECTION_NEUTRAL": "No directional bias yet. Watch for MACD crossover or Supertrend flip.",
+    "VOLATILITY": "Volatility too high for safe entry. Wait for ATR% to contract below threshold.",
+}
 
 
 def generate_opportunity_narrative(
@@ -278,15 +272,8 @@ def generate_opportunity_narrative(
     horizon: str
 ) -> str:
     """
-    ✅ NEW: Generate human-readable opportunity scoring explanation.
-    
-    Args:
-        eligibility_score: Base structural eligibility score
-        opportunity_result: Result from compute_opportunity_score
-        horizon: Trading timeframe
-    
-    Returns:
-        Narrative explanation of opportunity scoring
+    Generate human-readable opportunity scoring explanation.
+    Returns HTML-safe string. When blocked, includes specific next-action triggers.
     """
     final_score = opportunity_result.get("final_decision_score", 0)
     bonus = opportunity_result.get("opportunity_bonus", 0)
@@ -297,41 +284,52 @@ def generate_opportunity_narrative(
     strategy = trade_ctx.get("strategy", "generic")
     confidence = trade_ctx.get("confidence", 50)
     
-    # Start narrative
-    narrative = f"**Opportunity Score: {final_score:.1f}/10** ({horizon})\n\n"
+    narrative = f"<b>Opportunity Score: {final_score:.1f}/10</b> ({horizon})<br><br>"
     
-    # Explain structural base
-    narrative += f"**Base Structural Eligibility: {eligibility_score:.1f}/10**\n"
-    narrative += "This combines Technical (70%), Fundamental (0%), and Hybrid (30%) pillars "
-    narrative += f"weighted for {horizon} trading.\n\n"
+    narrative += f"<b>Base Structural Eligibility: {eligibility_score:.1f}/10</b><br>"
+    narrative += f"Combines technical, fundamental, and hybrid scoring weighted for {horizon} trading.<br><br>"
     
-    # Explain opportunity bonus (or lack thereof)
     if gate_passed:
-        narrative += f"**Opportunity Bonus: +{bonus:.1f}**\n"
-        narrative += f"Setup: {_format_setup_name(setup)}\n"
-        narrative += f"Strategy: {strategy.replace('_', ' ').title()}\n"
-        narrative += f"Confidence: {confidence}%\n\n"
-        
-        narrative += "✅ All entry gates passed - this is a tradeable opportunity.\n"
+        narrative += f"<b>Opportunity Bonus: +{bonus:.1f}</b><br>"
+        narrative += f"Setup: {_format_setup_name(setup)}<br>"
+        narrative += f"Strategy: {strategy.replace('_', ' ').title()}<br>"
+        narrative += f"Confidence: {confidence}%<br><br>"
+        narrative += "✅ All entry gates passed — this is a tradeable opportunity.<br>"
     else:
-        narrative += "**No Opportunity Bonus** (entry gates not met)\n\n"
+        narrative += "<b>No Opportunity Bonus</b> (entry gates not met)<br><br>"
         block_reason = trade_ctx.get("block_reason", "Unknown")
-        narrative += f"⛔ **Blocked:** {block_reason}\n"
-        narrative += "Monitor this stock - conditions may improve.\n"
+        narrative += f"⛔ <b>Blocked:</b> {block_reason}<br><br>"
+        
+        # Match block reason to specific next-action
+        next_action = None
+        block_upper = block_reason.upper()
+        if "CONFIDENCE" in block_upper:
+            next_action = BLOCKED_NEXT_ACTIONS["LOW_CONFIDENCE"]
+        elif "GATE" in block_upper:
+            next_action = BLOCKED_NEXT_ACTIONS["GATE_FAILED"]
+        elif "PATTERN" in block_upper and "EXPIRED" in block_upper:
+            next_action = BLOCKED_NEXT_ACTIONS["PATTERN_EXPIRED"]
+        elif "PATTERN" in block_upper or "NO_PATTERN" in block_upper:
+            next_action = BLOCKED_NEXT_ACTIONS["NO_PATTERN"]
+        elif "RR" in block_upper or "REWARD" in block_upper:
+            next_action = BLOCKED_NEXT_ACTIONS["LOW_RR"]
+        elif "DIRECTION" in block_upper or "NEUTRAL" in block_upper:
+            next_action = BLOCKED_NEXT_ACTIONS["DIRECTION_NEUTRAL"]
+        elif "VOLATIL" in block_upper or "ATR" in block_upper:
+            next_action = BLOCKED_NEXT_ACTIONS["VOLATILITY"]
+        
+        if next_action:
+            narrative += f'<span style="color:#0369a1;">💡 <b>Next step:</b> {next_action}</span><br>'
+        else:
+            narrative += '<span style="color:#6b7280;">💡 Monitor this stock — conditions may improve.</span><br>'
     
     return narrative.strip()
 
 
 def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
     """
-    ✅ NEW: Generate human-readable trade plan explanation.
-    
-    Args:
-        exec_ctx: Execution context from resolver
-        ticker: Stock symbol
-    
-    Returns:
-        Narrative explanation of trade plan
+    Generate human-readable trade plan explanation.
+    Returns HTML-safe string.
     """
     risk = exec_ctx.get("risk", {})
     timeline = exec_ctx.get("timeline", {})
@@ -341,69 +339,49 @@ def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
     sl = risk.get("stop_loss")
     targets = risk.get("targets", [])
     qty = risk.get("quantity", 0)
-    rr = risk.get("rrRatio", 0)
+    rr = risk.get("rrRatio") or 0.0
     
     if not entry or not sl:
         return "No actionable trade plan available."
     
-    # Start narrative
-    narrative = f"**Trade Plan: {ticker}**\n\n"
+    narrative = f"<b>Trade Plan: {ticker}</b><br><br>"
     
-    # Entry details
-    narrative += f"**Entry:** ₹{entry:,.2f}\n"
-    narrative += f"**Stop Loss:** ₹{sl:,.2f} ({_calculate_sl_pct(entry, sl):.1f}% risk)\n"
+    narrative += f"<b>Entry:</b> ₹{entry:,.2f}<br>"
+    narrative += f"<b>Stop Loss:</b> ₹{sl:,.2f} ({_calculate_sl_pct(entry, sl):.1f}% risk)<br>"
     
-    # Targets
     if targets:
-        narrative += f"**Target 1:** ₹{targets[0]:,.2f}"
+        narrative += f"<b>Target 1:</b> ₹{targets[0]:,.2f}"
         if timeline.get("available"):
-            t1_est = timeline.get("t1_estimate", "N/A")
-            narrative += f" (~{t1_est})"
-        narrative += "\n"
+            narrative += f" (~{timeline.get('t1_estimate', 'N/A')})"
+        narrative += "<br>"
         
         if len(targets) > 1:
-            narrative += f"**Target 2:** ₹{targets[1]:,.2f}"
+            narrative += f"<b>Target 2:</b> ₹{targets[1]:,.2f}"
             if timeline.get("available"):
-                t2_est = timeline.get("t2_estimate", "N/A")
-                narrative += f" (~{t2_est})"
-            narrative += "\n"
+                narrative += f" (~{timeline.get('t2_estimate', 'N/A')})"
+            narrative += "<br>"
     
-    # Risk/Reward
-    narrative += f"\n**Risk/Reward Ratio:** {rr:.2f}:1"
-    if rr >= 2.0:
-        narrative += " (Excellent)"
-    elif rr >= 1.5:
-        narrative += " (Good)"
-    else:
-        narrative += " (Marginal)"
-    narrative += "\n"
+    rr_label = "Excellent" if rr >= 2.0 else ("Good" if rr >= 1.5 else "Marginal")
+    narrative += f"<br><b>Risk/Reward Ratio:</b> {rr:.2f}:1 ({rr_label})<br>"
     
-    # Position sizing
     capital_at_risk = qty * (entry - sl)
-    narrative += f"\n**Position Size:** {qty} shares (₹{qty * entry:,.0f} investment)\n"
-    narrative += f"**Capital at Risk:** ₹{capital_at_risk:,.0f}\n"
+    narrative += f"<br><b>Position Size:</b> {qty} shares (₹{qty * entry:,.0f} investment)<br>"
+    narrative += f"<b>Capital at Risk:</b> ₹{capital_at_risk:,.0f}<br>"
     
-    # Pattern context
     if pattern_meta.get("available"):
         pattern_name = pattern_meta.get("pattern", "")
         age = pattern_meta.get("age_candles", 0)
         quality = pattern_meta.get("quality", 0)
-        
-        narrative += f"\n**Pattern:** {_format_pattern_name(pattern_name)}\n"
-        narrative += f"Pattern Age: {age} candles | Quality: {quality}/10\n"
+        narrative += f"<br><b>Pattern:</b> {_format_pattern_name(pattern_name)}<br>"
+        narrative += f"Pattern Age: {age} candles | Quality: {quality}/10<br>"
     
     return narrative.strip()
 
 
 def generate_scoring_breakdown_narrative(eval_ctx: Dict[str, Any]) -> str:
     """
-    ✅ NEW: Generate human-readable scoring breakdown.
-    
-    Args:
-        eval_ctx: Evaluation context from resolver
-    
-    Returns:
-        Narrative explanation of scoring components
+    Generate human-readable scoring breakdown.
+    Returns HTML-safe string.
     """
     scoring = eval_ctx.get("scoring", {})
     
@@ -416,13 +394,11 @@ def generate_scoring_breakdown_narrative(eval_ctx: Dict[str, Any]) -> str:
     hybrid_score = hybrid.get("score", 0)
     
     try:
-        narrative = "**Scoring Breakdown:**\n\n"
+        narrative = "<b>Scoring Breakdown:</b><br><br>"
         
-        # Technical pillar
-        narrative += f"**Technical Score: {tech_score:.1f}/10**\n"
+        narrative += f"<b>Technical Score: {tech_score:.1f}/10</b><br>"
         tech_penalties = tech.get("penalties", {})
         
-        # ✅ FIX: Extract the list of reasons safely
         if isinstance(tech_penalties, dict):
             penalty_list = tech_penalties.get("reasons", [])
         elif isinstance(tech_penalties, list):
@@ -431,63 +407,74 @@ def generate_scoring_breakdown_narrative(eval_ctx: Dict[str, Any]) -> str:
             penalty_list = []
 
         if penalty_list:
-            narrative += "\n**📉 Technical Drag:**\n"
+            narrative += "<br><b>📉 Technical Drag:</b><br>"
             for p in penalty_list[:3]:
-                narrative += f"  • {p}\n"
-        narrative += "\n"
+                narrative += f"&nbsp;&nbsp;• {p}<br>"
         
-        # Fundamental pillar
-        narrative += f"**Fundamental Score: {fund_score:.1f}/10**\n"
+        # Also show low-scoring metrics from breakdown
+        tech_breakdown = tech.get("breakdown", {})
+        low_scorers = []
+        if isinstance(tech_breakdown, dict):
+            for cat, metrics in tech_breakdown.items():
+                if isinstance(metrics, dict):
+                    for metric, val in metrics.items():
+                        score_val = val.get("score", 5) if isinstance(val, dict) else 5
+                        if isinstance(score_val, (int, float)) and score_val < 4.0:
+                            low_scorers.append((metric, score_val))
+            low_scorers.sort(key=lambda x: x[1])
+        
+        if penalty_list:
+            narrative += "<br><b>📉 Technical Drag:</b><br>"
+            for p in penalty_list[:3]:
+                narrative += f"&nbsp;&nbsp;• {p}<br>"
+
+        if low_scorers:
+            narrative += "<br><b>📉 Weak Indicators:</b><br>"  # separate header always
+            for metric, score_val in low_scorers[:3]:
+                narrative += f"&nbsp;&nbsp;• {_format_metric_name(metric)}: {score_val:.1f}/10<br>"
+        
+        narrative += f"<b>Fundamental Score: {fund_score:.1f}/10</b><br>"
         fund_breakdown = fund.get("breakdown", {})
         
         if fund_breakdown:
-            # ✅ FIX 1: Extract score/contribution from nested dicts
             top_metrics = []
             for metric, value in fund_breakdown.items():
-                # Handle both dict and non-dict values
                 if isinstance(value, dict):
                     score_val = value.get('score', value.get('weighted', value.get('contribution', 0)))
                 else:
                     score_val = value if value is not None else 0
-                
                 top_metrics.append((metric, score_val))
             
-            # Now safe to sort by numeric values
             top_metrics = sorted(
                 top_metrics,
                 key=lambda x: x[1] if isinstance(x[1], (int, float)) else 0,
                 reverse=True
             )[:3]
             
-            narrative += "Top metrics:\n"
+            narrative += "Top metrics:<br>"
             for metric, score_val in top_metrics:
                 if isinstance(score_val, (int, float)) and score_val > 0:
-                    narrative += f"  • {_format_metric_name(metric)}: {score_val:.1f}\n"
+                    narrative += f"&nbsp;&nbsp;• {_format_metric_name(metric)}: {score_val:.1f}<br>"
         
-        narrative += "\n"
+        narrative += "<br>"
         
-        # Hybrid pillar
-        narrative += f"**Hybrid Score: {hybrid_score:.1f}/10**\n"
+        narrative += f"<b>Hybrid Score: {hybrid_score:.1f}/10</b><br>"
         hybrid_breakdown = hybrid.get("breakdown", {})
         
         if hybrid_breakdown:
-            narrative += "Components:\n"
-            
-            # ✅ FIX 2: Extract score/contribution from nested dicts
+            narrative += "Components:<br>"
             for metric, value in list(hybrid_breakdown.items())[:3]:
-                # Handle both dict and non-dict values
                 if isinstance(value, dict):
                     score_val = value.get('score', value.get('weighted', value.get('contribution', 0)))
                 else:
                     score_val = value if value is not None else 0
-                
                 if isinstance(score_val, (int, float)) and score_val > 0:
-                    narrative += f"  • {_format_metric_name(metric)}: {score_val:.1f}\n"
+                    narrative += f"&nbsp;&nbsp;• {_format_metric_name(metric)}: {score_val:.1f}<br>"
     
     except Exception as e:
         logger.error(f"Error generating scoring breakdown narrative: {e}")
         import traceback
-        logger.error(traceback.format_exc())  # ✅ BONUS: Better error logging
+        logger.error(traceback.format_exc())
         return "Error generating scoring breakdown narrative."
     
     return narrative.strip()
@@ -495,19 +482,19 @@ def generate_scoring_breakdown_narrative(eval_ctx: Dict[str, Any]) -> str:
 def generate_rr_explanation_narrative(exec_ctx: Dict[str, Any]) -> str:
     """
     Generate human-readable explanation of RR calculation.
-    
-    Args:
-        exec_ctx: Execution context from resolver
-    
-    Returns:
-        Narrative explaining RR calculation and adjustments
+    Returns HTML-safe string. Leads with verdict, then shows calculations.
     """
     risk = exec_ctx.get("risk", {})
     market_adj = exec_ctx.get("market_adjusted_targets", {})
     
-    structural_rr = market_adj.get("structural_rr", risk.get("rrRatio", 0))
-    exec_rr_t1 = market_adj.get("execution_rr_t1", 0)
-    exec_rr_t2 = market_adj.get("execution_rr_t2", 0)
+    structural_rr = market_adj.get("structural_rr")
+    if structural_rr is None:
+        structural_rr = risk.get("rrRatio")
+    if structural_rr is None:
+        structural_rr = 0.0
+    
+    exec_rr_t1 = market_adj.get("execution_rr_t1") or 0.0
+    exec_rr_t2 = market_adj.get("execution_rr_t2") or 0.0
     spread = market_adj.get("spread_cost", 0)
     
     entry = market_adj.get("execution_entry", risk.get("entry_price", 0))
@@ -515,62 +502,71 @@ def generate_rr_explanation_narrative(exec_ctx: Dict[str, Any]) -> str:
     t1 = market_adj.get("execution_t1", 0)
     t2 = market_adj.get("execution_t2", 0)
     
-    # Start narrative
-    narrative = f"**Risk/Reward Analysis**\n\n"
+    # ── VERDICT FIRST ────────────────────────────────────────────────────
+    narrative = "<b>Risk/Reward Analysis</b><br><br>"
+
+    # Guard: if no market-adjusted data yet, fall back to structural RR
+    if not exec_rr_t1 and not exec_rr_t2:
+        if structural_rr >= 1.5:
+            narrative += f'<div style="background:#dcfce7;color:#166534;padding:8px 12px;border-radius:6px;margin-bottom:10px;">'
+            narrative += f'✅ <b>Structural RR: {structural_rr:.1f}:1</b> — execution costs not yet calculated.</div>'
+        elif structural_rr > 0:
+            narrative += f'<div style="background:#fef3c7;color:#92400e;padding:8px 12px;border-radius:6px;margin-bottom:10px;">'
+            narrative += f'⚠️ <b>Structural RR: {structural_rr:.1f}:1</b> — review after execution costs applied.</div>'
+        else:
+            narrative += f'<div style="background:#f3f4f6;color:#374151;padding:8px 12px;border-radius:6px;margin-bottom:10px;">'
+            narrative += f'ℹ️ RR not yet calculated — trade plan pending.</div>'
+        return narrative
+
+    if exec_rr_t1 >= 1.5:
+        narrative += f'<div style="background:#dcfce7;color:#166534;padding:8px 12px;border-radius:6px;margin-bottom:10px;">'
+        narrative += f'✅ <b>Favorable</b> — you risk ₹1 to make ₹{exec_rr_t1:.1f} at T1 (after costs).</div>'
+    elif exec_rr_t2 and exec_rr_t2 >= 2.0:
+        narrative += f'<div style="background:#fef3c7;color:#92400e;padding:8px 12px;border-radius:6px;margin-bottom:10px;">'
+        narrative += f'⚠️ <b>Marginal T1</b> ({exec_rr_t1:.2f}:1), but T2 gives {exec_rr_t2:.1f}:1 — consider scaling into T2.</div>'
+    else:
+        narrative += f'<div style="background:#fee2e2;color:#991b1b;padding:8px 12px;border-radius:6px;margin-bottom:10px;">'
+        narrative += f'❌ <b>Poor R/R after costs.</b> Pattern is valid but entry now reduces edge ({exec_rr_t1:.2f}:1 T1).'
+        if spread > 0:
+            narrative += f' Spread ₹{spread:.2f} is eating the reward.'
+        narrative += '</div>'
     
-    # Structural vs Execution
-    narrative += f"**Pattern-Based (Structural) RR:** {structural_rr:.2f}:1\n"
-    narrative += f"This represents the ideal geometry of the chart pattern.\n\n"
+    # ── DETAILS (collapsible-friendly) ───────────────────────────────────
+    narrative += f"<b>Pattern-Based (Structural) RR:</b> {structural_rr:.2f}:1<br>"
+    narrative += f"<span style='color:#6b7280;font-size:0.85em;'>The ideal geometry of the chart pattern.</span><br><br>"
     
-    # Execution adjustments
-    narrative += f"**After Real-World Adjustments:**\n\n"
-    
-    # Spread impact
     if spread > 0:
         spread_pct = (spread / entry * 100) if entry > 0 else 0
-        narrative += f"Spread Cost: ₹{spread:.2f} ({spread_pct:.2f}% of entry)\n"
-        narrative += f"  • Reduces reward (bid-ask on target exit)\n"
-        narrative += f"  • Increases risk (slippage on stop loss)\n\n"
+        narrative += f"<b>Spread Cost:</b> ₹{spread:.2f} ({spread_pct:.2f}% of entry)<br>"
+        narrative += "&nbsp;&nbsp;• Reduces reward (bid-ask on target exit)<br>"
+        narrative += "&nbsp;&nbsp;• Increases risk (slippage on stop loss)<br><br>"
     
-    # Show calculations
     base_reward_t1 = t1 - entry if t1 and entry else 0
     base_risk = entry - sl if entry and sl else 0
     
     if base_reward_t1 and base_risk:
-        narrative += f"**T1 Calculation:**\n"
-        narrative += f"  Base Reward: ₹{base_reward_t1:.2f}\n"
-        narrative += f"  After Spread: ₹{base_reward_t1 - spread:.2f}\n"
-        narrative += f"  Base Risk: ₹{base_risk:.2f}\n"
-        narrative += f"  After Spread: ₹{base_risk + spread:.2f}\n"
-        narrative += f"  **Execution RR T1: {exec_rr_t1:.2f}:1**\n\n"
+        narrative += "<b>T1 Calculation:</b><br>"
+        narrative += f"&nbsp;&nbsp;Base Reward: ₹{base_reward_t1:.2f}<br>"
+        narrative += f"&nbsp;&nbsp;After Spread: ₹{base_reward_t1 - spread:.2f}<br>"
+        narrative += f"&nbsp;&nbsp;Base Risk: ₹{base_risk:.2f}<br>"
+        narrative += f"&nbsp;&nbsp;After Spread: ₹{base_risk + spread:.2f}<br>"
+        narrative += f"&nbsp;&nbsp;<b>Execution RR T1: {exec_rr_t1:.2f}:1</b><br><br>"
     
     if t2 and entry:
         base_reward_t2 = t2 - entry
-        narrative += f"**T2 Calculation:**\n"
-        narrative += f"  Base Reward: ₹{base_reward_t2:.2f}\n"
-        narrative += f"  After Spread: ₹{base_reward_t2 - spread:.2f}\n"
-        narrative += f"  **Execution RR T2: {exec_rr_t2:.2f}:1**\n\n"
+        narrative += "<b>T2 Calculation:</b><br>"
+        narrative += f"&nbsp;&nbsp;Base Reward: ₹{base_reward_t2:.2f}<br>"
+        narrative += f"&nbsp;&nbsp;After Spread: ₹{base_reward_t2 - spread:.2f}<br>"
+        narrative += f"&nbsp;&nbsp;<b>Execution RR T2: {exec_rr_t2:.2f}:1</b><br><br>"
     
-    # Assessment
-    narrative += "**Assessment:**\n"
+    # Recommendation if T1 fails but T2 is ok
+    if exec_rr_t1 < 1.5 and exec_rr_t2 and exec_rr_t2 >= 2.0:
+        narrative += f'<span style="color:#0369a1;">💡 <b>Recommendation:</b> Use T2 (₹{t2:,.2f}) as primary target instead of T1.</span><br><br>'
     
-    if exec_rr_t1 >= 1.5:
-        narrative += f"✅ T1 execution RR ({exec_rr_t1:.2f}) meets minimum requirement (1.5)\n"
-    else:
-        narrative += f"⚠️ T1 execution RR ({exec_rr_t1:.2f}) below minimum (1.5)\n"
-        
-        if exec_rr_t2 >= 2.0:
-            narrative += f"✅ But T2 execution RR ({exec_rr_t2:.2f}) is acceptable!\n"
-            narrative += f"\n**Recommendation:** Use T2 (₹{t2:.2f}) as primary target instead of T1.\n"
-        else:
-            narrative += f"❌ T2 execution RR ({exec_rr_t2:.2f}) also below threshold (2.0)\n"
-            narrative += f"\n**Reason:** Spread cost of ₹{spread:.2f} significantly impacts short-term targets.\n"
-    
-    # Why it matters
-    narrative += f"\n**Why This Matters:**\n"
-    narrative += f"Execution RR accounts for real trading costs that aren't visible on the chart. "
-    narrative += f"While the pattern structure is sound (RR {structural_rr:.2f}), actual execution "
-    narrative += f"conditions reduce your effective profit potential."
+    narrative += '<span style="color:#6b7280;font-size:0.85em;">'
+    narrative += 'Execution RR accounts for real trading costs not visible on the chart. '
+    narrative += f'While the pattern structure is sound (RR {structural_rr:.2f}), actual execution '
+    narrative += 'conditions affect your effective profit potential.</span>'
     
     return narrative
 
@@ -640,18 +636,38 @@ def _format_pattern_name(pattern: str) -> str:
     return pattern_names.get(pattern, pattern.replace("_", " ").title())
 
 
+def _humanize_adjustment_structured(adj: Dict[str, Any]) -> str:
+    """Convert structured_adjustments dict to readable string."""
+    name = adj.get("name", "").replace("_", " ").title()
+    delta = adj.get("delta", 0)
+    source = adj.get("source", "")
+
+    SOURCE_LABELS = {
+        "conditional": "",
+        "volume_modifiers": "Volume",
+        "universal_adjustments": "Universal",
+        "setup_validation": "Setup",
+        "execution": "Execution",
+    }
+    prefix = SOURCE_LABELS.get(source, source.replace("_", " ").title())
+    label = f"{prefix}: {name}" if prefix else name
+    return f"{label} ({delta:+.1f}%)"
+
+
 def _humanize_adjustment(adjustment_str: str) -> str:
-    """Convert technical adjustment string to human-readable format."""
-    # Remove category prefixes
-    text = re.sub(r'^(volume_modifiers\.|trend_strength_bands\.|penalty\.|bonus\.|enhancement\.)', '', adjustment_str)
-    
-    # Extract amount and reason
-    match = re.match(r'([^:]+):\s*([+-]?\d+\.?\d*)\s*\(([^)]+)\)', text)
+    """Convert technical adjustment string to human-readable format (legacy fallback)."""
+    # Strip category prefixes
+    text = re.sub(r'^(setup_penalties\.|setup_bonuses\.|execution_warning\.|execution_violation\.)', '', adjustment_str)
+    text = re.sub(r'^(volume_modifiers\.|trend_strength_bands\.|penalty\.|bonus\.|enhancement\.)', '', text)
+
+    # Format: "name: +10.0" or "name: -20.0"
+    match = re.match(r'([^:]+):\s*([+-]?\d+\.?\d*)$', text.strip())
     if match:
-        name, amount, reason = match.groups()
-        return f"{reason} ({amount})"
-    
-    return adjustment_str
+        name, amount = match.groups()
+        name_clean = name.replace("_", " ").title()
+        return f"{name_clean} ({float(amount):+.1f}%)"
+
+    return text
 
 
 def _calculate_sl_pct(entry: float, sl: float) -> float:
@@ -680,7 +696,7 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
             key = _format_metric_name(k)
             name = key.replace("_", " ").title()
             meta = p.get("meta", {})
-            desc = f"**{name}**"
+            desc = f"<b>{name}</b>"
             
             if k == "cupHandle":
                 desc += f" (Depth: {meta.get('depth_pct')}%)"
@@ -694,7 +710,7 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
     if not active_patterns:
         return "No classical chart patterns detected currently."
         
-    return "🚀 **Chart Patterns:** " + ", ".join(active_patterns)
+    return "🚀 <b>Chart Patterns:</b> " + ", ".join(active_patterns)
 
 
 def get_active_pattern_details(indicators: Dict[str, Any]) -> Dict[str, Any]:
@@ -710,11 +726,12 @@ def get_active_pattern_details(indicators: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
-    """Legacy function - maintained for backward compatibility."""
+    """Legacy function - maintained for backward compatibility. Returns HTML."""
     if not tr:
         return "No analysis available."
     
-    signal = tr.get("signal", "N/A")
+    # Use trade_signal (from finalize_trade_decision), fallback to signal
+    signal = tr.get("trade_signal", tr.get("signal", "N/A"))
     setup = tr.get("setup_type", "Generic").replace("_", " ").title()
     conf = (
         tr.get("confidence") or
@@ -728,10 +745,15 @@ def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
 
     if "BUY" in signal and not is_generic and is_executable:
         targets = tr.get("targets", {})
-        t1 = _fmt_money(targets.get("t1"))
-        t2 = _fmt_money(targets.get("t2"))
+        # targets is a dict with t1/t2 keys from signal_engine
+        if isinstance(targets, dict):
+            t1 = _fmt_money(targets.get("t1"))
+        elif isinstance(targets, list):
+            t1 = _fmt_money(targets[0] if targets else None)
+        else:
+            t1 = "N/A"
         return (
-            f"**Actionable {setup} Detected.** "
+            f"<b>Actionable {setup} Detected.</b> "
             f"Confidence is high ({conf}%) with a clear path to {t1}. "
             f"The risk-reward profile supports entry near {_fmt_money(tr.get('entry'))}."
         )
@@ -739,37 +761,44 @@ def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
     if not tr.get("entry_permission", True):
         reason = tr.get("reason", "Entry conditions not met")
         return (
-            f"**Setup identified but entry blocked.** "
+            f"<b>Setup identified but entry blocked.</b> "
             f"Reason: {reason}. Monitor for improvement."
         )
 
-    if "WAIT" in signal or "NA_" in signal:
+    if "WAIT" in signal or "WATCH" in signal or "NA_" in signal:
         reason = tr.get("reason", "conditions not met")
         
         if "VOLATILITY" in signal:
             return (
-                f"**High Quality {setup} Setup identified ({conf}%)**, but volatility is too high. "
-                f"Current ATR indicates chop/whipsaw risk. **Wait for VIX/ATR to cool down** before entering."
+                f"<b>High Quality {setup} Setup identified ({conf}%)</b>, but volatility is too high. "
+                f"Current ATR indicates chop/whipsaw risk. <b>Wait for VIX/ATR to cool down</b> before entering."
             )
         if "RESISTANCE" in signal:
             return (
-                f"**Setup is forming**, but price is blocked by immediate resistance. "
-                f"Do not buy yet. **Wait for a breakout above {tr.get('debug', {}).get('indicators_snapshot', {}).get('price')}** to confirm."
+                f"<b>Setup is forming</b>, but price is blocked by immediate resistance. "
+                f"Do not buy yet. <b>Wait for a breakout</b> to confirm."
             )
         if "ENTRY_PERMISSION" in signal:
             return (
-                f"**Technically valid {setup}**, but it failed the Entry Gate. "
+                f"<b>Technically valid {setup}</b>, but it failed the Entry Gate. "
                 f"Reason: {reason}. Monitor for improved momentum."
             )
-            
+
+    if "BLOCKED" in signal:
+        reason = tr.get("reason", "Execution gates not met")
+        return (
+            f"<b>{setup} setup detected but entry is blocked.</b> "
+            f"Reason: {reason}. Check gate status for specifics."
+        )
+
     if setup.upper() == "GENERIC":
         return (
-            f"**Market structure detected (Generic bias).** "
+            f"<b>Market structure detected (Generic bias).</b> "
             f"No executable setup yet. Confidence: {conf}%. "
             f"Wait for volume expansion or a valid breakout pattern."
         )
             
-    return f"Current structure is **{setup}** but lacks conviction ({conf}%). {tr.get('reason')}."
+    return f"Current structure is <b>{setup}</b> but lacks conviction ({conf}%). {tr.get('reason')}."
 
 
 # ==========================================
@@ -828,7 +857,7 @@ def build_enhanced_summaries(
             summaries["setup_explanation"] = SETUP_EXPLANATIONS[setup_type]
         
         # 7. Strategy Explanation
-        strategy = eval_ctx.get("strategy", {}).get("primary_strategy", "")
+        strategy = eval_ctx.get("strategy", {}).get("primary", "")
         if strategy in STRATEGY_LIBRARY:
             summaries["strategy_explanation"] = STRATEGY_LIBRARY[strategy]
 

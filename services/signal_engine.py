@@ -1359,69 +1359,7 @@ def _get_horizon_pillar_weights(extractor) -> Dict[str, float]:
     Returns:
         Pillar weights dict with keys: tech, fund, hybrid
     """
-    # Try horizon-specific first
-    weights_all = extractor.base_extractor.get("horizon_pillar_weights", {})
-    return weights_all.get(extractor.current_horizon, {"tech": 0.5, "fund": 0.3, "hybrid": 0.2})
-
-
-def _find_primary_pattern(
-    detected_patterns: Dict[str, Any],
-    setup_type: str,
-    horizon: str,
-    extractor: Any
-) -> Optional[Dict[str, Any]]:
-    """
-    Finds the highest quality primary pattern for a setup.
-    
-    Returns:
-        {
-            "name": "darvasBox",
-            "quality": 9.5,
-            "meta": {...},
-            "data": {...}  # Full pattern detection result
-        }
-    """
-    if not detected_patterns:
-        return None
-    
-    # Get setup's primary patterns
-    setup_patterns = extractor.get_setup_patterns(setup_type)
-    primary_patterns = setup_patterns.get("PRIMARY", [])
-    
-    if not primary_patterns:
-        return None
-    
-    # Find best match
-    best_pattern = None
-    best_quality = 0
-    
-    for pattern_name in primary_patterns:
-        # Map generic pattern name to horizon-specific key
-        from config.setup_pattern_matrix_config import PATTERN_INDICATOR_MAPPINGS
-        pattern_mappings = PATTERN_INDICATOR_MAPPINGS.get(pattern_name, {})
-        pattern_key = pattern_mappings.get(horizon)
-        
-        if not pattern_key:
-            continue
-        
-        pattern_data = detected_patterns.get(pattern_key)
-        if not pattern_data or not pattern_data.get("found"):
-            continue
-        
-        quality = pattern_data.get("quality", 0)
-        meta = pattern_data.get("raw", {}).get("meta", {})
-        
-        if quality > best_quality:
-            best_quality = quality
-            best_pattern = {
-                "name": pattern_name,
-                "quality": quality,
-                "meta": meta,
-                "data": pattern_data
-            }
-    
-    return best_pattern
-
+    return extractor.get_horizon_pillar_weights()
 
 def _extract_formation_context(
     indicators: Dict[str, Any],

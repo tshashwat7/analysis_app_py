@@ -1202,7 +1202,7 @@ def validate_execution_rr(
             "falling back to structural risk model"
         )
         risk = exec_ctx.get("risk", {})
-        structural_rr = risk.get("rrRatio", 0)
+        structural_rr = risk.get("rrRatio") or 0
 
         rr_gates = extractor.get_rr_gates()
         min_structural = rr_gates.get("min_structural", 2.0)
@@ -1219,7 +1219,7 @@ def validate_execution_rr(
     # --- Proceed with market-adjusted values ---
     rrt1 = market.get("execution_rr_t1") or 0  # Fixed: handles both missing key AND None value
     rrt2 = market.get("execution_rr_t2") or 0  # Fixed: key exists with None, .get default won't help
-    structural_rr = market.get("structural_rr", 0)
+    structural_rr = market.get("structural_rr") or 0
 
     # --- Get risk config via passed extractor ---
     rr_gates = extractor.get_rr_gates()
