@@ -43,6 +43,7 @@ class ResolvedGate:
 class PatternContext:
     """Complete pattern context for a horizon."""
     physics: Dict[str, Any]
+    typical_duration: Dict[str, Any]
     entry_rules: Dict[str, Any]
     invalidation: Dict[str, Any]
     scoring_thresholds: Dict[str, float]
@@ -745,12 +746,31 @@ class QueryOptimizedExtractor:
         #             breakdown.append(
         #                 f"enhancement.{enh_name}: {result['adjustment']:+.1f} ({result['reason']})"
         #             )
-        # Apply multipliers (if any)
+        # Apply multipliers (if any) ONLY to structural adjustments (non-conditional bonuses)
         if multipliers:
             # Use most severe multiplier (lowest value)
             final_multiplier = min(multipliers)
-            breakdown.append(f"Final multiplier: ×{final_multiplier}")
-            return total_additive * final_multiplier, breakdown
+            
+            # Recalculate to only scale volume and trend
+            scaled_structural = 0.0
+            unscaled_conditional = 0.0
+            
+            for category, modifiers in evaluation_results.items():
+                if category in ["volume_modifiers", "trend_strength_bands"]:
+                    for mod_name, result in modifiers.items():
+                        if result["applies"] and result["adjustment"] is not None:
+                            scaled_structural += result["adjustment"]
+                elif category == "conditional_adjustments":
+                    for name, result in modifiers.get("penalties", {}).items():
+                        if result["applies"] and result["adjustment"] is not None:
+                            unscaled_conditional += result["adjustment"]
+                    for name, result in modifiers.get("bonuses", {}).items():
+                        if result["applies"] and result["adjustment"] is not None:
+                            unscaled_conditional += result["adjustment"]
+            
+            final_scaled_total = (scaled_structural * final_multiplier) + unscaled_conditional
+            breakdown.append(f"Final multiplier (Structural only): ×{final_multiplier}")
+            return final_scaled_total, breakdown
         else:
             return total_additive, breakdown
    
@@ -951,6 +971,7 @@ class QueryOptimizedExtractor:
         
         # Extract components
         physics = pattern_meta.get("physics", {})
+        typical_duration = pattern_meta.get("typical_duration", {})
         entry_rules_all = pattern_meta.get("entry_rules", {})
         invalidation = pattern_meta.get("invalidation", {})
         
@@ -979,6 +1000,7 @@ class QueryOptimizedExtractor:
         
         context = PatternContext(
             physics=physics,
+            typical_duration=typical_duration,
             entry_rules=entry_rules,
             invalidation=horizon_invalidation,
             scoring_thresholds=scoring_thresholds

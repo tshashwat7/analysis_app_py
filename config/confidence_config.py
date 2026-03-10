@@ -520,7 +520,7 @@ CONFIDENCE_CONFIG = {
                     },
                     
                     # ========================================================
-                    # BUCKET-BASED BONUSESSTRONG BUCKET PENALTIES (Profile detection)
+                    # BUCKET-BASED STRONG BUCKET PENALTIES (Profile detection)
                     # ========================================================
                     "speculative_growth_longterm": {
                         "gates": {

@@ -28,7 +28,7 @@ from datetime import datetime, time
 import logging
 import re
 import numbers
-from config.logger_config import (
+from config.config_helpers.logger_config import (
     METRICS,
     SafeDict,
     log_failures,
@@ -427,9 +427,6 @@ class ConfigResolver:
     - Gate merging and resolution
     - Pattern context building
     """
-    
-    
-class ConfigResolver:
     def __init__(self, master_config: Dict, horizon: str, logger=None):
         """
         Initialize resolver with master config and horizon.
@@ -470,6 +467,7 @@ class ConfigResolver:
         Transforms:
             {"rsi": {"value": 62.01, "score": 8}} → {"rsi": 62.01}
             {"adx": 33.13} → {"adx": 33.13}
+            {"growth": {"epsGrowth5y": {"raw": 15.2, "score": 7}}} → {"epsGrowth5y": 15.2}
         
         Args:
             data: Raw indicator/fundamental data (may have nested dicts)
@@ -479,52 +477,62 @@ class ConfigResolver:
         """
         flattened = {}
         
-        for key, value in data.items():
-            if value is None:
-                continue
-            
-            # Already numeric - use as-is
-            if isinstance(value, (int, float)):
-                flattened[key] = float(value)
-                continue
-            
-            # Nested dict - extract numeric value
-            if isinstance(value, dict):
-                # Priority: raw > value (raw has full precision; value may be
-                # display-rounded e.g. adx.value=32.96 vs adx.raw=32.96281)
-                # Score is EXCLUDED — it's a 0-10 normalized rating, not the
-                # actual metric value. Including it would silently pollute
-                # keys like analystRating or shortInterest with their score.
-                candidates = []
-                if "raw" in value:
-                    candidates.append(value["raw"])
-                if "value" in value:
-                    candidates.append(value["value"])
+        def _recurse(d: Dict[str, Any], current_layer: Dict[str, Any]):
+            for k, v in d.items():
+                if v is None:
+                    continue
                 
-                for candidate in candidates:
-                    if candidate is None:
-                        continue
-                    if isinstance(candidate, (int, float)):
-                        flattened[key] = float(candidate)
-                        break
+                # Already numeric - use as-is
+                if isinstance(v, (int, float)):
+                    current_layer[k] = float(v)
+                    continue
+                
+                # String number - try to convert
+                if isinstance(v, str):
                     try:
-                        flattened[key] = float(candidate)
-                        break
+                        current_layer[k] = float(v)
                     except (ValueError, TypeError):
-                        continue  # Try next candidate
-                continue
-            
-            # String number - try to convert
-            if isinstance(value, str):
-                try:
-                    flattened[key] = float(value)
-                except (ValueError, TypeError):
-                    # Skip if not a valid number
-                    pass
-                continue
+                        pass
+                    continue
+                
+                # Nested dict
+                if isinstance(v, dict):
+                    # Check if it's a "leaf" dictionary holding raw/value
+                    has_raw = "raw" in v
+                    has_val = "value" in v
+                    
+                    if has_raw or has_val:
+                        candidates = []
+                        if has_raw:
+                            candidates.append(v["raw"])
+                        if has_val:
+                            candidates.append(v["value"])
+                            
+                        extracted = False
+                        for candidate in candidates:
+                            if candidate is None:
+                                continue
+                            if isinstance(candidate, (int, float)):
+                                current_layer[k] = float(candidate)
+                                extracted = True
+                                break
+                            try:
+                                current_layer[k] = float(candidate)
+                                extracted = True
+                                break
+                            except (ValueError, TypeError):
+                                continue
+                        
+                        # If we successfully extracted raw/value, move on to the next key
+                        if extracted:
+                            continue
+                            
+                    # If it's NOT a leaf node (e.g. "growth", "financial_health"), recurse deeper
+                    # Only map the deeper keys explicitly, we don't need the parent prefix
+                    _recurse(v, current_layer)
         
+        _recurse(data, flattened)
         return flattened
-    
 
     # ========================================================================
     # PHASE 1: EVALUATION CONTEXT (WHAT to trade)
@@ -2410,6 +2418,19 @@ class ConfigResolver:
         if fundamental_score_value is not None:
             flat_data["fundamentalScore"] = fundamental_score_value
 
+        # Inject fundamental category buckets (Bug 3 Fix)
+        if "category_scores" in fundamental_score_block:
+            cat_scores = fundamental_score_block["category_scores"]
+            flat_data["fund_growth_bucket"] = cat_scores.get("growth", {}).get("score", 0.0)
+            flat_data["fund_health_bucket"] = cat_scores.get("financial_health", {}).get("score", 0.0)
+            flat_data["fund_quality_bucket"] = cat_scores.get("quality", {}).get("score", 0.0)
+            flat_data["fund_valuation_bucket"] = cat_scores.get("valuation", {}).get("score", 0.0)
+            flat_data["fund_dividend_bucket"] = cat_scores.get("dividend", {}).get("score", 0.0)
+
+        # Inject pattern_count (Bug 4 Fix)
+        pv = ctx.get("pattern_validation", {}).get("by_setup", {}).get(setup_type, {})
+        flat_data["pattern_count"] = len(pv.get("confirming_found", []))
+
         # ==========================================================
         # STEPS 5-7: UNIVERSAL + HORIZON + CONDITIONAL MODIFIERS
         # ==========================================================
@@ -2507,16 +2528,15 @@ class ConfigResolver:
                         if evaluator.evaluate_condition(condition, namespace):
                             amount = config.get("amount", 0)
                             
-                            # ✅ APPLY DIVERGENCE MULTIPLIER
+                            # ✅ Independent setup adjustments are NOT scaled by divergence (Issue 7 consistency)
                             raw_delta = -amount if category == "penalties" else amount
-                            delta = raw_delta * divergence_multiplier
+                            delta = float(raw_delta)
                             
                             total_adjustment += delta
                             setup_modifier_count += 1
 
                             breakdown.append(
                                 f"setup_{category}.{name}: {delta:+.1f}"
-                                + (f" (×{divergence_multiplier})" if divergence_multiplier != 1.0 else "")
                             )
 
                             structured_adjustments.append({
@@ -2532,7 +2552,7 @@ class ConfigResolver:
                                 "name": name,
                                 "amount": delta,
                                 "raw_amount": raw_delta,  # ✅ Track original
-                                "divergence_multiplier": divergence_multiplier,
+                                "divergence_multiplier": 1.0,  # ✅ Explicitly track unscaled
                                 "condition": condition
                             })
 
@@ -2644,6 +2664,7 @@ class ConfigResolver:
             "confidence": round(clamped, 1),
             "tradeable": tradeable,
             "min_tradeable_threshold": float(min_tradeable or 0.0),
+            "floor": float(min_tradeable or 0.0),
             "below_threshold_by": below_by,
             "high_confidence_override": high_conf_override,
             "calculation_method": "extractor_v8_fixed",
@@ -3707,7 +3728,7 @@ class ConfigResolver:
                 failures = eval_ctx["structural_gates"]["overall"].get("failed_gates", [])
                 reason = f"Structural gates failed: {[f['gate'] for f in failures[:3]]}"
             elif not execution_rules:  # ✅ FIXED: Check execution_rules next
-                failures = eval_ctx["execution_rules"]["overall"].get("failed_gates", [])
+                failures = eval_ctx["execution_rules"]["overall"].get("failed_rules", [])
                 reason = f"Execution rules failed: {[f['rule'] for f in failures[:3]]}"
             elif not opportunity["passed"]:
                 failures = opportunity.get("failed_gates", [])
@@ -4002,7 +4023,9 @@ class ConfigResolver:
                 """Returns (sl_price, sl_source)."""
                 sl_atr = _safe_float(ind.get("slAtrDynamic"))
                 if sl_atr and sl_atr > 0:
-                    return round(entry - sl_atr, 2), "slAtrDynamic"
+                    # ✅ ROOT CAUSE FIX: slAtrDynamic is ALREADY an absolute price level computed by indicators.py
+                    # It is NOT a distance. Do NOT subtract it from entry again.
+                    return round(sl_atr, 2), "slAtrDynamic"
                 atr = _safe_float(price_data.get("atrDynamic") or ind.get("atrDynamic"))
                 if atr and atr > 0:
                     return round(entry - (atr * mult), 2), f"atrDynamic*{mult}"
@@ -4493,6 +4516,10 @@ class ConfigResolver:
             failures.append(exec_ctx["time_constraints"].get("reason"))
         if not checks["capital_available"]:
             failures.append("Capital not provided")
+        if not checks["risk_valid"]:
+            failures.append("Risk model invalid: SL/entry price calculation failed")
+        if not checks["quantity_available"]:
+            failures.append("Position sizing failed: quantity is zero or None")
         
         return {
             "can_execute": all_passed,

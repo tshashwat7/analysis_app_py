@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 from sqlalchemy import Column, String, Integer, DateTime, Float, JSON
 from services.db import PatternBreakdownState, SessionLocal
-from config.market_utils import get_current_utc
+from config.config_helpers.market_utils import get_current_utc
 
 logger = logging.getLogger(__name__)
 

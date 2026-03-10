@@ -2760,7 +2760,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             "duration_multiplier": 1.8,
             "max_stop_pct": 7.0,
             "min_contraction_pct": 1.5,
-            "horizons_supported": ["short_term", "long_term"]
+            "horizons_supported": ["short_term", "long_term", "multibagger"]
         },
         "entry_rules": {
             "short_term": {
@@ -2779,6 +2779,16 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "volatilityQuality <= 2.0",
                     "price >= pivot_point * 1.005",
                     "position52w >= 70"
+                ]
+            },
+            "multibagger": {
+                "order_type": "limit",
+                "trigger": "pivot_point",
+                "conditions": [
+                    "volatilityQuality <= 2.5",
+                    "price >= pivot_point * 1.005",
+                    "position52w >= 65",
+                    "fundamentalScore >= 7.0"
                 ]
             }
         },
@@ -2805,11 +2815,21 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "duration_candles": 3,
                     "_logic": "OR",
                     "_duration_applies_to": [0]
+                },
+                "multibagger": {
+                    "conditions": [
+                        "price < maFast * 0.90",
+                        "position52w < 65"
+                    ],
+                    "duration_candles": 3,
+                    "_logic": "OR",
+                    "_duration_applies_to": [0]
                 }
             },
             "action": {
                 "short_term": "EXIT_ON_CLOSE",
-                "long_term": "TIGHTEN_STOP"
+                "long_term": "TIGHTEN_STOP",
+                "multibagger": "TIGHTEN_STOP"
             },
             "stage_reversion": {
                 "conditions": [

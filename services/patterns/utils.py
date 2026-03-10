@@ -52,8 +52,8 @@ def _build_velocity_tracking_flags(
     
     # For consolidation patterns, check if tight enough
     elif "squeeze" in description.lower() or "consolidat" in description.lower():
-        bb_width = indicators.get("bbWidth", {})
-        width_val = bb_width.get("value") if isinstance(bb_width, dict) else bb_width
+        bbWidth = indicators.get("bbWidth", {})
+        width_val = bbWidth.get("value") if isinstance(bbWidth, dict) else bbWidth
         
         # Consolidation needs tight BB
         entry_conditions_met = (width_val and width_val <= 5.0)

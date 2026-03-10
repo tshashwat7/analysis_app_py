@@ -16,12 +16,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import pandas as pd
-from config.logger_config import setup_logger
+from config.config_helpers.logger_config import setup_logger
 from services.indicator_cache import compute_indicators_cached
 logger = setup_logger()
 
 # --- Modular services ---
-from config.market_utils import is_market_open, get_current_ist, get_current_utc,ensure_utc
+from config.config_helpers.market_utils import is_market_open, get_current_ist, get_current_utc,ensure_utc
 from services.patterns.pattern_state_manager import cleanup_old_breakdown_states
 import threading
 from config.constants import ENABLE_CACHE_WARMER, ENABLE_JSON_ENRICHMENT, INDEX_TICKERS
@@ -136,9 +136,11 @@ def run_scheduled_cleanup():
             time.sleep(300)  # 5 minutes
 
 # START CLEANUP THREAD
-cleanup_thread = threading.Thread(target=run_scheduled_cleanup, daemon=True, name="CleanupScheduler")
-cleanup_thread.start()
-logger.info("✅ Pattern state cleanup scheduler started (runs every 24h)")
+import multiprocessing
+if multiprocessing.current_process().name == "MainProcess":
+    cleanup_thread = threading.Thread(target=run_scheduled_cleanup, daemon=True, name="CleanupScheduler")
+    cleanup_thread.start()
+    logger.info("✅ Pattern state cleanup scheduler started (runs every 24h)")
 
 # --- EXECUTOR GETTERS WITH SHUTDOWN SAFETY ---
 def get_api_executor():
@@ -870,6 +872,8 @@ def run_analysis(
                 ),
             }
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             logger.warning(f"[{symbol}] Meta scores failed: {e}")
         
         # =====================================================================
@@ -1819,6 +1823,5 @@ if __name__ == "__main__":
     # if not startup_config_validation():
     #     print("❌ CRITICAL: Pattern Config validation failed. Check logs.")
     #     exit(1)
-    run_scheduled_cleanup()
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)

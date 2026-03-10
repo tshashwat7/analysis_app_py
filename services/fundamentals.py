@@ -928,9 +928,11 @@ def calc_ocf_vs_profit(t, unifier: DataUnifier = None):
     ni = pick_value_by_key(fin, FIELD.get("net_income", []), col_fin)
     if not ocf or not ni: return None
     ratio = ocf / ni
-    if ratio > 1.5: score = 10
-    elif ratio > 1: score = 5
-    else: score = 0
+    if ratio >= 1.2: score = 10
+    elif ratio >= 1.0: score = 8
+    elif ratio >= 0.8: score = 5
+    elif ratio >= 0.5: score = 3
+    else: score = 1
     return {"raw": ratio, "value": round(ratio, 2), "score": score, "desc": f"OCF/NI {ratio:.2f}"}
 
 @_wrap_calc("promoterpledge")
@@ -1038,7 +1040,7 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
         "fcfMargin": calc_fcf_margin, "marketCapCagr": calc_market_cap_cagr,
         "beta": calc_beta, "position52w": calc_52wPosition,
         "analystRating": calc_analyst_rating, "days_to_earnings": calc_days_to_earnings,
-        "assetTurnover": calc_asset_turnover,"roeStability":compute_roe_stability
+        "assetTurnover": calc_asset_turnover
     }
 
     for key, func in METRIC_FUNCTIONS.items():
@@ -1064,15 +1066,21 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
     fundamentals["current_price"] = unifier.get(["currentPrice", "regularMarketPrice"])
     fundamentals["name"] = unifier.get_raw("shortName")
     fundamentals["symbol"] = symbol
-    fundamentals["high52w"] = round(unifier.get(["fiftyTwoWeekHigh"]), 2)
-    fundamentals["low52w"] = round(unifier.get(["fiftyTwoWeekLow"]),2)
-    fundamentals["drawdown52wHigh"] =  (fundamentals["high52w"] - fundamentals["current_price"]) / fundamentals["high52w"] * 100
-    fundamentals["priceVs52wHighPct"] = fundamentals["current_price"] / (fundamentals["high52w"]) * 100
-    fundamentals['roe3yAvg'] = {
-            "value": round(sum(fundamentals.get('roeHistory')[:3]) / len(fundamentals.get('roeHistory')[:3]), 2),
-            "alias": "ROE 3Y Average",
-            "raw": sum(fundamentals.get('roeHistory')[:3]) / len(fundamentals.get('roeHistory')[:3])
-        }
+    high52w = unifier.get(["fiftyTwoWeekHigh"])
+    low52w  = unifier.get(["fiftyTwoWeekLow"])
+    price   = fundamentals.get("current_price") or 0
+    fundamentals["high52w"] = round(high52w, 2) if high52w else None
+    fundamentals["low52w"]  = round(low52w, 2) if low52w else None
+    fundamentals["drawdown52wHigh"]  = round((high52w - price) / high52w * 100, 2) if high52w else None
+    fundamentals["priceVs52wHighPct"] = round(price / high52w * 100, 2) if high52w else None
+    
+    roe_hist = fundamentals.get('roeHistory') or []
+    roe_slice = roe_hist[:3]
+    if roe_slice:
+        avg = sum(roe_slice) / len(roe_slice)
+        fundamentals['roe3yAvg'] = {"value": round(avg, 2), "raw": avg, "alias": "ROE 3Y Average"}
+    else:
+        fundamentals['roe3yAvg'] = {"value": None, "raw": None, "alias": "ROE 3Y Average"}
     fundamentals["fundamentalScore"] = {}
     try:
         fundamentals["roeStability"] = compute_roe_stability(fundamentals)   

@@ -8,7 +8,7 @@ from datetime import datetime
 # Adjust Python path to prioritize the local packages
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from config.logger_config import setup_logger
+from config.config_helpers.logger_config import setup_logger
 from services.corporate_actions import build_corp_actions_summary_cache
 from config.constants import INDEX_TICKERS
 from main import load_or_create_index

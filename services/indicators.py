@@ -34,7 +34,7 @@ from services.data_fetch import (
 from services.analyzers.pattern_analyzer import run_pattern_analysis
 
 PYTHON_LOOKBACK_MAP = {
-    "intraday": 550,       # ~1 month
+    "intraday": 650,       # ~1 month (increased for EMA200 warmup)
     "short_term": 800,     # (keeps all 756 + buffer)
     "long_term": 280,      # ~5 years weekly
     "multibagger": 120     # 10 years monthly
@@ -598,7 +598,7 @@ def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3
 
 def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
-        _Validator.require(df, ["High", "Low", "Close"], min_rows=2, indicator="price_action")
+        _Validator.require(df, ["High", "Low", "Close"], min_rows=2, indicator="priceAction")
         high = df["High"].iloc[-1]
         low = df["Low"].iloc[-1]
         close = df["Close"].iloc[-1]
@@ -616,15 +616,35 @@ def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     return _wrap_calc(_inner, "Price Action")
 
 def compute_price_vs_base_ma(df: pd.DataFrame, close, price, horizon: str = "short_term"):
-    """Returns priceVsPrimaryTrendPct (Renamed from compute_200dma)"""
-    lens = {"intraday": 200, "short_term": 200, "long_term": 50, "multibagger": 12}
+    """Returns priceVsPrimaryTrendPct (Renamed from compute_200dma). 
+    Features dynamic lookback fallback for newly listed stocks."""
+    lens = {"intraday": 200, "short_term": 200, "long_term": 50, "multibagger": 24}
     types = {"intraday": "EMA", "short_term": "EMA", "long_term": "WMA", "multibagger": "MMA"}
-    L = lens.get(horizon, 200)
+    L_original = lens.get(horizon, 200)
     T = types.get(horizon, "EMA")
     
     def _inner():
+        # Fallback logic for newly listed stocks (e.g. IPOs)
+        L = L_original
+        if len(df) < L:
+            if horizon in ["intraday", "short_term"] and len(df) >= 50: L = 50
+            elif horizon == "long_term" and len(df) >= 20: L = 20
+            elif horizon == "multibagger" and len(df) >= 12: L = 12
+            else: return {} # Still insufficient history, gracefully skip metric
+            
         _Validator.require(df, ["Close"], min_rows=L, indicator=f"price_vs_ma_{horizon}")
-        sma = _Validator.extract_last(ta.sma(close, length=L), f"{L}{T}")
+        
+        # Use the correct MA function matching the horizon type
+        if T == "EMA":
+            ma_series = ta.ema(close, length=L)
+        elif T == "WMA":
+            ma_series = ta.wma(close, length=L)
+        else:
+            ma_series = ta.sma(close, length=L)  # MMA fallback — pandas-ta has no native MMA
+            
+        try: sma = _Validator.extract_last(ma_series, f"{L}{T}")
+        except: sma = None
+        
         if not sma: return {}
         diff = ((price - sma) / sma) * 100
         score = 10 if diff > 0 else 5 if abs(diff) < 3 else 0
@@ -632,7 +652,7 @@ def compute_price_vs_base_ma(df: pd.DataFrame, close, price, horizon: str = "sho
         
         return {
             "priceVsPrimaryTrendPct": {"value": round(diff, 2), "score": score, "desc": f"{desc} {T}{L} ({diff:.1f}%)", "alias": f"Price vs {T}{L}"},
-            f"priceVs{L}{T.lower()}Pct": {"value": round(diff, 2), "score": score} # Legacy
+            f"priceVs{L_original}{T.lower()}Pct": {"value": round(diff, 2), "score": score} # Legacy
         }
     return _wrap_calc(_inner, "Price vs Trend")
 
@@ -643,11 +663,14 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
     """
     def _inner():
         # 1. Horizon Configs
+        # ✅ l_s/l_l aligned to compute_dynamic_ma_trend so slope is measured on the
+        # same MAs displayed as maFast/maMid — no more measuring WMA(20) slope
+        # while showing WMA(10) as maFast.
         cfg = {
             "intraday":    {"type": "EMA", "l_s": 20, "l_l": 50},
             "short_term":  {"type": "EMA", "l_s": 20, "l_l": 50},
-            "long_term":   {"type": "WMA", "l_s": 20, "l_l": 50}, 
-            "multibagger": {"type": "MMA", "l_s": 20, "l_l": 50}
+            "long_term":   {"type": "WMA", "l_s": 10, "l_l": 40},  # matches WMA(10/40/50) trend
+            "multibagger": {"type": "MMA", "l_s": 6,  "l_l": 12}   # matches MMA(6/12/24) trend
         }.get(horizon, {"type": "EMA", "l_s": 20, "l_l": 50})
         
         # 2. Dynamic Lookback
@@ -656,7 +679,7 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
         
         _Validator.require(df, ["Close"], min_rows=max_length + lookback, indicator=f"ma_slope_{horizon}")
         
-        fn = ta.ema if cfg["type"] == "EMA" else ta.sma 
+        fn = ta.ema if cfg["type"] == "EMA" else ta.wma if cfg["type"] == "WMA" else ta.sma 
         prefix = "ema" if cfg["type"] == "EMA" else "wma" if cfg["type"] == "WMA" else "mma"
         close = df["Close"]
         
@@ -673,7 +696,7 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
             
             x = np.arange(period)
             slope, _ = np.polyfit(x, y_norm, 1)
-            return np.degrees(np.arctan(slope))
+            return _safe_float(np.degrees(np.arctan(slope)))
 
         s_ma = fn(close, length=cfg["l_s"])
         l_ma = fn(close, length=cfg["l_l"])
@@ -706,24 +729,34 @@ def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = 
     cfg = {
         "intraday":    {"l": (20, 50), "t": "EMA", "p": "ema"},
         "short_term":  {"l": (20, 50), "t": "EMA", "p": "ema"},
-        "long_term":   {"l": (10, 40), "t": "SMA", "p": "wma"},
+        "long_term":   {"l": (10, 40), "t": "WMA", "p": "wma"},
         "multibagger": {"l": (6, 12),  "t": "SMA", "p": "mma"}
     }.get(horizon, {"l": (20, 50), "t": "EMA", "p": "ema"})
     
     s_len, l_len = cfg["l"]
-    fn = ta.ema if cfg["t"] == "EMA" else ta.sma
+    fn = ta.ema if cfg["t"] == "EMA" else ta.wma if cfg["t"] == "WMA" else ta.sma
     prefix = cfg["p"]
 
     def _inner():
+        # Use s_len as minimum viable threshold — _safe_last_vals handles partial data gracefully
         _Validator.require(df, ["Close"], 
-                          min_rows=max(s_len, l_len) + 2,  # +2 for prev values
+                          min_rows=s_len + 2,  # +2 for prev values; l_len is handled gracefully below
                           indicator=f"ma_cross_{horizon}")
         s_ma = fn(close, length=s_len)
         l_ma = fn(close, length=l_len)
         vals_s = _safe_last_vals(s_ma, 2)
         vals_l = _safe_last_vals(l_ma, 2)
         
-        if not vals_s or not vals_l: raise ValueError("Insufficient MA data")
+        # For IPO stocks: if slow MA unavailable but fast MA is, return neutral cross
+        if not vals_s:
+            raise ValueError("Insufficient data for fast MA")
+        if not vals_l:
+            # Can't compute a cross without both MAs — emit neutral signal
+            s_curr = vals_s[1]
+            return {
+                "maCrossSignal": {"value": 0, "score": 5, "desc": "Neutral (Limited Data)", "alias": f"{prefix.upper()} Cross"},
+                f"{prefix}{s_len}{l_len}cross": {"value": 0, "score": 5}  # Legacy
+            }
         
         s_curr, l_curr = vals_s[1], vals_l[1]
         s_prev, l_prev = vals_s[0], vals_l[0]
@@ -749,39 +782,52 @@ def compute_dynamic_ma_trend(df: pd.DataFrame, horizon: str = "short_term"):
     cfg = {
         "intraday":    {"l": (20, 50, 200), "t": "EMA", "p": "ema"},
         "short_term":  {"l": (20, 50, 200), "t": "EMA", "p": "ema"},
-        "long_term":   {"l": (10, 40, 50),  "t": "SMA", "p": "wma"},
-        "multibagger": {"l": (6, 12, 12),   "t": "SMA", "p": "mma"}
+        "long_term":   {"l": (10, 40, 50),  "t": "WMA", "p": "wma"},
+        "multibagger": {"l": (6, 12, 24),   "t": "SMA", "p": "mma"}
     }.get(horizon, {"l": (20, 50, 200), "t": "EMA", "p": "ema"})
     
     l_s, l_m, l_l = cfg["l"]
-    fn = ta.ema if cfg["t"] == "EMA" else ta.sma
+    fn = ta.ema if cfg["t"] == "EMA" else ta.wma if cfg["t"] == "WMA" else ta.sma
     pre = cfg["p"]
 
     def _inner():
-        _Validator.require(df, ["Close"], min_rows=max(l_s, l_m, l_l), indicator=f"ma_trend_{horizon}")
+        # Use l_s as minimum viable threshold — per-MA try/except handles partial data gracefully
+        _Validator.require(df, ["Close"], min_rows=l_s, indicator=f"ma_trend_{horizon}")
         
-        s_val = _Validator.extract_last(fn(df["Close"], length=l_s), "MA Fast")
-        m_val = _Validator.extract_last(fn(df["Close"], length=l_m), "MA Mid")
+        try: s_val = _Validator.extract_last(fn(df["Close"], length=l_s), "MA Fast")
+        except: s_val = None
+        
+        try: m_val = _Validator.extract_last(fn(df["Close"], length=l_m), "MA Mid")
+        except: m_val = None
+        
         try: l_val = _Validator.extract_last(fn(df["Close"], length=l_l), "MA Slow")
         except: l_val = None
         
         val, score, desc = 0, 5, "Neutral"
-        if l_val:
-            if s_val > m_val > l_val: val, score, desc = 1, 10, "Strong Uptrend"
-            elif s_val < m_val < l_val: val, score, desc = -1, 0, "Strong Downtrend"
-            elif s_val > m_val: val, score, desc = 0.5, 7, "Developing Uptrend"
+        
+        if s_val and m_val:
+            # We have at least fast and mid MAs
+            if l_val:
+                if s_val > m_val > l_val: val, score, desc = 1, 10, "Strong Uptrend"
+                elif s_val < m_val < l_val: val, score, desc = -1, 0, "Strong Downtrend"
+                elif s_val > m_val: val, score, desc = 0.5, 7, "Developing Uptrend"
+                elif s_val < m_val: val, score, desc = -0.5, 3, "Developing Downtrend"
+            else:
+                # No slow MA (e.g., IPO stock), evaluate on what we have
+                if s_val > m_val: val, score, desc = 0.5, 7, "Developing Uptrend (Limited Data)"
+                elif s_val < m_val: val, score, desc = -0.5, 3, "Developing Downtrend (Limited Data)"
             
         return {
             # ✅ STANDARDIZED KEYS
-            "maFast": {"value": round(s_val, 2), "score": 0, "desc": f"{pre.upper()}({l_s})", "length": l_s, "type": cfg["t"], "alias": f"{pre.upper()} Fast"},
-            "maMid":  {"value": round(m_val, 2), "score": 0, "desc": f"{pre.upper()}({l_m})", "length": l_m, "type": cfg["t"], "alias": f"{pre.upper()} Mid"},
-            "maSlow": {"value": round(l_val, 2) if l_val else None, "score": 0, "desc": f"{pre.upper()}({l_l})" if l_val else "N/A", "length": l_l, "type": cfg["t"], "alias": f"{pre.upper()} Slow"},
+            "maFast": {"value": round(s_val, 2) if s_val is not None else None, "score": 0, "desc": f"{pre.upper()}({l_s})", "length": l_s, "type": cfg["t"], "alias": f"{pre.upper()} Fast"},
+            "maMid":  {"value": round(m_val, 2) if m_val is not None else None, "score": 0, "desc": f"{pre.upper()}({l_m})", "length": l_m, "type": cfg["t"], "alias": f"{pre.upper()} Mid"},
+            "maSlow": {"value": round(l_val, 2) if l_val is not None else None, "score": 0, "desc": f"{pre.upper()}({l_l})" if l_val else "N/A", "length": l_l, "type": cfg["t"], "alias": f"{pre.upper()} Slow"},
             "maTrendSignal": {"value": val, "score": score, "desc": desc, "alias": "MA Trend Alignment"},
             
             # Legacy
-            f"{pre}{l_s}": {"value": round(s_val, 2), "score": 0},
-            f"{pre}{l_m}": {"value": round(m_val, 2), "score": 0},
-            f"{pre}{l_l}": {"value": round(l_val, 2) if l_val else None, "score": 0},
+            f"{pre}{l_s}": {"value": round(s_val, 2) if s_val is not None else None, "score": 0},
+            f"{pre}{l_m}": {"value": round(m_val, 2) if m_val is not None else None, "score": 0},
+            f"{pre}{l_l}": {"value": round(l_val, 2) if l_val is not None else None, "score": 0},
             f"{pre}{l_s}{l_m}{l_l}Trend": {"value": val, "score": score}
         }
     return _wrap_calc(_inner, f"{pre.upper()} Trend")
@@ -895,25 +941,35 @@ def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]
         }
     return _wrap_calc(_inner, "Ichimoku")
 
-def compute_nifty_trend_score(benchmark_df: pd.DataFrame):
+def compute_nifty_trend_score(benchmark_df: pd.DataFrame, horizon: str = "short_term"):
     def _inner():
+        ema_slow_len = {"intraday": 50, "short_term": 200, "long_term": 50, "multibagger": 12}.get(horizon, 200)
+        ema_fast_len = {"intraday": 20, "short_term": 50,  "long_term": 20, "multibagger": 6}.get(horizon, 50)
+        
         if benchmark_df is None or benchmark_df.empty: return {"niftyTrendScore": {"value": None, "score": None}}
-        _Validator.require(benchmark_df, ["Close"], min_rows=200, indicator="nifty_trend")
+        _Validator.require(benchmark_df, ["Close"], min_rows=ema_slow_len, indicator="nifty_trend")
         close = benchmark_df["Close"].dropna()
-        if len(close) < 20: return {"niftyTrendScore": {"value": None, "score": None}}
+        if len(close) < ema_fast_len: return {"niftyTrendScore": {"value": None, "score": None}}
         
         cur = close.iloc[-1]
-        ema50 = safe_float(ta.ema(close, 50).iloc[-1])
-        ema200 = safe_float(ta.ema(close, 200).iloc[-1])
+        ema_fast_series = ta.ema(close, ema_fast_len)
+        ema_slow_series = ta.ema(close, ema_slow_len)
         
-        if ema200:
-            diff = (cur - ema200) / ema200 * 100
-            if ema50 and cur > ema50 > ema200: sig, score = "Strong Uptrend", 9
-            elif cur > ema200: sig, score = "Moderate Uptrend", 7
+        if ema_fast_series is None:
+            logger.warning(f"NIFTY Trend: ema{ema_fast_len} is None (insufficient data)")
+            return {"niftyTrendScore": {"value": None, "score": None}}
+            
+        ema_fast = safe_float(ema_fast_series.iloc[-1])
+        ema_slow = safe_float(ema_slow_series.iloc[-1]) if ema_slow_series is not None else None
+        
+        if ema_slow:
+            diff = (cur - ema_slow) / ema_slow * 100
+            if ema_fast and cur > ema_fast > ema_slow: sig, score = "Strong Uptrend", 9
+            elif cur > ema_slow: sig, score = "Moderate Uptrend", 7
             else: sig, score = "Downtrend", 2
-        elif ema50:
-            diff = (cur - ema50) / ema50 * 100
-            if cur > ema50: sig, score = "Uptrend (Weak)", 7
+        elif ema_fast:
+            diff = (cur - ema_fast) / ema_fast * 100
+            if cur > ema_fast: sig, score = "Uptrend (Weak)", 7
             else: sig, score = "Downtrend", 3
         else:
             return {"niftyTrendScore": {"value": None, "score": None}}
@@ -946,8 +1002,8 @@ def compute_relative_strength(symbol, df, benchmark_df, horizon="short_term"):
         b_now, b_old = benchmark_df["Close"].iloc[-1], benchmark_df["Close"].iloc[-lookback]
         
         # 2. Calculate percentage returns
-        s_ret = (s_now / s_old - 1) * 100
-        b_ret = (b_now / b_old - 1) * 100
+        s_ret = _safe_float((s_now / s_old - 1) * 100)
+        b_ret = _safe_float((b_now / b_old - 1) * 100)
         rs = s_ret - b_ret # Alpha
         
         return {
@@ -1221,7 +1277,7 @@ INDICATOR_METRIC_MAP = {
     "cci": {"func": compute_cci, "horizon": "short_term"},
     "stochK": {"func": compute_stochastic, "horizon": "default"},
     "macd": {"func": compute_macd, "horizon": "default"},
-    "vwap": {"func": compute_vwap, "horizon": "intraday"},
+    "vwap": {"func": compute_vwap, "horizon": "default"},
     "bbHigh": {"func": compute_bollinger_bands, "horizon": "default"},
     "rvol": {"func": compute_rvol, "horizon": "default"},
     "obvDiv": {"func": compute_obv_divergence, "horizon": "default"},
@@ -1235,8 +1291,8 @@ INDICATOR_METRIC_MAP = {
     "ichiCloud": {"func": compute_ichimoku, "horizon": "long_term"},
     "priceAction": {"func": compute_price_action, "horizon": "default"},
     "entryConfirm": {"func": compute_entry_price, "horizon": "default"},
-    "niftyTrendScore": {"func": compute_nifty_trend_score, "horizon": "long_term"},
-    "gapPercent": {"func": compute_gap_percent, "horizon": "long_term"},
+    "niftyTrendScore": {"func": compute_nifty_trend_score, "horizon": "default"},
+    "gapPercent": {"func": compute_gap_percent, "horizon": "default"},
     "relStrengthNifty": {"func": compute_relative_strength, "horizon": "default"},
     # Consolidated Trend + Components
 
@@ -1260,7 +1316,7 @@ INDICATOR_METRIC_MAP = {
     "volSpikeRatio": {"func": compute_volume_spike, "horizon": "default"},
     "vpt": {"func": compute_vpt, "horizon": "default"},
     "cmfSignal": {"func": compute_cmf, "horizon": "short_term"},
-    "vwapBias": {"func": compute_vwap, "horizon": "intraday"},
+    "vwapBias": {"func": compute_vwap, "horizon": "default"},
     "bbpercentb": {"func": compute_bollinger_bands, "horizon": "default"},
     "wickRejection": {"func": compute_wick_rejection, "horizon": "default"},
     "position52w": {"func": compute_52w_position, "horizon": "default"}
@@ -1351,9 +1407,9 @@ def compute_indicators(
                 slope_val = ((price - price_10_ago) / price_10_ago) * 100
                 indicators["price_slope"] = {"value": round(slope_val, 2), "score": 0, "alias": "Price Slope", "desc": "10-period % change" }
             else:
-                # Fallback if history is too short
+                # Fallback if history is too short (fewer than 10 bars)
                 indicators["price_slope"] = {"value": 0.0, "score": 0}
-                logger.debug(f"[{symbol}] Metric Price slope failed in indicators: {e}")
+                logger.debug(f"[{symbol}] Price slope skipped: insufficient history ({len(series)} bars)")
 
         except Exception as e:
             pass
@@ -1371,7 +1427,8 @@ def compute_indicators(
         # Special Bundle Handling
         if metric == "maTrendSignal":
             done_flags.update(["maFast", "maMid", "maSlow", "maTrendSignal"])
-            done_flags.update(["ema20", "ema50", "ema200", "wma10", "wma40", "wma50", "mma6", "mma12"])
+            # mma24 added: multibagger maSlow is now MMA(24), emitted as legacy key "mma24"
+            done_flags.update(["ema20", "ema50", "ema200", "wma10", "wma40", "wma50", "mma6", "mma12", "mma24"])
             
         elif metric == "maFastSlope":
             done_flags.update(["maFastSlope", "maSlowSlope"])
@@ -1691,7 +1748,7 @@ duplicate_mappings = {
     'maMid': ['ema50', 'wma40', 'mma12'],
     
     # Moving Averages (Slow)
-    'maSlow': ['ema200', 'wma50', 'mma12'],  # Note: mma12 appears in both mid and slow
+    'maSlow': ['ema200', 'wma50', 'mma24'],  # Note: updated to mma24
     
     # Pattern duplicates (horizon-specific)
     'bollingerSqueeze': ['bollinger_squeeze_intraday', 'bollinger_squeeze_short_term'],
@@ -1737,7 +1794,7 @@ GENERIC_KEYS = {
             'intraday': 'ema200',
             'short_term': 'ema200',
             'long_term': 'wma50',
-            'multibagger': 'mma12'  # Same as maMid for multibagger
+            'multibagger': 'mma24'  # Updated to mma24
         },
         'description': 'Slow/primary trend moving average'
     },

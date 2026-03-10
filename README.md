@@ -71,9 +71,11 @@ graph TD
         F["signal_engine.py<br>52KB · 1341 lines"]
     end
     
-    subgraph "Execution Layer"
+    subgraph "Execution Layer — Lifecycle & Intelligence"
         G["trade_enhancer.py<br>49KB · 1203 lines"]
         H["generate_trade_plan()"]
+        PSM["pattern_state_manager.py<br>Stateful Invalidation"]
+        PVT["pattern_velocity_tracking.py<br>Post-Breakout Analytics"]
     end
     
     A --> B
@@ -84,6 +86,8 @@ graph TD
     F --> E
     E --> G
     G --> H
+    G --> PSM
+    G --> PVT
     H --> A
 ```
 
@@ -120,14 +124,14 @@ The **brain** of the application containing 4188 lines and 74 methods with two m
 2. `build_execution_context_from_evaluation()` — Phase 2: Execution projection
 
 **Evaluation Pipeline (8 Internal Phases):**
-1. Flatten Indicators
-2. Trend & Momentum Context
-3. Score Calculation (tech + fundamental + hybrid)
-4. Setup Classification (evaluate all 18 setups)
-5. Strategy Classification
-6. Confidence Calculation (Base floor → ADX bands → clamp)
-7. Gate Validation (Structural, execution, opportunity)
-8. Risk Candidates (SL, targets, RR ratio)
+1. Foundation (Scores & Conditions)
+2. Setup Classification
+3. Pattern Validation
+4. Strategy & Preferences
+5. Structural Gates
+6. Execution Rules
+7. Confidence Calculation
+8. Opportunity Gates
 
 #### `signal_engine.py` (The Orchestrator)
 Triggers the resolver by looping over horizons, blending technical/fundamental pillars, classifying profiles, and finally generating the trade plan.
@@ -274,6 +278,13 @@ Implemented in `data_fetch.py` to ensure sub-millisecond response times:
 | `services/indicators.py` | **The Math Engine.** Implements Pandas-TA to rapidly calculate 30+ indicators including ATR, MACD, Ichimoku, and Supertrend. |
 | `services/indicator_signals.py` | Reads raw array values and parses them into explicit boolean triggers (e.g., True if RSI > 70). |
 | `services/patterns/` (Directory) | Contains isolated detection logic like `darvas.py` and `minervini_vcp.py` to recognize geometrical structures. |
+
+### 6. Pattern Lifecycle & Intelligence
+| File | Responsibility |
+|------|----------------|
+| `services/patterns/pattern_state_manager.py` | **Persistent Invalidation.** Tracks multi-candle breakdown confirmation using SQLite to prevent premature exit on noise. |
+| `services/patterns/pattern_velocity_tracking.py` | **Execution Intelligence.** Tracks post-breakout movement speed to refine historical hold-time estimates and volatility classification. |
+| `services/patterns/pattern_performance_updater.py` | **Post-Trade Audit.** Logically closes the loop by reconciling actual price action with generated trade plans for accuracy reporting. |
 
 ---
 

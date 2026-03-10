@@ -343,7 +343,7 @@ FUNDAMENTAL_WEIGHTS = {
     "peRatio": 0.05,
     "pbRatio": 0.04,
     "pegRatio": 0.03,
-    "fcfyield": 0.05,
+    "fcfYield": 0.05,
     "dividendyield": 0.03,
     # --- Profitability / Returns (25%) ---
     "roe": 0.10,
@@ -383,7 +383,7 @@ FUNDAMENTAL_ALIAS_MAP = {
     "pegRatio": "PEG Ratio",
     "psRatio": "Price-to-Sales (P/S)",
     "peVsSector": "P/E vs Sector",
-    "fcfyield": "FCF Yield (%)",
+    "fcfYield": "FCF Yield (%)",
     "dividendyield": "Dividend Yield (%)",
     "dividendPayout": "Dividend Payout (%)",
     "marketCap": "Market Cap",
@@ -606,7 +606,7 @@ FUNDAMENTAL_FIELD_CANDIDATES = {
     "marketCap": ["marketCap", "Market Capitalization", "marketCap", "Market Cap"],
     "book_value": ["bookValue", "Book Value", "Book value per share"],
     "dividend": ["Dividends Paid", "dividendRate", "Cash Dividends Paid"],
-    "fcfyield": ["Free Cash Flow Yield", "fcfYield"],
+    "fcfYield": ["Free Cash Flow Yield", "fcfYield"],
     "promoterHolding": [
         "heldPercentInsiders",
         "insiderPercent",
@@ -700,7 +700,7 @@ HORIZON_PROFILE_MAP = {
             "roce": 0.08,
             "roic": 0.08,
             "earningsStability": 0.08,
-            "fcfyield": 0.08,
+            "fcfYield": 0.08,
             "epsgrowth5y": 0.06,
             "piotroskiF": 0.05,
             "deRatio": 0.03,
@@ -712,7 +712,7 @@ HORIZON_PROFILE_MAP = {
         "penalties": {
             "priceVsPrimaryTrendPct": {"operator": "<", "value": 0, "penalty": 0.5},
             "roe": {"operator": "<", "value": 10, "penalty": 0.3},
-            "fcfyield": {"operator": "<", "value": 2, "penalty": 0.3},
+            "fcfYield": {"operator": "<", "value": 2, "penalty": 0.3},
             "promoterpledge": {"operator": ">", "value": 15.0, "penalty": 0.2},
             # 🟢 FRAUD CHECK: High Profit but No Cash Flow
             "ocfVsProfit": {"operator": "<", "value": 0.6, "penalty": 0.5} 
@@ -776,7 +776,7 @@ HORIZON_FETCH_CONFIG = {
     },
 }
 
-#todo : remove
+
 
 QUALITY_WEIGHTS = {
     # Higher is better
@@ -788,16 +788,12 @@ QUALITY_WEIGHTS = {
     "interestCoverage": {"weight": 1.0, "direction": "normal"},
     "earningsStability": {"weight": 1.0, "direction": "normal"},
     "netProfitMargin": {"weight": 1.0, "direction": "normal"},
-    # Lower is better
-    "deRatio": {"weight": 1.0, "direction": "invert"},
+    "deRatio": {"weight": 1.0, "direction": "normal"},
     "promoterpledge": {"weight": 1.0, "direction": "normal"},
-    "roeStability": {
-        "weight": 0.10,
-        "direction": "invert",
-    },  # Lower standard deviation = higher score (invert)
+    "roeStability": {"weight": 0.10,"direction": "invert"},
     "volatilityQuality": {"weight": 0.10, "direction": "normal"},
 }
-#todo : remove
+
 GROWTH_WEIGHTS = {
     "epsGrowth3y": {"weight": 1.0, "direction": "normal"},
     "revenueGrowth5y": {"weight": 1.0, "direction": "normal"},
@@ -805,19 +801,16 @@ GROWTH_WEIGHTS = {
     "fcfGrowth3y": {"weight": 1.0, "direction": "normal"},
     "marketCapCagr": {"weight": 1.0, "direction": "normal"},
 }
-#todo : remove
+
 VALUE_WEIGHTS = {
-    # Lower is better
-    "peRatio": {"weight": 1.0, "direction": "invert"},
-    "pbRatio": {"weight": 1.0, "direction": "invert"},
-    "pegRatio": {"weight": 1.0, "direction": "invert"},
-    "peVsSector": {"weight": 1.0, "direction": "invert"},
-    # Higher is better
-    "fcfyield": {"weight": 1.0, "direction": "normal"},
+    "peRatio": {"weight": 1.0, "direction": "normal"},
+    "pbRatio": {"weight": 1.0, "direction": "normal"},
+    "pegRatio": {"weight": 1.0, "direction": "normal"},
+    "peVsSector": {"weight": 1.0, "direction": "normal"},
+    "fcfYield": {"weight": 1.0, "direction": "normal"},
     "dividendyield": {"weight": 1.0, "direction": "normal"},
 }
 
-#todo : remove
 MOMENTUM_WEIGHTS = {  # 🆕 CORE COMPOSITES (PRIORITY)
     "momentumStrength": {
         "weight": 0.30,

@@ -13,7 +13,7 @@ from typing import Any, Dict, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
-SCORE_FIELD_UNRELIABLE = {"deRatio", "ocfVsProfit", "promoterpledge", "beta"}
+SCORE_FIELD_UNRELIABLE = {"ocfVsProfit", "promoterpledge", "beta"}
 
 # ==============================================================================
 # METRIC REGISTRY (Metadata for fundamental metrics)
@@ -648,7 +648,12 @@ def apply_fundamental_penalties(fundamentals: dict, horizon: str) -> tuple:
     return round(total, 2), reasons
 
 
-def apply_fundamental_bonuses(fundamentals: dict) -> tuple:
+def _extract_metrics_from_condition(condition: str) -> list:
+    """Extract metric names from a condition."""
+    import re
+    return re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:>=|<=|==|!=|>|<)', condition)
+
+def apply_fundamental_bonuses(fundamentals: dict, horizon: str = "short_term") -> tuple:
     """
     Apply bonus rules to fundamental score.
     
@@ -657,8 +662,13 @@ def apply_fundamental_bonuses(fundamentals: dict) -> tuple:
     """
     total = 0.0
     reasons = []
+    excluded = set(HORIZON_METRIC_INCLUSION.get(horizon, {}).get("exclude", []))
     
     for rule in FUNDAMENTAL_BONUSES:
+        rule_metrics = _extract_metrics_from_condition(rule["condition"])
+        if any(m in excluded for m in rule_metrics):
+            continue
+            
         if _evaluate_condition(rule["condition"], fundamentals):
             total += rule["bonus"]
             reasons.append(rule["reason"])
@@ -711,7 +721,7 @@ def compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
     penalty, penalty_reasons = apply_fundamental_penalties(fundamentals, horizon)
     
     # Apply bonuses
-    bonus, bonus_reasons = apply_fundamental_bonuses(fundamentals)
+    bonus, bonus_reasons = apply_fundamental_bonuses(fundamentals, horizon)
     
     # Calculate final score
     final_score = total_score - penalty + bonus
@@ -722,6 +732,10 @@ def compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
         "horizon": horizon,
         "base_score": round(total_score, 2),
         "category_scores": category_scores,
+        "penalties": {
+            "total": round(penalty, 2),
+            "reasons": penalty_reasons
+        },
         "bonuses": {
             "total": round(bonus, 2),
             "reasons": bonus_reasons
@@ -738,29 +752,42 @@ def extract_normalized_score(
     if isinstance(metric_data, dict):
         # For metrics with known inverted directionality, always re-normalize from raw
         if metric_name in SCORE_FIELD_UNRELIABLE:
-            raw = metric_data.get("raw") or metric_data.get("value")
+            raw = metric_data.get("raw") if metric_data.get("raw") is not None else metric_data.get("value")
             if raw is not None:
-                return _normalize_fundamental_metric(metric_name, float(raw), horizon)
+                try:
+                    raw_float = float(str(raw).replace('%', '').replace('x', '').replace(',', '').strip())
+                    return _normalize_fundamental_metric(metric_name, raw_float, horizon)
+                except (ValueError, TypeError):
+                    logger.warning(f"Failed to parse '{raw}' for {metric_name}")
             return 0.0
 
         # For all other metrics, trust the pre-computed score field
         score = metric_data.get("score")
         if score is not None:
-            return max(0.0, min(10.0, float(score)))
+            try:
+                return max(0.0, min(10.0, float(str(score).replace('%', '').replace('x', '').replace(',', '').strip())))
+            except (ValueError, TypeError):
+                pass # Fall through to raw if score is invalid
 
         # Fallback: re-normalize from raw value
-        raw = metric_data.get("raw") or metric_data.get("value")
+        raw = metric_data.get("raw") if metric_data.get("raw") is not None else metric_data.get("value")
         if raw is None:
             logger.warning(f"No score/raw for {metric_name}")
             return 0.0
 
-    elif isinstance(metric_data, (int, float)):
+    elif isinstance(metric_data, (int, float, str)):
         raw = metric_data
     else:
         logger.warning(f"Invalid type for {metric_name}: {type(metric_data)}")
         return 0.0
 
-    return _normalize_fundamental_metric(metric_name, raw, horizon)
+    # Robust float conversion for raw
+    try:
+        raw_float = float(str(raw).replace('%', '').replace('x', '').replace(',', '').strip())
+        return _normalize_fundamental_metric(metric_name, raw_float, horizon)
+    except (ValueError, TypeError):
+        logger.warning(f"Could not convert raw value '{raw}' to float for {metric_name}")
+        return 0.0
 
 def _normalize_fundamental_metric(
     metric_name: str,
@@ -816,6 +843,12 @@ def _normalize_valuation(metric: str, val: float) -> float:
         elif val <= 1.5: return 8
         elif val <= 2.0: return 6
         else: return 4
+    elif metric == "peVsSector":   # Lower multiple vs sector = cheaper = better
+        if val <= 0.5:  return 10
+        elif val <= 0.8: return 8
+        elif val <= 1.0: return 6
+        elif val <= 1.2: return 4
+        else: return 2
     
     return 5.0
 
@@ -863,6 +896,7 @@ def _normalize_health_quality(metric: str, val: float) -> float:
         elif val >= 0.8: return 5     # Slight shortfall
         elif val >= 0.5: return 3     # Notable gap
         else: return 1                # OCF far below profit (earnings quality concern)
+        
     
     elif metric == "currentRatio":  # Higher is better
         if val >= 2.0: return 10
@@ -890,6 +924,13 @@ def _normalize_ownership(metric: str, val: float) -> float:
         elif 40 <= val < 50 or 70 < val <= 80: return 8
         elif 30 <= val < 40 or 80 < val <= 90: return 6
         else: return 4
+        
+    elif metric == "institutionalOwnership":
+        if val >= 30: return 10
+        elif val >= 20: return 8
+        elif val >= 10: return 6
+        elif val > 0: return 4
+        else: return 2
     
     elif metric == "promoterpledge":  # Lower is better
         if val == 0: return 10

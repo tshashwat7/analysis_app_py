@@ -457,6 +457,16 @@ class ConfigExtractor:
             source="global.time_estimation"
         )
 
+        # Global trend/momentum thresholds (fallback for get_trend_thresholds / get_momentum_thresholds)
+        self.sections["momentum_thresholds"] = ConfigSection(
+            data=global_cfg.get("momentum_thresholds", {}),
+            source="global.momentum_thresholds"
+        )
+        self.sections["trend_thresholds"] = ConfigSection(
+            data=global_cfg.get("trend_thresholds", {}),
+            source="global.trend_thresholds"
+        )
+
     def extract_horizon_sections(self):
         """Extract horizon-specific config sections."""
         horizon_cfg = self.master_config.get("horizons", {}).get(self.horizon, {})
@@ -493,10 +503,6 @@ class ConfigExtractor:
         self.sections["horizon_time_estimation"] = ConfigSection(
             data=horizon_cfg.get("time_estimation", {}),
             source=f"horizons.{self.horizon}.time_estimation"
-        )
-        self.sections["enhancements"] = ConfigSection(
-            data=horizon_cfg.get("enhancements", {}),
-            source=f"horizons.{self.horizon}.enhancements"
         )
         # Extract trend thresholds
         self.sections["horizon_trend_thresholds"] = ConfigSection(
@@ -544,21 +550,21 @@ class ConfigExtractor:
         
         # Get horizon-specific multipliers
         horizon_cfg = self.master_config.get("horizons", {}).get(self.horizon, {})
-        horizon_sizing = horizon_cfg.get("position_sizing", {})
-        horizon_mults = horizon_sizing.get("setup_multipliers", {})
+        horizon_sizing = horizon_cfg.get("risk_management", {})
+        horizon_mults = horizon_sizing.get("setup_size_multipliers", {})
         
         # Merge with horizon overrides taking precedence
         merged_multipliers = {**global_mults, **horizon_mults}
         
         self.sections["sizing_multipliers"] = ConfigSection(
             data=merged_multipliers,
-            source=f"global.position_sizing.global_setup_multipliers + horizons.{self.horizon}.position_sizing.setup_multipliers"
+            source=f"global.position_sizing.global_setup_multipliers + horizons.{self.horizon}.risk_management.setup_size_multipliers"
         )
         
         horizon_base_mult = horizon_sizing.get("base_multiplier", 1.0)
         self.sections["horizon_base_multiplier"] = ConfigSection(
             data=horizon_base_mult,
-            source=f"horizons.{self.horizon}.position_sizing.base_multiplier"
+            source=f"horizons.{self.horizon}.risk_management.base_multiplier"
         )
 
         # Strategy priority
@@ -912,7 +918,7 @@ class ConfigExtractor:
             "setup_baseline_floors"
         ]
         
-        missing_global = [k for k in required_global if k not in self.sections]
+        missing_global = [k for k in required_global if not self.sections.get(k) or not self.sections[k].data]
         
         if missing_global:
             self.logger.error(f"Missing confidence config sections: {missing_global}")
@@ -928,7 +934,7 @@ class ConfigExtractor:
             "high_confidence_override"
         ]
         
-        missing_horizon = [k for k in required_horizon if k not in self.sections]
+        missing_horizon = [k for k in required_horizon if not self.sections.get(k) or self.sections[k].data is None]
         
         if missing_horizon:
             msg = (

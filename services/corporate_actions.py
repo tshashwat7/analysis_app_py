@@ -66,6 +66,9 @@ os.makedirs(YF_CACHE_DIR, exist_ok=True)
 SUMMARY_CACHE_PATH = "cache/corp_actions_summary.json"
 SUMMARY_CACHE_TTL_HOURS = 24
 
+NSE_LIB_CACHE_PATH = "cache/nse_corp_actions_lib.json"
+NSE_LIB_CACHE_TTL_HOURS = 24
+
 # Lazy singleton — created once, reused across all bulk calls
 _lib_client = None
 
@@ -209,44 +212,73 @@ def _fetch_nse_via_lib(tickers: List[str]) -> Dict[str, List[Dict]]:
 
     result_by_ticker: Dict[str, List[Dict]] = {}
     try:
-        # get_actions() returns List[CorporateAction] for all symbols at once
-        actions = client.get_actions(
-            from_date=None,   # defaults to today
-            to_date=None,     # defaults to 3 months ahead
-            source="NSE",
-        )
+        actions_data = None
+        if os.path.exists(NSE_LIB_CACHE_PATH):
+            try:
+                mtime = datetime.fromtimestamp(os.path.getmtime(NSE_LIB_CACHE_PATH))
+                if datetime.now() - mtime < timedelta(hours=NSE_LIB_CACHE_TTL_HOURS):
+                    with open(NSE_LIB_CACHE_PATH, "r", encoding="utf-8") as f:
+                        actions_data = json.load(f)
+            except Exception as e:
+                logger.debug(f"Failed to read NSE lib cache: {e}")
+        
+        if actions_data is None:
+            # get_actions() returns List[CorporateAction] for all symbols at once
+            actions = client.get_actions(
+                from_date=None,   # defaults to today
+                to_date=None,     # defaults to 3 months ahead
+                source="NSE",
+            )
+            actions_data = []
+            for a in actions:
+                actions_data.append({
+                    "symbol": a.symbol,
+                    "ex_date": a.ex_date,
+                    "action_type": a.action_type,
+                    "details": a.details
+                })
+            try:
+                os.makedirs(os.path.dirname(NSE_LIB_CACHE_PATH), exist_ok=True)
+                with open(NSE_LIB_CACHE_PATH, "w", encoding="utf-8") as f:
+                    json.dump(actions_data, f)
+            except Exception as e:
+                logger.debug(f"Failed to write NSE lib cache: {e}")
 
         # Group by symbol and convert to our internal schema
         cutoff = datetime.now().date() - timedelta(days=7)
-        for action in actions:
-            sym = (action.symbol or "").upper()
+        for action_dict in actions_data:
+            sym = (action_dict.get("symbol") or "").upper()
             if sym not in ticker_map:
                 continue
             original_ticker = ticker_map[sym]
 
             # Parse ex_date
             ex_obj = None
-            if action.ex_date:
+            raw_ex = action_dict.get("ex_date")
+            if raw_ex:
                 for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%m-%Y"):
                     try:
-                        ex_obj = datetime.strptime(action.ex_date.strip(), fmt).date()
+                        ex_obj = datetime.strptime(raw_ex.strip(), fmt).date()
                         break
                     except Exception:
                         continue
             if ex_obj is None or ex_obj < cutoff:
                 continue
 
+            action_type_str = action_dict.get("action_type") or ""
+            details_str = action_dict.get("details") or ""
+            
             entry = {
-                "type": f"Upcoming {action.action_type.title()}",
+                "type": f"Upcoming {action_type_str.title()}",
                 "value": None,
                 "ex_date": ex_obj.strftime("%Y-%m-%d"),
-                "details": action.details or "",
+                "details": details_str,
                 "source": "NSE",
             }
 
             # Extract numeric dividend value from details
-            if action.action_type == "dividend" and action.details:
-                m = re.search(r"rs\.?\s*([\d.]+)", action.details, re.I)
+            if action_type_str.lower() == "dividend" and details_str:
+                m = re.search(r"rs\.?\s*([\d.]+)", details_str, re.I)
                 if m:
                     entry["value"] = safe_float(m.group(1))
 

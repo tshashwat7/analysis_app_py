@@ -41,7 +41,8 @@ import logging
 from typing import Dict, Any, Optional, Tuple
 
 from config.config_resolver import ConditionEvaluator
-from config.logger_config import log_failures
+from config.config_helpers.logger_config import log_failures
+from config.config_helpers.market_utils import get_current_utc
 from services.data_fetch import _get_val, safe_float
 from services.patterns.pattern_state_manager import (
     get_breakdown_state,
@@ -194,10 +195,14 @@ def adjust_targets_for_market_conditions(
         # === Spread Cost ===
         base_spread = BASE_SPREAD_PCT.get(horizon, 0.001)
         spread_multiplier = 2.0 if atr_pct > 5.0 else (1.5 if atr_pct > 3.0 else 1.0)
+        market_cap_data = fundamentals.get("marketCap", {})
+        mc_raw = market_cap_data.get("raw", 0) if isinstance(market_cap_data, dict) else (market_cap_data or 0)
+        market_cap_crores = mc_raw / 10000000
+        
         spread_cost = calculate_adaptive_spread_cost(
             current_price=current_price,
             rvol=_get_val(indicators, "rvol", 1.0),
-            market_cap=fundamentals.get("marketCap", 0) / 10000000,  # Convert to crores
+            market_cap=market_cap_crores,
             horizon=horizon
         )
         # current_price * base_spread * spread_multiplier
@@ -212,10 +217,12 @@ def adjust_targets_for_market_conditions(
             effective_reward_t1 = current_price - execution_t1 - spread_cost
             effective_reward_t2 = (current_price - execution_t2 - spread_cost) if execution_t2 else None
         
-        rr_t1 = effective_reward_t1 / effective_risk if effective_risk > 0 else 0
-        rr_t2 = effective_reward_t2 / effective_risk if (effective_risk > 0 and effective_reward_t2) else None
+        rr_t1 = effective_reward_t1 / effective_risk if (effective_risk > 0 and effective_reward_t1 > 0) else 0
+        rr_t2 = effective_reward_t2 / effective_risk if (effective_risk > 0 and effective_reward_t2 and effective_reward_t2 > 0) else None
         
-        # === Result ===
+        # ✅ GUARD: Re-verify RR after spread (Bug 3)
+        if effective_reward_t1 <= 0:
+            return {"adjusted": False, "reason": "T1 target at or behind current price after spread"}
         return {
             "adjusted": True,
             "direction": direction,
@@ -344,22 +351,17 @@ def check_pattern_expiration(
             
             # ✅ Get pattern context
             pattern_ctx = extractor.get_pattern_context(pattern_name)
-            if not pattern_ctx or not pattern_ctx.invalidation:
+            if not pattern_ctx:
                 continue
             
             # ✅ USE DIRECTLY - no extraction!
-            inval_cfg = pattern_ctx.invalidation
+            inval_cfg = pattern_ctx.invalidation  # may be {} — that's fine for expiry
             
-            # ✅ Check if expiration config exists
-            exp_cfg = inval_cfg.get("expiration")
-            if not exp_cfg or not exp_cfg.get("enabled"):
-                continue
-            
-            # ✅ Get max_duration (might still be nested by horizon)
-            max_candles = exp_cfg.get("max_duration_candles")
-            if isinstance(max_candles, dict):
-                # Nested by horizon
-                max_candles = max_candles.get(horizon)
+            # ✅ FIX: Use typical_duration.max (Bug 2)
+            # typical_duration.max in candle units IS the horizon-aware threshold. 
+            # 20 candles = 20 of current horizon units (15min/1d/1wk/etc).
+            typical = pattern_ctx.typical_duration or {}
+            max_candles = typical.get("max")
             
             if not max_candles:
                 continue
@@ -373,7 +375,6 @@ def check_pattern_expiration(
             
             # ✅ Real-time age calculation (FIXED timezone)
             if formation_ts:
-                from config.market_utils import get_current_utc
                 seconds_since = get_current_utc().timestamp() - formation_ts
                 real_time_age = int(seconds_since / candle_sec)
                 current_age = max(cached_age, real_time_age)
@@ -528,10 +529,17 @@ def check_pattern_invalidation(
             
             if not state:
                 # Start tracking
+                # ✅ FIX: Prioritized pivot level lookup (Issue 4)
+                pivot_level = (
+                    namespace.get("pivot_point")
+                    or namespace.get("box_low")
+                    or namespace.get("handle_low")
+                    or current_price
+                )
                 save_breakdown_state(
                     symbol, pattern_name, horizon,
                     current_price,
-                    namespace.get(list(meta.keys())[0]) if meta else current_price,
+                    pivot_level,
                     str(conditions)
                 )
                 logger.info(
@@ -722,11 +730,14 @@ def enhance_execution_context(
         # ===================================================================
         # 2. Check Pattern Invalidation
         # ===================================================================
+        trend_dir = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
+        position_type = "SHORT" if trend_dir == "bearish" else "LONG"
+
         invalidation = check_pattern_invalidation(
             detected_patterns,
             indicators,
             symbol,
-            position_type="LONG",
+            position_type=position_type,
             horizon=horizon,
             extractor=extractor
         )
@@ -1057,7 +1068,7 @@ def calculate_pattern_timeline(
         # STEP 3: Calculate unit names (already have bars_per_unit above)
         # ===================================================================
         unit_name = {
-            "intraday": "hours",
+            "intraday": "days",    # ✅ Correction: 26 bars = 1 day in Indian market context (Issue 5)
             "short_term": "days",
             "long_term": "weeks",
             "multibagger": "months"
@@ -1128,11 +1139,11 @@ def calculate_pattern_timeline(
             "pattern_age": age_candles,
             "invalidation_warning": invalidation_warning,
             "data_source": data_source,  # 🆕 Track what drove the estimate
-            "historical_stats": historical_stats,  # 🆕 Include for debugging
             "raw": {
                 "t1_bars": t1_bars,
                 "t2_bars": t2_bars,
                 "regime": regime,
+                "historical_stats": historical_stats,  # ✅ Move to raw (Issue 6)
                 "regime_factor": regime_factor,
                 "duration_multiplier": duration_mult  # ✅ Add for transparency
             }

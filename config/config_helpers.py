@@ -24,7 +24,7 @@ from datetime import datetime, time
 from config.config_resolver import ConfigResolver, create_resolver
 
 from services.data_fetch import _get_val
-from config.logger_config import (
+from config.config_helpers.logger_config import (
     METRICS,
     validate_required_keys,
     log_failures
@@ -54,8 +54,10 @@ def get_resolver(horizon: str, use_cache: bool = True) -> ConfigResolver:
     from config.master_config import MASTER_CONFIG
     
     if use_cache and horizon in _resolver_cache:
+        logger.debug(f"[{horizon}] ♻️ Resolver cache HIT")
         return _resolver_cache[horizon]
     
+    logger.debug(f"[{horizon}] 🏭 Resolver cache MISS (Instantiating new)")
     # ✅ NEW: Uses refactored resolver
     resolver = create_resolver(MASTER_CONFIG, horizon)
     
@@ -220,7 +222,8 @@ def build_evaluation_context_v5(
     ticker: str,
     indicators: Dict,
     fundamentals: Dict,
-    horizon: str
+    horizon: str,
+    patterns: Dict = None
 ) -> Dict[str, Any]:
     """
     ✅ UPDATED: Build evaluation context using refactored resolver v6.0
@@ -275,10 +278,10 @@ def build_evaluation_context_v5(
                 "_meta": {"ticker": ticker, "horizon": horizon, "data_quality": "POOR"}
             }
         
-        # ✅ NEW: Get refactored resolver with extractor
+        # ✅ UPDATED: Pass through specific pre-computed patterns if given, else extract from indicators (fallback)
         resolver = get_resolver(horizon)
+        detected_patterns = patterns if patterns else _extract_patterns(indicators, horizon)
         
-        detected_patterns = _extract_patterns(indicators, horizon)
         price_data = _extract_price_data(indicators, fundamentals)
         clean_indicators = flatten_market_data_mixed(indicators or {})
         clean_fundamentals = flatten_market_data_mixed(fundamentals or {})
@@ -437,10 +440,11 @@ def get_setup_from_context(eval_ctx: Dict) -> Tuple[str, int, Dict]:
     Returns: (setup_type, priority, metadata)
     """
     setup_info = eval_ctx.get("setup", {})
+    best = setup_info.get("best", setup_info)
     
     metadata = {
         "reasoning": setup_info.get("reasoning", ""),
-        "priority": setup_info.get("priority", 0),
+        "priority": best.get("priority", setup_info.get("priority", 0)),
         "confidence_floor": setup_info.get("confidence_floor", 50),
         "require_fundamentals": setup_info.get("require_fundamentals", False),
         "patterns_primary": setup_info.get("patterns_primary", []),
@@ -448,16 +452,12 @@ def get_setup_from_context(eval_ctx: Dict) -> Tuple[str, int, Dict]:
         "blocked": False,
         "horizon": eval_ctx.get("_meta", {}).get("horizon")
     }
-    
     # Check if blocked
-    setup_prefs = eval_ctx.get("setup_preferences", {})
-    if setup_prefs.get("blocked", False):
-        metadata["blocked"] = True
-        metadata["block_reason"] = setup_prefs.get("blocked_reason", "Blocked")
+    # (Removed: _apply_setup_preferences no longer emits 'blocked')
     
     return (
         setup_info.get("type", "GENERIC"),
-        setup_info.get("priority", 0),
+        best.get("priority", setup_info.get("priority", 0)),
         metadata
     )
 
@@ -544,18 +544,12 @@ def check_gates_from_context(eval_ctx: Dict, confidence: float) -> Dict[str, Any
         failures = opportunity_gates.get("overall", {}).get("failed_gates", [])
         for failure in failures:
             result["failed_gates"].append(f"opportunity: {failure}")
-    
     # Gate 4: Setup Preferences
-    setup_prefs = eval_ctx.get("setup_preferences", {})
-    if setup_prefs.get("blocked", False):
-        result["passed"] = False
-        result["failed_gates"].append(
-            f"setup: {setup_prefs.get('blocked_reason', 'Blocked')}"
-        )
+    # (Removed: blocking by setup preference is no longer intended)
     
     # Gate 5: Confidence Floor
     conf_info = eval_ctx.get("confidence", {})
-    dynamic_floor = conf_info.get("base", 50)
+    dynamic_floor = conf_info.get("floor", conf_info.get("min_tradeable_threshold", 50))
     
     if confidence < dynamic_floor:
         result["passed"] = False

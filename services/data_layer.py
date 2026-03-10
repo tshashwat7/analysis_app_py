@@ -5,7 +5,7 @@ import pandas as pd
 import polars as pl
 from pathlib import Path
 from datetime import datetime, timezone
-from config.market_utils import ensure_utc, get_current_utc
+from config.config_helpers.market_utils import ensure_utc, get_current_utc
 
 logger = logging.getLogger(__name__)
 

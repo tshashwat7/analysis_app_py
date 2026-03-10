@@ -27,7 +27,7 @@ from datetime import datetime
 from config.config_helpers import get_resolver
 from config.constants import VALUE_WEIGHTS, GROWTH_WEIGHTS, QUALITY_WEIGHTS, MOMENTUM_WEIGHTS
 
-from config.logger_config import METRICS, track_performance, log_failures
+from config.config_helpers.logger_config import METRICS, track_performance, log_failures
 
 # ============================================================================
 # ✅ v14.0 IMPORTS - Query Extractor Architecture
@@ -257,13 +257,25 @@ def compute_opportunity_score(
             logger.debug(f"[{ticker}][{horizon}] ⚠️ No bonus (gates failed)")
 
         # 5. Final Decision Score
-        final_score = eligibility_base_score + opp_bonus
+        # Mathematical Refactor: Weighting instead of raw addition (Score > 10 fix)
+        # Eligibility is out of 10. Bonus translates up to ~3.0.
+        # Rule: 70% Base Eligibility + 30% Normalized Bonus Score.
+        
+        # Normalize bonus to a 10-point scale (Max practical bonus is ~3.0)
+        max_practical_bonus = 3.0
+        normalized_bonus = min(10.0, (opp_bonus / max_practical_bonus) * 10.0)
+        
+        final_score = (eligibility_base_score * 0.70) + (normalized_bonus * 0.30)
+        
+        # Absolute safety ceiling (though math theoretically prevents it)
+        final_score = min(10.0, final_score)
+        
         elapsed = datetime.now().timestamp() - start_time
         
         logger.info(
             f"[{ticker}][{horizon}] ✅ OPPORTUNITY SCORING COMPLETE | "
-            f"Final={final_score:.2f} (Base={eligibility_base_score:.2f} + "
-            f"Bonus={opp_bonus:.2f}) | "
+            f"Final={final_score:.2f} (Base[70%]={eligibility_base_score:.2f} + "
+            f"Bonus[30%]={normalized_bonus:.2f}) | "
             f"Time={elapsed*1000:.1f}ms"
         )
         
@@ -368,7 +380,7 @@ def compute_all_profiles(
     ticker: str,
     fundamentals: Dict,
     indicators_by_horizon: Dict,
-    hybrid_pillar_multi_horizon: Dict = None,
+    patterns_by_horizon: Dict = None,
     requested_horizons: List[str] = None  # ✅ NEW: Filter which horizons to score
 ) -> Dict:
     """
@@ -420,7 +432,8 @@ def compute_all_profiles(
                 # --------------------------------------------------
                 try:
                     with track_performance(f"build_eval_ctx_{horizon}"):
-                        eval_ctx = build_evaluation_context_v5( ticker, indicators, fundamentals, horizon)
+                        patterns = (patterns_by_horizon or {}).get(horizon, {})
+                        eval_ctx = build_evaluation_context_v5( ticker, indicators, fundamentals, horizon, patterns=patterns)
                     if not eval_ctx:
                         eval_ctx = {}
 

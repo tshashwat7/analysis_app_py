@@ -92,7 +92,7 @@ def compute_signals(indicators: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     retrieve_and_add_metric("volTrend", "Volume Trend: {status}")
     retrieve_and_add_metric("rvol", "Relative Volume (RVOL): {status}")
     retrieve_and_add_metric("bbLow", "Bollinger Band Low: {status}")
-    retrieve_and_add_metric("bb_width", "Bollinger Width: {status}")
+    retrieve_and_add_metric("bbWidth", "Bollinger Width: {status}")
     retrieve_and_add_metric("entryConfirm", "Entry Price Confirmation: {status}")
     retrieve_and_add_metric("dma20_50Cross", "20/50 DMA Crossover: {status}")
     retrieve_and_add_metric("dma200Slope", "200 DMA Slope: {status}")

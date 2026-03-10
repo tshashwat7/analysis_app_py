@@ -16,7 +16,7 @@ from sqlalchemy import Column, String, Integer, DateTime, Float, JSON, Boolean, 
 from sqlalchemy.orm import Session
 from services.data_fetch import _safe_float
 from services.db import PatternPerformanceHistory, SessionLocal, Base, engine, utc_now
-from config.market_utils import get_current_utc
+from config.config_helpers.market_utils import get_current_utc
 
 logger = logging.getLogger(__name__)
 

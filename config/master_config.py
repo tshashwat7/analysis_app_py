@@ -1210,7 +1210,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 65},
-                    "rrRatio": {"min": 1.2},
+                    "rrRatio": {"min": 1.0},
                     "technicalScore": {"min": None},
                     "fundamentalScore": {"min": None}
                 }
@@ -1285,7 +1285,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 60},
-                    "rrRatio": {"min": 1.4},
+                    "rrRatio": {"min": 1.2},
                     "fundamentalScore": {"min": 3.0}
                 },
             },
@@ -1414,7 +1414,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 55},
-                    "rrRatio": {"min": 1.5},
+                    "rrRatio": {"min": 1.3},
                     "fundamentalScore": {"min": 6.0},
                     "technicalScore": {"min": None}
                 },
@@ -1442,8 +1442,8 @@ MASTER_CONFIG = {
                 "type": "MMA",
                 "fast": 6,
                 "mid": 12,
-                "slow": 12,
-                "keys": ["mma6", "mma12", "mma12"],
+                "slow": 24,
+                "keys": ["mma6", "mma12", "mma24"],
                 "dip_buy_reference": "maSlow"
             },
             "indicators": {
@@ -1531,7 +1531,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 60},
-                    "rrRatio": {"min": 2.0},
+                    "rrRatio": {"min": 1.5},
                     "fundamentalScore": {"min": 8.0},
                     "hybridScore": {"min": None}
                 },

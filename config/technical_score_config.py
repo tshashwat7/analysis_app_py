@@ -155,6 +155,7 @@ METRIC_REGISTRY = {
             "0.5": 7,    # Developing Uptrend (Matches your logic fix)
             "0": 5,      # Neutral
             "0.0": 5,    # Float match
+            "-0.5": 3,   # Developing Downtrend
             "-1": 0,     # Strong Downtrend
             "-1.0": 0    # Float match
         },
@@ -242,6 +243,7 @@ METRIC_REGISTRY = {
         "params": {
             "Squeeze On": 10,
             "Squeeze Off": 5,
+            "Off": 5,
             "No Squeeze": 0
         },
         "description": "TTM Squeeze indicator"
@@ -518,7 +520,7 @@ HORIZON_METRIC_INCLUSION = {
     
     "long_term": {
         "trend": ["trendStrength", "maTrendSignal", "adx", "priceVsPrimaryTrendPct", "relStrengthNifty"],
-        "momentum": ["momentumStrength", "rsi", "macd", "relStrengthNifty"],  # ← No rsislope (noise)
+        "momentum": ["momentumStrength", "rsi", "macd"],  # ← relStrengthNifty is already in trend
         "volatility": ["volatilityQuality"],  # ← Only composite, not raw metrics
         "volume": ["rvol", "obvDiv"],
         "structure": ["position52w", "priceAction"],
@@ -944,9 +946,9 @@ TECHNICAL_BONUSES = [
         "reason": "Strong outperformance vs Nifty"
     },
     {
-        "condition": "ttmSqueeze == 5 AND rvol >= 2.0",
+        "condition": "ttmSqueeze == Squeeze Off AND rvol >= 2.0",
         "bonus": 0.15,
-        "reason": "Squeeze release with volume expansion"
+        "reason": "Squeeze release with volume expansion"  # Squeeze Off = bands expanding after compression
     },
     {
         "condition": "cmfSignal >= 0.15",
@@ -1007,7 +1009,7 @@ COMPOSITE_SCORING_CONFIG = {
                 },
                 "maTrendSignal": {
                     "weight": 0.30,  # Alignment of 20/50/200 MAs
-                    "mapping": {"1": 10, "0.5": 7, "0": 5, "-1": 0}
+                    "mapping": {"1": 10, "1.0": 10, "0.5": 7, "0": 5, "0.0": 5, "-0.5": 3, "-1": 0, "-1.0": 0}
                 },
                 "diSpread": {        # Trend conviction (ADX components)
                     "weight": 0.20,
@@ -1082,7 +1084,7 @@ COMPOSITE_SCORING_CONFIG = {
                 },
                 "maTrendSignal": {
                     "weight": 0.25,
-                    "mapping": {"1": 10, "1.0": 10, "0.5": 7, "0": 5, "-1": 0}
+                    "mapping": {"1": 10, "1.0": 10, "0.5": 7, "0": 5, "0.0": 5, "-0.5": 3, "-1": 0, "-1.0": 0}
                 },
                 "diSpread": {        # Distance between buyers and sellers
                     "weight": 0.25,
@@ -1149,7 +1151,7 @@ COMPOSITE_SCORING_CONFIG = {
                 },
                 "maTrendSignal": {
                     "weight": 0.30,
-                    "mapping": {"1": 10, "1.0": 10, "0.5": 5, "0": 0, "-1": 0} # Strict on LT
+                    "mapping": {"1": 10, "1.0": 10, "0.5": 5, "0": 0, "0.0": 0, "-0.5": 0, "-1": 0, "-1.0": 0} # Strict on LT
                 },
                 "diSpread": {
                     "weight": 0.30,
@@ -1196,7 +1198,7 @@ COMPOSITE_SCORING_CONFIG = {
             "metrics": {
                 "maTrendSignal": {
                     "weight": 0.50, # Must be in a clear structural uptrend
-                    "mapping": {"1": 10, "1.0": 10, "0.5": 4, "0": 0}
+                    "mapping": {"1": 10, "1.0": 10, "0.5": 4, "0": 0, "0.0": 0, "-0.5": 0, "-1": 0, "-1.0": 0}
                 },
                 "maSlowSlope": {  # Velocity of the 12-month MA
                     "weight": 0.30,
@@ -1271,9 +1273,10 @@ def _apply_composite_scoring_rules(value: Any, rules: dict, metric_name: str = N
             if "max" in entry and val_float <= entry["max"]:
                 return float(entry["score"])
         
-        # Default score
-        default = rules.get("default", 0)
-        return float(default) if not isinstance(default, dict) else 0.0
+        # Default score (stored inside the list of thresholds)
+        default_entry = next((e for e in rules["thresholds"] if "default" in e), None)
+        default = default_entry["default"] if default_entry else 0
+        return float(default)
     
     logger.warning(f"No valid scoring rules for {metric_name}")
     return 5.0
@@ -1587,16 +1590,6 @@ def extract_metric_score(metric_data: Any, metric_name: str, indicators: Dict = 
     # Handle primitive value
     return calculate_dynamic_score(metric_name, metric_data, indicators)
 
-
-def _extract_raw_value(metric_data: Any) -> Any:
-    """Helper to extract raw value from metric data."""
-    if metric_data is None:
-        return None
-
-    if isinstance(metric_data, dict):
-        return metric_data.get("raw") or metric_data.get("value")
-
-    return metric_data
 # ==============================================================================
 # ✅ SIMPLIFIED HELPER FUNCTIONS (No Text Mapping!)
 # ==============================================================================
@@ -1687,6 +1680,12 @@ def _evaluate_condition(condition: str, indicators: Dict) -> bool:
     return all(_evaluate_single_condition(part.strip(), indicators) for part in parts)
 
 
+def _extract_raw_value(metric_data: dict) -> Any:
+    """Helper to extract the unscaled raw value from the indicator dict."""
+    if not metric_data or not isinstance(metric_data, dict):
+        return None
+    return metric_data.get("raw", metric_data.get("value"))
+
 def _evaluate_single_condition(condition: str, indicators: Dict) -> bool:
     """Evaluate a single condition."""
     # Parse operators (order matters - check >= before >)
@@ -1697,23 +1696,37 @@ def _evaluate_single_condition(condition: str, indicators: Dict) -> bool:
             value = value.strip().strip("'\"")
             
             metric_data = indicators.get(metric, {})
-            actual = extract_metric_score(metric_data, metric, indicators)
+            
+            # Check if this metric is a composite (passthrough) or a raw metric
+            is_passthrough = METRIC_REGISTRY.get(metric, {}).get("scoring_type") == "passthrough"
+            
+            if is_passthrough:
+                actual = extract_metric_score(metric_data, metric, indicators)
+            else:
+                actual = _extract_raw_value(metric_data)
             
             if actual is None:
                 return False
             
+            # Handle text comparisons first (e.g. ttmSqueeze == 'Squeeze On')
+            if op == "==" and not value.replace('.', '', 1).isdigit():
+                return str(actual).lower() == value.lower()
+            if op == "!=" and not value.replace('.', '', 1).isdigit():
+                return str(actual).lower() != value.lower()
+            
             # Numeric comparison
             try:
                 threshold = float(value)
-            except:
+                actual_num = float(actual)
+            except (ValueError, TypeError):
                 return False
             
-            if op == ">=": return actual >= threshold
-            elif op == "<=": return actual <= threshold
-            elif op == ">": return actual > threshold
-            elif op == "<": return actual < threshold
-            elif op == "==": return actual == threshold
-            elif op == "!=": return actual != threshold
+            if op == ">=": return actual_num >= threshold
+            elif op == "<=": return actual_num <= threshold
+            elif op == ">": return actual_num > threshold
+            elif op == "<": return actual_num < threshold
+            elif op == "==": return actual_num == threshold
+            elif op == "!=": return actual_num != threshold
     
     return False
 
@@ -1800,7 +1813,12 @@ def apply_technical_penalties(indicators: dict, horizon: str) -> tuple:
     for rule in penalties:
         metric = rule["metric"]
         metric_data = indicators.get(metric)
-        actual = extract_metric_score(metric_data, metric, indicators)
+        
+        is_passthrough = METRIC_REGISTRY.get(metric, {}).get("scoring_type") == "passthrough"
+        if is_passthrough:
+            actual = extract_metric_score(metric_data, metric, indicators)
+        else:
+            actual = _extract_raw_value(metric_data)
 
         if actual is None:
             continue
@@ -1884,16 +1902,15 @@ def compute_technical_score(indicators: dict, horizon: str) -> dict:
     # Liquidity penalty
     liq_penalty, liq_reason = check_liquidity_penalty(indicators, horizon)
 
-    final_score = total_score
-    final_score -= penalty
-    final_score -= liq_penalty
-    final_score += bonus
-
-    final_score = round(max(0.0, min(10.0, final_score)), 2)
+    final_score_raw = total_score - penalty - liq_penalty + bonus
+    final_score = round(max(0.0, min(10.0, final_score_raw)), 2)
+    
+    if final_score_raw > 10.0:
+        logger.debug(f"[Technical Score] Clamped score from {final_score_raw:.2f} down to {final_score}")
    
     out = {
         "score": final_score,
-        "horizon":horizon,
+        "horizon": horizon,
         "base_score": round(total_score, 2),
         "category_scores": category_scores,
         "penalties": {
