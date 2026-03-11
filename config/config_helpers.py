@@ -24,7 +24,7 @@ from datetime import datetime, time
 from config.config_resolver import ConfigResolver, create_resolver
 
 from services.data_fetch import _get_val
-from config.config_helpers.logger_config import (
+from config.config_utility.logger_config import (
     METRICS,
     validate_required_keys,
     log_failures

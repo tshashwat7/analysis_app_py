@@ -16,12 +16,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import pandas as pd
-from config.config_helpers.logger_config import setup_logger
+from config.config_utility.logger_config import setup_logger
 from services.indicator_cache import compute_indicators_cached
 logger = setup_logger()
 
 # --- Modular services ---
-from config.config_helpers.market_utils import is_market_open, get_current_ist, get_current_utc,ensure_utc
+from config.config_utility.market_utils import is_market_open, get_current_ist, get_current_utc,ensure_utc
 from services.patterns.pattern_state_manager import cleanup_old_breakdown_states
 import threading
 from config.constants import ENABLE_CACHE_WARMER, ENABLE_JSON_ENRICHMENT, INDEX_TICKERS

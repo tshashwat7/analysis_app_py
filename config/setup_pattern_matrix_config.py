@@ -68,7 +68,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 98,
-        "default_confidence_floor": 55,
         "context_requirements": {
             "technical": {
                 "rvol": {"min": 1.5},
@@ -178,7 +177,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 97,
-        "default_confidence_floor": 55,
         "context_requirements": {
             "technical": {
                 "volatilityQuality": {"min": 6.0},
@@ -189,6 +187,16 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             },
             "fundamental": {
                 "required": False
+            }
+        },
+        "horizon_overrides": {
+            "multibagger": {
+                "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    }
+                }
             }
         },
         "validation_modifiers": {
@@ -246,6 +254,10 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 8.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "trendStrength": {"min": 3.5},
@@ -253,8 +265,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 65},
-                    "fundamentalScore": {"min": 8.0}
+                    "confidence": {"min": 65}
                 }
             }
         },
@@ -278,7 +289,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 96,
-        "default_confidence_floor": 55,
         "context_requirements": {
             "technical": {
                 "rvol": {"min": 1.2},
@@ -356,6 +366,10 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "trendStrength": {"min": 2.5},
@@ -363,8 +377,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 60},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 60}
                 }
             }
         },
@@ -388,7 +401,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 95,
-        "default_confidence_floor": 55,
         "context_requirements": {
             "technical": {
                 "rvol": {"min": 1.5},
@@ -501,7 +513,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 94,
-        "default_confidence_floor": 55,
         "context_requirements": {
             "technical": {
                 "rvol": {"min": 1.3},
@@ -579,6 +590,10 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "volatilityQuality": {"min": None},
@@ -586,8 +601,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 55},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 55}
                 }
             }
         },
@@ -611,7 +625,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 92,
-        "default_confidence_floor": 60,
         "context_requirements": {
             "technical": {
                 "trendStrength": {"min": 3.0},
@@ -676,6 +689,10 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "long_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 6.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "trendStrength": {"min": 2.5},
@@ -683,13 +700,16 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 55},
-                    "fundamentalScore": {"min": 6.0}
+                    "confidence": {"min": 55}
                 }
             },
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 8.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "trendStrength": {"min": 2.0},
@@ -697,8 +717,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 60},
-                    "fundamentalScore": {"min": 8.0}
+                    "confidence": {"min": 60}
                 }
             }
         },
@@ -725,7 +744,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 90,
-        "default_confidence_floor": 55,
         "context_requirements": {
             "technical": {
                 "bbpercentb": {"min": 0.98},
@@ -838,7 +856,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 88,
-        "default_confidence_floor": 55,
         "context_requirements": {
             "technical": {
                 "bbpercentb": {"max": 0.02},
@@ -956,7 +973,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 80,
-        "default_confidence_floor": 53,
         "context_requirements": {
             "technical": {
                 "trendStrength": {"min": 4.0},
@@ -1025,6 +1041,10 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "long_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 5.0}
+                    },
                     "technical": {
                         "adx": {"min": None},            # Relaxed for long_term
                         "trendStrength": {"min": 3.5},   # Lower requirement
@@ -1032,13 +1052,16 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 50},
-                    "fundamentalScore": {"min": 5.0}
+                    "confidence": {"min": 50}
                 }
             },
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "trendStrength": {"min": 3.0},   # Very relaxed
@@ -1046,8 +1069,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 55},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 55}
                 }
             }
         },
@@ -1070,7 +1092,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 75,
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "trendStrength": {"min": 3.5},
@@ -1186,7 +1207,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 70,
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "rsi": {"min": 55},
@@ -1240,14 +1260,17 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": 15},
                         "trendStrength": {"min": 4.0}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 55},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 55}
                 }
             }
         },
@@ -1291,7 +1314,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 55, # Matches master_config priority override
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "rsi": {"max": 45},
@@ -1404,7 +1426,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             ]
         },
         "default_priority": 78,
-        "default_confidence_floor": 45,
         "context_requirements": {
             "technical": {
                 "bbWidth": {"max": 5.0},
@@ -1438,13 +1459,16 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "short_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 6.0}
+                    },
                     "technical": {
                         "volatilityQuality": {"min": 2.5}  # Very relaxed
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 45},
-                    "fundamentalScore": {"min": 6.0}
+                    "confidence": {"min": 45}
                 }
             },
             
@@ -1456,24 +1480,24 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     },
                     "fundamental": {
-                        "dividendyield": {"min": 1.0}
+                        "dividendyield": {"min": 1.0},
+                        "fundamentalScore": {"min": 7.0}
                     }
                 },
                 "opportunity": {
                     "confidence": {"min": None},  # Will use setup default
-                    "fundamentalScore": {"min": 7.0}
                 }
             },
             
             "multibagger": {
                 "context_requirements": {
                     "fundamental": {
-                        "dividendyield": {"min": 1.0}
+                        "dividendyield": {"min": 1.0},
+                        "fundamentalScore": {"min": 8.0}
                     }
                 },
                 "opportunity": {
                     "confidence": {"min": 60},  # Higher bar for multibagger
-                    "fundamentalScore": {"min": 8.0}
                 }
             }
         },       
@@ -1529,7 +1553,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             ]
         },
         "default_priority": 82,
-        "default_confidence_floor": 45,
         "context_requirements": {
             "technical": {
                 "rsi": {"max": 35},
@@ -1561,13 +1584,16 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "short_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 6.0}
+                    },
                     "technical": {
                         "volatilityQuality": {"min": 2.0}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 40},
-                    "fundamentalScore": {"min": 6.0}
+                    "confidence": {"min": 40}
                 }
             },
             
@@ -1577,24 +1603,24 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     },
                     "fundamental": {
-                        "dividendyield": {"min": 1.5}
+                        "dividendyield": {"min": 1.5},
+                        "fundamentalScore": {"min": 7.0}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 35},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 35}
                 }
             },
             
             "multibagger": {
                 "context_requirements": {
                     "fundamental": {
-                        "dividendyield": {"min": 1.5}
+                        "dividendyield": {"min": 1.5},
+                        "fundamentalScore": {"min": 8.0}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 55},
-                    "fundamentalScore": {"min": 8.0}
+                    "confidence": {"min": 55}
                 }
             }
         },
@@ -1656,7 +1682,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             ]
         },
         "default_priority": 85,
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "trendStrength": {"min": 3.0, "max": 5.5},
@@ -1689,33 +1714,44 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "short_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 6.0}
+                    },
                     "technical": {
                         "volatilityQuality": {"min": None}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 50},
-                    "fundamentalScore": {"min": 6.0}
+                    "confidence": {"min": 50}
                 }
             },
             
             "long_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": 8},
                         "volatilityQuality": {"min": None}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 45},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 45}
                 }
             },
             
             "multibagger": {
+                "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 8.0}
+                    }
+                },
                 "opportunity": {
-                    "confidence": {"min": 65},
-                    "fundamentalScore": {"min": 8.0}
+                    "confidence": {"min": 65}
                 }
             }
         },
@@ -1766,7 +1802,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 85,
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "bbWidth": {"max": 0.5},
@@ -1870,7 +1905,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 75,
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "macdhistogram": {"min": 0},
@@ -1935,27 +1969,33 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "long_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 6.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "volatilityQuality": {"min": None}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 48},
-                    "fundamentalScore": {"min": 6.0}
+                    "confidence": {"min": 48}
                 }
             },
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "volatilityQuality": {"min": None}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 50},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 50}
                 }
             }
         },
@@ -1978,7 +2018,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 72,
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "rsi": {"max": 35},
@@ -2044,27 +2083,33 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "long_term": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 5.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "volatilityQuality": {"min": None}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 45},
-                    "fundamentalScore": {"min": 5.0}
+                    "confidence": {"min": 45}
                 }
             },
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "volatilityQuality": {"min": None}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 50},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 50}
                 }
             }
         },
@@ -2087,7 +2132,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 70,
-        "default_confidence_floor": 50,
         "context_requirements": {
             "technical": {
                 "rvol": {"min": 1.2},
@@ -2142,14 +2186,17 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             
             "multibagger": {
                 "context_requirements": {
+                    "fundamental": {
+                        "required": True,
+                        "fundamentalScore": {"min": 7.0}
+                    },
                     "technical": {
                         "adx": {"min": None},
                         "trendStrength": {"min": None}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 55},
-                    "fundamentalScore": {"min": 7.0}
+                    "confidence": {"min": 55}
                 }
             }
         },
@@ -2177,7 +2224,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": True
         },
         "default_priority": 80,
-        "default_confidence_floor": 45,
         "context_requirements": {
             "technical": {
                 "trendStrength": {"max": 3.0},
@@ -2227,12 +2273,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "fundamental": {
                         "required": True,
                         "roe": {"min": 18},      # Slightly relaxed
-                        "roce": {"min": 22}
+                        "roce": {"min": 22},
+                        "fundamentalScore": {"min": 6.0}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 40},
-                    "fundamentalScore": {"min": 6.0}
+                    "confidence": {"min": 40}
                 }
             },
             
@@ -2247,12 +2293,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "required": True,
                         "roe": {"min": 20},
                         "roce": {"min": 25},
-                        "deRatio": {"max": 0.5}
+                        "deRatio": {"max": 0.5},
+                        "fundamentalScore": {"min": 7.0}
                     }
                 },
                 "opportunity": {
                     "confidence": {"min": None},  # Use default
-                    "fundamentalScore": {"min": 7.0}
                 }
             },
             
@@ -2262,12 +2308,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "required": True,
                         "roe": {"min": 22},      # Higher bar for multibagger
                         "roce": {"min": 28},
-                        "deRatio": {"max": 0.4}
+                        "deRatio": {"max": 0.4},
+                        "fundamentalScore": {"min": 8.0}
                     }
                 },
                 "opportunity": {
-                    "confidence": {"min": 55},
-                    "fundamentalScore": {"min": 8.0}
+                    "confidence": {"min": 55}
                 }
             }
         },
@@ -2290,7 +2336,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 70,
-        "default_confidence_floor": 45,
         "context_requirements": {
             "technical": {
                 "bbWidth": {"max": 5.0},
@@ -2371,7 +2416,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 60,
-        "default_confidence_floor": 40,
         "context_requirements": {
             "technical": {
                 "bbWidth": {"max": 5.0},
@@ -2451,7 +2495,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "require_fundamentals": False
         },
         "default_priority": 10,
-        "default_confidence_floor": 40,  # aligned with confidence_config.GENERIC
         "context_requirements": {
             # GENERIC keeps requirements very loose – last-resort setup
             "technical": {
@@ -2787,8 +2830,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "conditions": [
                     "volatilityQuality <= 2.5",
                     "price >= pivot_point * 1.005",
-                    "position52w >= 65",
-                    "fundamentalScore >= 7.0"
+                    "position52w >= 65"
                 ]
             }
         },

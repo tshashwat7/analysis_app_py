@@ -29,7 +29,7 @@ import pandas_ta as ta
 import yfinance as yf
 
 # --- Import the Parquet Engine ---
-from config.config_helpers.market_utils import is_market_open
+from config.config_utility.market_utils import is_market_open
 from services.data_layer import ParquetStore
 
 # Config imports with safe fallbacks

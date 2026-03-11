@@ -1,11 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <title>Result - {{ symbol }}</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap"
+    rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <style>
@@ -13,32 +16,36 @@
        DESIGN TOKENS
     ═══════════════════════════════════════════ */
     :root {
-      --bg:          #0d0f14;
-      --surface:     #141720;
-      --surface2:    #1a1e2e;
-      --border:      #242840;
-      --border2:     #2e3450;
-      --text:        #e2e8f0;
-      --muted:       #6b7a99;
-      --muted2:      #8892aa;
-      --accent:      #3b82f6;
-      --accent2:     #60a5fa;
-      --green:       #22c55e;
-      --green-dim:   rgba(22,163,74,0.2);
-      --red:         #ef4444;
-      --red-dim:     rgba(220,38,38,0.2);
-      --yellow:      #f59e0b;
-      --yellow-dim:  rgba(217,119,6,0.2);
-      --cyan:        #06b6d4;
-      --purple:      #8b5cf6;
-      --font-mono:   'IBM Plex Mono', monospace;
-      --font-sans:   'IBM Plex Sans', sans-serif;
+      --bg: #0d0f14;
+      --surface: #141720;
+      --surface2: #1a1e2e;
+      --border: #242840;
+      --border2: #2e3450;
+      --text: #e2e8f0;
+      --muted: #6b7a99;
+      --muted2: #8892aa;
+      --accent: #3b82f6;
+      --accent2: #60a5fa;
+      --green: #22c55e;
+      --green-dim: rgba(22, 163, 74, 0.2);
+      --red: #ef4444;
+      --red-dim: rgba(220, 38, 38, 0.2);
+      --yellow: #f59e0b;
+      --yellow-dim: rgba(217, 119, 6, 0.2);
+      --cyan: #06b6d4;
+      --purple: #8b5cf6;
+      --font-mono: 'IBM Plex Mono', monospace;
+      --font-sans: 'IBM Plex Sans', sans-serif;
     }
 
     /* ═══════════════════════════════════════════
        RESET & BASE
     ═══════════════════════════════════════════ */
-    *, *::before, *::after { box-sizing: border-box; }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
 
     body {
       font-family: var(--font-sans);
@@ -53,8 +60,8 @@
       position: fixed;
       inset: 0;
       background-image:
-        linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+        linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
       background-size: 40px 40px;
       pointer-events: none;
       z-index: 0;
@@ -81,7 +88,9 @@
       overflow: hidden;
     }
 
-    .panel-accent-left { border-left: 3px solid var(--accent); }
+    .panel-accent-left {
+      border-left: 3px solid var(--accent);
+    }
 
     .panel-header {
       display: flex;
@@ -96,20 +105,48 @@
       color: var(--muted);
     }
 
-    .panel-header-right { margin-left: auto; }
+    .panel-header-right {
+      margin-left: auto;
+    }
 
-    .panel-body { padding: 14px; }
-    .panel-body-flush { padding: 0; }
+    .panel-body {
+      padding: 14px;
+    }
 
-    .panel-col-divider { border-right: 1px solid var(--border); }
+    .panel-body-flush {
+      padding: 0;
+    }
+
+    .panel-col-divider {
+      border-right: 1px solid var(--border);
+    }
 
     /* ── indicator dots ── */
-    .dot { width: 6px; height: 6px; border-radius: 50%; }
-    .dot-accent  { background: var(--accent); }
-    .dot-cyan    { background: var(--cyan); }
-    .dot-green   { background: var(--green); }
-    .dot-yellow  { background: var(--yellow); }
-    .dot-purple  { background: var(--purple); }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .dot-accent {
+      background: var(--accent);
+    }
+
+    .dot-cyan {
+      background: var(--cyan);
+    }
+
+    .dot-green {
+      background: var(--green);
+    }
+
+    .dot-yellow {
+      background: var(--yellow);
+    }
+
+    .dot-purple {
+      background: var(--purple);
+    }
 
     /* ═══════════════════════════════════════════
        HEADER BAR
@@ -126,9 +163,23 @@
       flex-wrap: wrap;
     }
 
-    .header-identity { flex: 1; display: flex; align-items: center; gap: 16px; }
-    .header-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-    .header-price { margin-left: 8px; }
+    .header-identity {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .header-price {
+      margin-left: 8px;
+    }
 
     .stock-name {
       font-size: 1.35rem;
@@ -154,7 +205,9 @@
       border-radius: 4px;
     }
 
-    .stock-tag-dim { color: var(--muted); }
+    .stock-tag-dim {
+      color: var(--muted);
+    }
 
     .stock-52w {
       font-family: var(--font-mono);
@@ -188,16 +241,22 @@
       gap: 6px;
     }
 
-    .horizon-tab:hover { color: var(--text); background: var(--border); }
+    .horizon-tab:hover {
+      color: var(--text);
+      background: var(--border);
+    }
 
-    .horizon-tab.active { background: var(--accent); color: #fff; }
+    .horizon-tab.active {
+      background: var(--accent);
+      color: #fff;
+    }
 
     .horizon-tab .score-pill {
       font-family: var(--font-mono);
       font-size: 0.65rem;
       padding: 1px 5px;
       border-radius: 3px;
-      background: rgba(0,0,0,0.25);
+      background: rgba(0, 0, 0, 0.25);
     }
 
     /* ═══════════════════════════════════════════
@@ -223,23 +282,42 @@
       border-radius: 6px;
     }
 
-    .signal-buy, .signal-strong {
-      background: var(--green-dim); color: var(--green); border: 1px solid var(--green);
+    .signal-buy,
+    .signal-strong {
+      background: var(--green-dim);
+      color: var(--green);
+      border: 1px solid var(--green);
     }
-    .signal-sell, .signal-avoid {
-      background: var(--red-dim); color: var(--red); border: 1px solid var(--red);
+
+    .signal-sell,
+    .signal-avoid {
+      background: var(--red-dim);
+      color: var(--red);
+      border: 1px solid var(--red);
     }
-    .signal-hold, .signal-watch, .signal-moderate {
-      background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow);
+
+    .signal-hold,
+    .signal-watch,
+    .signal-moderate {
+      background: var(--yellow-dim);
+      color: var(--yellow);
+      border: 1px solid var(--yellow);
     }
+
     .signal-blocked {
-      background: var(--red-dim); color: var(--red); border: 1px solid var(--red);
+      background: var(--red-dim);
+      color: var(--red);
+      border: 1px solid var(--red);
     }
 
     /* ═══════════════════════════════════════════
        SCORE DISPLAY
     ═══════════════════════════════════════════ */
-    .score-display { display: flex; flex-direction: column; align-items: center; }
+    .score-display {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
 
     .score-value {
       font-family: var(--font-mono);
@@ -256,17 +334,35 @@
       margin-top: 2px;
     }
 
-    .score-green  { color: #22c55e; }
-    .score-amber  { color: #f59e0b; }
-    .score-red    { color: #ef4444; }
-    .score-accent { color: var(--accent2); }
+    .score-green {
+      color: #22c55e;
+    }
+
+    .score-amber {
+      color: #f59e0b;
+    }
+
+    .score-red {
+      color: #ef4444;
+    }
+
+    .score-accent {
+      color: var(--accent2);
+    }
 
     /* ═══════════════════════════════════════════
        HEADER RIGHT CLUSTER
     ═══════════════════════════════════════════ */
-    .header-actions { display: flex; align-items: center; gap: 12px; }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
 
-    .conf-label { font-size: 0.7rem; color: var(--muted); }
+    .conf-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
 
     .conf-value {
       font-family: var(--font-mono);
@@ -284,7 +380,10 @@
       cursor: pointer;
     }
 
-    .btn-pdf:hover { color: var(--text); border-color: var(--border2); }
+    .btn-pdf:hover {
+      color: var(--text);
+      border-color: var(--border2);
+    }
 
     /* ═══════════════════════════════════════════
        CONFLICT BANNER
@@ -301,9 +400,22 @@
       align-items: flex-start;
     }
 
-    .conflict-icon { color: var(--yellow); font-size: 1.1rem; flex-shrink: 0; margin-top: 2px; }
-    .conflict-body { flex: 1; }
-    .conflict-title { font-weight: 600; font-size: 0.82rem; color: var(--yellow); }
+    .conflict-icon {
+      color: var(--yellow);
+      font-size: 1.1rem;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .conflict-body {
+      flex: 1;
+    }
+
+    .conflict-title {
+      font-weight: 600;
+      font-size: 0.82rem;
+      color: var(--yellow);
+    }
 
     .conflict-text {
       font-size: 0.75rem;
@@ -311,10 +423,19 @@
       margin-top: 4px;
     }
 
-    .conflict-text b { color: var(--text); }
-    .conflict-text .hl-yellow { color: var(--yellow); font-weight: 600; }
+    .conflict-text b {
+      color: var(--text);
+    }
 
-    .conflict-aside { flex-shrink: 0; text-align: right; }
+    .conflict-text .hl-yellow {
+      color: var(--yellow);
+      font-weight: 600;
+    }
+
+    .conflict-aside {
+      flex-shrink: 0;
+      text-align: right;
+    }
 
     .conflict-rr {
       font-family: var(--font-mono);
@@ -348,12 +469,35 @@
       border-radius: 4px;
     }
 
-    .pill-green  { background: var(--green-dim); color: var(--green); }
-    .pill-red    { background: var(--red-dim);   color: var(--red); }
-    .pill-yellow { background: var(--yellow-dim);color: var(--yellow); }
-    .pill-blue   { background: rgba(59,130,246,0.15); color: var(--accent2); }
-    .pill-muted  { background: var(--surface2);  color: var(--muted); }
-    .pill-block  { display: block; margin-bottom: 4px; }
+    .pill-green {
+      background: var(--green-dim);
+      color: var(--green);
+    }
+
+    .pill-red {
+      background: var(--red-dim);
+      color: var(--red);
+    }
+
+    .pill-yellow {
+      background: var(--yellow-dim);
+      color: var(--yellow);
+    }
+
+    .pill-blue {
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent2);
+    }
+
+    .pill-muted {
+      background: var(--surface2);
+      color: var(--muted);
+    }
+
+    .pill-block {
+      display: block;
+      margin-bottom: 4px;
+    }
 
     /* ═══════════════════════════════════════════
        STRATEGY CARDS
@@ -368,12 +512,12 @@
 
     .strat-card.best {
       border-color: var(--accent);
-      background: linear-gradient(135deg, rgba(59,130,246,0.08), rgba(59,130,246,0.03));
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(59, 130, 246, 0.03));
     }
 
     .strat-card.qualified {
       border-color: #1a3a1a;
-      background: rgba(34,197,94,0.04);
+      background: rgba(34, 197, 94, 0.04);
     }
 
     .strat-winner-label {
@@ -390,9 +534,17 @@
       margin-top: 2px;
     }
 
-    .strat-winner-desc { font-size: 0.72rem; color: var(--muted); margin-top: 3px; }
+    .strat-winner-desc {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 3px;
+    }
 
-    .strat-breakdown { display: flex; gap: 8px; margin-top: 12px; }
+    .strat-breakdown {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
 
     .strat-breakdown-cell {
       flex: 1;
@@ -401,9 +553,17 @@
       padding: 6px;
     }
 
-    .sbc-blue   { background: rgba(59,130,246,0.08); }
-    .sbc-green  { background: rgba(34,197,94,0.06); }
-    .sbc-yellow { background: rgba(245,158,11,0.06); }
+    .sbc-blue {
+      background: rgba(59, 130, 246, 0.08);
+    }
+
+    .sbc-green {
+      background: rgba(34, 197, 94, 0.06);
+    }
+
+    .sbc-yellow {
+      background: rgba(245, 158, 11, 0.06);
+    }
 
     .sbc-val {
       font-family: var(--font-mono);
@@ -411,9 +571,17 @@
       font-weight: 700;
     }
 
-    .sbc-val-blue   { color: var(--accent2); }
-    .sbc-val-green  { color: var(--green); }
-    .sbc-val-yellow { color: var(--yellow); }
+    .sbc-val-blue {
+      color: var(--accent2);
+    }
+
+    .sbc-val-green {
+      color: var(--green);
+    }
+
+    .sbc-val-yellow {
+      color: var(--yellow);
+    }
 
     .sbc-lbl {
       font-size: 0.58rem;
@@ -428,18 +596,40 @@
       font-weight: 600;
     }
 
-    .strat-cand-name-pass { color: var(--green); }
-    .strat-cand-name-fail { color: var(--muted); }
+    .strat-cand-name-pass {
+      color: var(--green);
+    }
 
-    .strat-unavail { color: var(--muted); font-size: 0.78rem; padding: 16px 0; text-align: center; }
+    .strat-cand-name-fail {
+      color: var(--muted);
+    }
+
+    .strat-unavail {
+      color: var(--muted);
+      font-size: 0.78rem;
+      padding: 16px 0;
+      text-align: center;
+    }
 
     /* ═══════════════════════════════════════════
        SCORE DRIVER TABLE
     ═══════════════════════════════════════════ */
-    .td-muted2 { color: var(--muted2); }
-    .td-muted  { color: var(--muted); text-align: center; }
-    .td-center { text-align: center; }
-    .td-fw6    { font-weight: 600; }
+    .td-muted2 {
+      color: var(--muted2);
+    }
+
+    .td-muted {
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .td-center {
+      text-align: center;
+    }
+
+    .td-fw6 {
+      font-weight: 600;
+    }
 
     .drag-header {
       font-size: 0.65rem;
@@ -450,7 +640,12 @@
       margin-bottom: 6px;
     }
 
-    .drag-list { margin: 0; padding-left: 14px; font-size: 0.73rem; color: var(--muted2); }
+    .drag-list {
+      margin: 0;
+      padding-left: 14px;
+      font-size: 0.73rem;
+      color: var(--muted2);
+    }
 
     /* ═══════════════════════════════════════════
        SETUP SIGNAL PANEL
@@ -460,7 +655,11 @@
       text-align: center;
     }
 
-    .signal-reason { font-size: 0.72rem; color: var(--muted); margin: 8px 0; }
+    .signal-reason {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin: 8px 0;
+    }
 
     .conf-row {
       display: flex;
@@ -470,7 +669,9 @@
       margin-bottom: 3px;
     }
 
-    .conf-row-val { font-family: var(--font-mono); }
+    .conf-row-val {
+      font-family: var(--font-mono);
+    }
 
     .conf-track {
       width: 100%;
@@ -481,11 +682,23 @@
       margin-top: 4px;
     }
 
-    .conf-fill { height: 100%; border-radius: 2px; transition: width 1s ease; }
+    .conf-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 1s ease;
+    }
 
-    .conf-fill-green  { background: #22c55e; }
-    .conf-fill-amber  { background: #f59e0b; }
-    .conf-fill-red    { background: #ef4444; }
+    .conf-fill-green {
+      background: #22c55e;
+    }
+
+    .conf-fill-amber {
+      background: #f59e0b;
+    }
+
+    .conf-fill-red {
+      background: #ef4444;
+    }
 
     /* ═══════════════════════════════════════════
        GATE LIST
@@ -499,7 +712,9 @@
       margin-bottom: 6px;
     }
 
-    .gate-section-lbl-mt { margin-top: 8px; }
+    .gate-section-lbl-mt {
+      margin-top: 8px;
+    }
 
     .gate-item {
       display: flex;
@@ -510,19 +725,33 @@
       font-size: 0.72rem;
     }
 
-    .gate-item:last-child { border-bottom: none; }
+    .gate-item:last-child {
+      border-bottom: none;
+    }
 
-    .gate-name { color: var(--muted2); }
-    .gate-pass { color: var(--green); }
-    .gate-fail { color: var(--red); font-weight: 600; }
-    .gate-skip { color: var(--muted); }
+    .gate-name {
+      color: var(--muted2);
+    }
+
+    .gate-pass {
+      color: var(--green);
+    }
+
+    .gate-fail {
+      color: var(--red);
+      font-weight: 600;
+    }
+
+    .gate-skip {
+      color: var(--muted);
+    }
 
     /* ═══════════════════════════════════════════
        SETUP EVALUATION
     ═══════════════════════════════════════════ */
     .setup-selected {
-      background: linear-gradient(135deg, rgba(59,130,246,0.1), rgba(59,130,246,0.03));
-      border: 1px solid rgba(59,130,246,0.4);
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(59, 130, 246, 0.03));
+      border: 1px solid rgba(59, 130, 246, 0.4);
       border-radius: 8px;
       padding: 14px;
       margin-bottom: 12px;
@@ -542,13 +771,23 @@
       margin-top: 3px;
     }
 
-    .setup-meta { font-size: 0.72rem; color: var(--muted); margin-top: 3px; }
-    .setup-meta-mono { font-family: var(--font-mono); }
+    .setup-meta {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 3px;
+    }
 
-    .setup-needs-lbl { font-size: 0.62rem; color: var(--muted); }
+    .setup-meta-mono {
+      font-family: var(--font-mono);
+    }
+
+    .setup-needs-lbl {
+      font-size: 0.62rem;
+      color: var(--muted);
+    }
 
     .setup-none {
-      background: rgba(245,158,11,0.07);
+      background: rgba(245, 158, 11, 0.07);
       border: 1px solid #3a2800;
       border-radius: 6px;
       padding: 10px 12px;
@@ -557,11 +796,27 @@
       color: var(--yellow);
     }
 
-    .setup-none-dim { color: var(--muted); }
+    .setup-none-dim {
+      color: var(--muted);
+    }
 
-    .setup-qualified-name { font-size: 0.78rem; font-weight: 600; color: var(--green); }
-    .setup-qualified-meta { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
-    .setup-empty-msg { font-size: 0.75rem; color: var(--muted); font-style: italic; }
+    .setup-qualified-name {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--green);
+    }
+
+    .setup-qualified-meta {
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .setup-empty-msg {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-style: italic;
+    }
 
     /* ─ Rejected reason tags ─ */
     .reason-tag {
@@ -573,14 +828,40 @@
       text-transform: uppercase;
     }
 
-    .reason-pattern     { background: rgba(245,158,11,0.15); color: var(--yellow); }
-    .reason-technical   { background: rgba(6,182,212,0.15);  color: var(--cyan); }
-    .reason-fundamental { background: rgba(139,92,246,0.15); color: var(--purple); }
-    .reason-horizon     { background: rgba(107,122,153,0.15);color: var(--muted2); }
-    .reason-other       { background: var(--surface2);       color: var(--muted); }
+    .reason-pattern {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--yellow);
+    }
 
-    .reason-count { font-size: 0.62rem; color: var(--muted); }
-    .reason-icon  { font-size: 0.65rem; color: var(--muted); }
+    .reason-technical {
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--cyan);
+    }
+
+    .reason-fundamental {
+      background: rgba(139, 92, 246, 0.15);
+      color: var(--purple);
+    }
+
+    .reason-horizon {
+      background: rgba(107, 122, 153, 0.15);
+      color: var(--muted2);
+    }
+
+    .reason-other {
+      background: var(--surface2);
+      color: var(--muted);
+    }
+
+    .reason-count {
+      font-size: 0.62rem;
+      color: var(--muted);
+    }
+
+    .reason-icon {
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
 
     /* ═══════════════════════════════════════════
        ANALYSIS BOXES
@@ -592,10 +873,12 @@
       padding: 10px 12px;
       font-size: 0.78rem;
       margin-bottom: 8px;
-      background: rgba(59,130,246,0.05);
+      background: rgba(59, 130, 246, 0.05);
     }
 
-    .analysis-box strong { color: var(--accent2); }
+    .analysis-box strong {
+      color: var(--accent2);
+    }
 
     .score-box {
       border: 1px solid var(--border);
@@ -603,10 +886,12 @@
       border-radius: 4px;
       padding: 10px 12px;
       font-size: 0.78rem;
-      background: rgba(34,197,94,0.04);
+      background: rgba(34, 197, 94, 0.04);
     }
 
-    .score-box strong { color: var(--green); }
+    .score-box strong {
+      color: var(--green);
+    }
 
     /* ═══════════════════════════════════════════
        TRADE PLAN
@@ -621,10 +906,14 @@
       border-radius: 3px;
     }
 
-    .btn-dashboard:hover { color: var(--text); }
+    .btn-dashboard:hover {
+      color: var(--text);
+    }
 
     /* RR bar */
-    .rr-wrapper { margin-bottom: 14px; }
+    .rr-wrapper {
+      margin-bottom: 14px;
+    }
 
     .rr-bar-track {
       position: relative;
@@ -634,12 +923,58 @@
       margin-top: 20px;
     }
 
-    .rr-lbl-sl   { position: absolute; left: 0;   top: -16px; font-size: 0.58rem; font-weight: 700; color: var(--red); font-family: var(--font-mono); }
-    .rr-lbl-en   { position: absolute; left: 50%; transform: translateX(-50%); top: -16px; font-size: 0.58rem; font-weight: 700; color: var(--accent2); font-family: var(--font-mono); }
-    .rr-lbl-t1   { position: absolute; right: 0;  top: -16px; font-size: 0.58rem; font-weight: 700; color: var(--green); font-family: var(--font-mono); }
+    .rr-lbl-sl {
+      position: absolute;
+      left: 0;
+      top: -16px;
+      font-size: 0.58rem;
+      font-weight: 700;
+      color: var(--red);
+      font-family: var(--font-mono);
+    }
 
-    .rr-fill-sl  { position: absolute; left: 0;   top: 0; width: 50%; height: 100%; background: var(--red);   opacity: 0.4; border-radius: 3px 0 0 3px; }
-    .rr-fill-t1  { position: absolute; right: 0;  top: 0; width: 50%; height: 100%; background: var(--green); opacity: 0.4; border-radius: 0 3px 3px 0; }
+    .rr-lbl-en {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      top: -16px;
+      font-size: 0.58rem;
+      font-weight: 700;
+      color: var(--accent2);
+      font-family: var(--font-mono);
+    }
+
+    .rr-lbl-t1 {
+      position: absolute;
+      right: 0;
+      top: -16px;
+      font-size: 0.58rem;
+      font-weight: 700;
+      color: var(--green);
+      font-family: var(--font-mono);
+    }
+
+    .rr-fill-sl {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 50%;
+      height: 100%;
+      background: var(--red);
+      opacity: 0.4;
+      border-radius: 3px 0 0 3px;
+    }
+
+    .rr-fill-t1 {
+      position: absolute;
+      right: 0;
+      top: 0;
+      width: 50%;
+      height: 100%;
+      background: var(--green);
+      opacity: 0.4;
+      border-radius: 0 3px 3px 0;
+    }
 
     .rr-prices {
       display: flex;
@@ -650,7 +985,10 @@
       margin-top: 6px;
     }
 
-    .rr-prices-entry { font-weight: 700; color: var(--text); }
+    .rr-prices-entry {
+      font-weight: 700;
+      color: var(--text);
+    }
 
     /* Entry/SL box */
     .exec-box {
@@ -667,7 +1005,9 @@
       border-right: 1px solid var(--border);
     }
 
-    .exec-cell:last-child { border-right: none; }
+    .exec-cell:last-child {
+      border-right: none;
+    }
 
     .exec-num {
       font-family: var(--font-mono);
@@ -676,8 +1016,14 @@
       line-height: 1;
     }
 
-    .exec-num-sm { font-size: 1.05rem; }
-    .exec-num-hold { font-size: 1rem; color: var(--muted2); }
+    .exec-num-sm {
+      font-size: 1.05rem;
+    }
+
+    .exec-num-hold {
+      font-size: 1rem;
+      color: var(--muted2);
+    }
 
     .exec-lbl {
       font-size: 0.6rem;
@@ -692,22 +1038,56 @@
       font-size: 0.65rem;
     }
 
-    .exec-entry-color { color: var(--accent2); }
-    .exec-sl-color    { color: var(--red); }
-    .exec-muted-color { color: var(--muted); }
-    .exec-t-color     { color: var(--green); }
+    .exec-entry-color {
+      color: var(--accent2);
+    }
+
+    .exec-sl-color {
+      color: var(--red);
+    }
+
+    .exec-muted-color {
+      color: var(--muted);
+    }
+
+    .exec-t-color {
+      color: var(--green);
+    }
 
     /* Execution hints */
-    .hint-block { display: flex; gap: 10px; align-items: flex-start; }
-    .hint-icon  { font-size: 1.1rem; flex-shrink: 0; margin-top: 1px; }
-    .hint-icon-green  { color: var(--green); }
-    .hint-icon-accent { color: var(--accent2); }
+    .hint-block {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
 
-    .hint-title { font-size: 0.72rem; font-weight: 600; margin-bottom: 3px; }
-    .hint-text  { font-size: 0.7rem; color: var(--muted); }
+    .hint-icon {
+      font-size: 1.1rem;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .hint-icon-green {
+      color: var(--green);
+    }
+
+    .hint-icon-accent {
+      color: var(--accent2);
+    }
+
+    .hint-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      margin-bottom: 3px;
+    }
+
+    .hint-text {
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
 
     .caution-box {
-      background: rgba(245,158,11,0.07);
+      background: rgba(245, 158, 11, 0.07);
       border: 1px solid #4a3500;
       border-radius: 4px;
       padding: 8px 10px;
@@ -726,7 +1106,10 @@
       gap: 6px;
     }
 
-    .no-trade-icon { font-size: 1.5rem; opacity: 0.4; }
+    .no-trade-icon {
+      font-size: 1.5rem;
+      opacity: 0.4;
+    }
 
     /* ═══════════════════════════════════════════
        PATTERN RADAR
@@ -739,29 +1122,63 @@
       margin-bottom: 6px;
     }
 
-    .pattern-item.bull { border-left: 3px solid var(--green); }
-    .pattern-item.bear { border-left: 3px solid var(--red); }
+    .pattern-item.bull {
+      border-left: 3px solid var(--green);
+    }
 
-    .pattern-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .pattern-item.bear {
+      border-left: 3px solid var(--red);
+    }
 
-    .pattern-title { font-size: 0.8rem; font-weight: 600; }
-    .pattern-title-bull { color: var(--green); }
-    .pattern-title-bear { color: var(--red); }
+    .pattern-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .pattern-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .pattern-title-bull {
+      color: var(--green);
+    }
+
+    .pattern-title-bear {
+      color: var(--red);
+    }
 
     .pattern-detail {
       font-size: 0.72rem;
       color: var(--muted);
-      background: rgba(0,0,0,0.2);
+      background: rgba(0, 0, 0, 0.2);
       border-radius: 4px;
       padding: 6px 8px;
       margin-top: 4px;
     }
 
-    .pattern-detail-key { color: var(--muted2); }
-    .pattern-detail-implies { color: var(--accent2); }
+    .pattern-detail-key {
+      color: var(--muted2);
+    }
 
-    .no-patterns { padding: 24px; color: var(--muted); text-align: center; }
-    .no-patterns-icon { font-size: 1.5rem; opacity: 0.3; display: block; margin-bottom: 6px; }
+    .pattern-detail-implies {
+      color: var(--accent2);
+    }
+
+    .no-patterns {
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .no-patterns-icon {
+      font-size: 1.5rem;
+      opacity: 0.3;
+      display: block;
+      margin-bottom: 6px;
+    }
 
     /* ═══════════════════════════════════════════
        META TAGS
@@ -776,25 +1193,63 @@
       color: var(--muted2);
     }
 
-    .meta-tag b { color: var(--text); }
+    .meta-tag b {
+      color: var(--text);
+    }
 
     /* ═══════════════════════════════════════════
        CORPORATE ACTIONS TABLE
     ═══════════════════════════════════════════ */
-    .corp-upcoming { color: var(--green); font-weight: 600; }
-    .corp-past     { color: var(--muted); }
-    .corp-failed   { color: var(--red); }
-    .corp-loading  { text-align: center; color: var(--muted); padding: 12px; }
+    .corp-upcoming {
+      color: var(--green);
+      font-weight: 600;
+    }
+
+    .corp-past {
+      color: var(--muted);
+    }
+
+    .corp-failed {
+      color: var(--red);
+    }
+
+    .corp-loading {
+      text-align: center;
+      color: var(--muted);
+      padding: 12px;
+    }
 
     /* ═══════════════════════════════════════════
        FUNDAMENTALS / TECHNICALS TABLE
     ═══════════════════════════════════════════ */
-    .td-used-text   { color: var(--text);  font-weight: 600; }
-    .td-unused-text { color: var(--muted); font-weight: 400; }
-    .td-used-mono   { font-family: var(--font-mono); font-weight: 600; }
-    .td-unused-mono { font-family: var(--font-mono); font-weight: 400; }
-    .td-used-indicator   { text-align: center; font-size: 0.7rem; }
-    .tbl-th-icon { width: 24px; }
+    .td-used-text {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .td-unused-text {
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .td-used-mono {
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    .td-unused-mono {
+      font-family: var(--font-mono);
+      font-weight: 400;
+    }
+
+    .td-used-indicator {
+      text-align: center;
+      font-size: 0.7rem;
+    }
+
+    .tbl-th-icon {
+      width: 24px;
+    }
 
     /* ═══════════════════════════════════════════
        TABLE SYSTEM
@@ -822,17 +1277,37 @@
       vertical-align: middle;
     }
 
-    .tbl tr:last-child td { border-bottom: none; }
-    .tbl tr.used td { background: rgba(59,130,246,0.04); }
-    .tbl tr:hover td { background: var(--surface2); }
+    .tbl tr:last-child td {
+      border-bottom: none;
+    }
+
+    .tbl tr.used td {
+      background: rgba(59, 130, 246, 0.04);
+    }
+
+    .tbl tr:hover td {
+      background: var(--surface2);
+    }
 
     /* ═══════════════════════════════════════════
        SCROLLABLE
     ═══════════════════════════════════════════ */
-    .scrollable { overflow-y: auto; }
-    .scrollable::-webkit-scrollbar { width: 3px; }
-    .scrollable::-webkit-scrollbar-track { background: transparent; }
-    .scrollable::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+    .scrollable {
+      overflow-y: auto;
+    }
+
+    .scrollable::-webkit-scrollbar {
+      width: 3px;
+    }
+
+    .scrollable::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .scrollable::-webkit-scrollbar-thumb {
+      background: var(--border2);
+      border-radius: 2px;
+    }
 
     /* ═══════════════════════════════════════════
        ACCORDION (dark theme overrides)
@@ -850,10 +1325,12 @@
 
     .accordion-button:not(.collapsed) {
       color: var(--accent2) !important;
-      background: rgba(59,130,246,0.08) !important;
+      background: rgba(59, 130, 246, 0.08) !important;
     }
 
-    .accordion-button::after { filter: invert(0.5); }
+    .accordion-button::after {
+      filter: invert(0.5);
+    }
 
     .accordion-body {
       background: var(--surface) !important;
@@ -894,39 +1371,103 @@
     /* ═══════════════════════════════════════════
        MISC UTILITIES
     ═══════════════════════════════════════════ */
-    .mono        { font-family: var(--font-mono); }
-    .clr-muted   { color: var(--muted); }
-    .clr-muted2  { color: var(--muted2); }
-    .clr-text    { color: var(--text); }
-    .clr-green   { color: var(--green); }
-    .clr-red     { color: var(--red); }
-    .clr-yellow  { color: var(--yellow); }
-    .clr-accent2 { color: var(--accent2); }
-    .clr-cyan    { color: var(--cyan); }
+    .mono {
+      font-family: var(--font-mono);
+    }
 
-    .divider { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+    .clr-muted {
+      color: var(--muted);
+    }
 
-    .fs-58  { font-size: 0.58rem; }
-    .fs-60  { font-size: 0.60rem; }
-    .fs-62  { font-size: 0.62rem; }
-    .fs-65  { font-size: 0.65rem; }
-    .fs-70  { font-size: 0.70rem; }
-    .fs-72  { font-size: 0.72rem; }
-    .fs-75  { font-size: 0.75rem; }
-    .fs-78  { font-size: 0.78rem; }
-    .fs-80  { font-size: 0.80rem; }
-    .lbl-upper { text-transform: uppercase; letter-spacing: 0.07em; }
+    .clr-muted2 {
+      color: var(--muted2);
+    }
+
+    .clr-text {
+      color: var(--text);
+    }
+
+    .clr-green {
+      color: var(--green);
+    }
+
+    .clr-red {
+      color: var(--red);
+    }
+
+    .clr-yellow {
+      color: var(--yellow);
+    }
+
+    .clr-accent2 {
+      color: var(--accent2);
+    }
+
+    .clr-cyan {
+      color: var(--cyan);
+    }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 10px 0;
+    }
+
+    .fs-58 {
+      font-size: 0.58rem;
+    }
+
+    .fs-60 {
+      font-size: 0.60rem;
+    }
+
+    .fs-62 {
+      font-size: 0.62rem;
+    }
+
+    .fs-65 {
+      font-size: 0.65rem;
+    }
+
+    .fs-70 {
+      font-size: 0.70rem;
+    }
+
+    .fs-72 {
+      font-size: 0.72rem;
+    }
+
+    .fs-75 {
+      font-size: 0.75rem;
+    }
+
+    .fs-78 {
+      font-size: 0.78rem;
+    }
+
+    .fs-80 {
+      font-size: 0.80rem;
+    }
+
+    .lbl-upper {
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
 
     /* ═══════════════════════════════════════════
        STICKY FOOTER
     ═══════════════════════════════════════════ */
     .trade-footer {
-      background: rgba(20,23,32,0.97);
+      background: rgba(20, 23, 32, 0.97);
       backdrop-filter: blur(12px);
       border-top: 1px solid var(--border);
     }
 
-    .footer-wrap { max-width: 1400px; margin: auto; padding: 8px 20px; }
+    .footer-wrap {
+      max-width: 1400px;
+      margin: auto;
+      padding: 8px 20px;
+    }
 
     .footer-risk-label {
       font-size: 0.6rem;
@@ -949,7 +1490,7 @@
     .footer-input:focus {
       border-color: var(--accent) !important;
       outline: none;
-      box-shadow: 0 0 0 2px rgba(59,130,246,0.2) !important;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
     }
 
     .footer-col-divider {
@@ -957,7 +1498,12 @@
       border-right: 1px solid var(--border);
     }
 
-    .footer-qty-label { font-size: 0.58rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+    .footer-qty-label {
+      font-size: 0.58rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
 
     .footer-qty-value {
       font-family: var(--font-mono);
@@ -967,9 +1513,18 @@
       line-height: 1.1;
     }
 
-    .footer-cap-label { font-size: 0.58rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+    .footer-cap-label {
+      font-size: 0.58rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
 
-    .footer-cap-value { font-family: var(--font-mono); font-size: 0.95rem; font-weight: 700; }
+    .footer-cap-value {
+      font-family: var(--font-mono);
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
 
     .footer-switch-wrap {
       display: inline-flex;
@@ -981,174 +1536,539 @@
       padding: 6px 12px;
     }
 
-    .footer-switch-label { font-size: 0.72rem; font-weight: 600; color: var(--muted2); cursor: pointer; }
+    .footer-switch-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--muted2);
+      cursor: pointer;
+    }
 
     /* ═══════════════════════════════════════════
        PDF / PRINT — full light-mode override
     ═══════════════════════════════════════════ */
     @media print {
-      @page { size: A4 portrait; margin: 12mm 10mm; }
-      body, html           { background: #ffffff !important; color: #111111 !important; }
-      body::before         { display: none !important; }
-      .wrap                { max-width: 100% !important; padding: 4px 0 !important; }
-      .fixed-bottom, .trade-footer { display: none !important; }
-      .panel               { background: #ffffff !important; border: 1px solid #cccccc !important; box-shadow: none !important; page-break-inside: avoid; }
-      .panel-accent-left   { border-left: 3px solid #3b82f6 !important; }
-      .panel-header        { background: #f4f4f4 !important; color: #444444 !important; border-color: #cccccc !important; }
-      .panel-body, .panel-body-flush { background: #ffffff !important; }
-      .header-bar          { background: #ffffff !important; border-color: #cccccc !important; }
-      .stock-name, .stock-price { color: #111111 !important; }
-      .stock-tag           { background: #f0f0f0 !important; border-color: #cccccc !important; color: #555555 !important; }
-      .stock-52w           { color: #666666 !important; }
-      .horizon-tabs        { background: #f0f0f0 !important; border-color: #cccccc !important; }
-      .horizon-tab         { color: #555555 !important; }
-      .horizon-tab.active  { background: #3b82f6 !important; color: #ffffff !important; }
-      .btn-pdf             { display: none !important; }
-      .signal-buy, .signal-strong  { background: #dcfce7 !important; color: #166534 !important; border-color: #22c55e !important; }
-      .signal-sell, .signal-avoid  { background: #fee2e2 !important; color: #991b1b !important; border-color: #ef4444 !important; }
-      .signal-hold, .signal-watch, .signal-moderate { background: #fef3c7 !important; color: #92400e !important; border-color: #f59e0b !important; }
-      .signal-blocked      { background: #fee2e2 !important; color: #991b1b !important; border-color: #ef4444 !important; }
-      .score-pill-sm       { border: 1px solid #cccccc !important; }
-      .pill-green          { background: #dcfce7 !important; color: #166534 !important; }
-      .pill-red            { background: #fee2e2 !important; color: #991b1b !important; }
-      .pill-yellow         { background: #fef3c7 !important; color: #92400e !important; }
-      .pill-blue           { background: #dbeafe !important; color: #1d4ed8 !important; }
-      .pill-muted          { background: #f3f4f6 !important; color: #374151 !important; }
-      .score-green         { color: #166534 !important; }
-      .score-amber         { color: #92400e !important; }
-      .score-red           { color: #991b1b !important; }
-      .score-accent, .clr-accent2 { color: #1d4ed8 !important; }
-      .score-label, .clr-muted, .clr-muted2 { color: #6b7280 !important; }
-      .clr-text            { color: #111111 !important; }
-      .clr-green           { color: #166534 !important; }
-      .clr-red             { color: #991b1b !important; }
-      .clr-yellow          { color: #92400e !important; }
-      .clr-cyan            { color: #0e7490 !important; }
-      .strat-card          { background: #f9f9f9 !important; border-color: #cccccc !important; }
-      .strat-card.best     { background: #eff6ff !important; border-color: #93c5fd !important; }
-      .strat-card.qualified { background: #f0fdf4 !important; border-color: #86efac !important; }
-      .sbc-blue            { background: #eff6ff !important; }
-      .sbc-green           { background: #f0fdf4 !important; }
-      .sbc-yellow          { background: #fffbeb !important; }
-      .sbc-val-blue        { color: #1d4ed8 !important; }
-      .sbc-val-green       { color: #166534 !important; }
-      .sbc-val-yellow      { color: #92400e !important; }
-      .tbl th              { background: #f3f4f6 !important; color: #374151 !important; border-color: #e5e7eb !important; }
-      .tbl td              { border-color: #e5e7eb !important; }
-      .tbl tr:hover td     { background: #ffffff !important; }
-      .tbl tr.used td      { background: #eff6ff !important; }
-      .pattern-item        { background: #f9f9f9 !important; border-color: #cccccc !important; }
-      .pattern-item.bull   { border-left-color: #22c55e !important; }
-      .pattern-item.bear   { border-left-color: #ef4444 !important; }
-      .pattern-title-bull  { color: #166534 !important; }
-      .pattern-title-bear  { color: #991b1b !important; }
-      .exec-box            { background: #f9f9f9 !important; border-color: #cccccc !important; }
-      .exec-cell           { border-color: #cccccc !important; }
-      .exec-entry-color    { color: #1d4ed8 !important; }
-      .exec-sl-color       { color: #991b1b !important; }
-      .exec-t-color        { color: #166534 !important; }
-      .rr-fill-sl          { background: #fca5a5 !important; opacity: 1 !important; }
-      .rr-fill-t1          { background: #86efac !important; opacity: 1 !important; }
-      .rr-lbl-sl           { color: #991b1b !important; }
-      .rr-lbl-en           { color: #1d4ed8 !important; }
-      .rr-lbl-t1           { color: #166534 !important; }
-      .conflict-banner     { background: #fffbeb !important; border-left-color: #f59e0b !important; }
-      .conflict-title      { color: #92400e !important; }
-      .conflict-text       { color: #374151 !important; }
-      .setup-selected      { background: #eff6ff !important; border-color: #93c5fd !important; }
-      .analysis-box        { background: #eff6ff !important; }
-      .analysis-box strong { color: #1d4ed8 !important; }
-      .score-box           { background: #f0fdf4 !important; }
-      .score-box strong    { color: #166534 !important; }
-      .accordion-button    { background: #f3f4f6 !important; color: #374151 !important; }
-      .accordion-body      { background: #ffffff !important; color: #111111 !important; }
-      .accordion-item      { border-top-color: #e5e7eb !important; }
-      .meta-tag            { background: #f3f4f6 !important; border-color: #e5e7eb !important; color: #374151 !important; }
-      .gate-name           { color: #374151 !important; }
-      .gate-pass           { color: #166534 !important; }
-      .gate-fail           { color: #991b1b !important; }
-      .gate-skip           { color: #9ca3af !important; }
-      .sec-label           { color: #6b7280 !important; }
-      .sec-label::after    { background: #e5e7eb !important; }
-      .panel-col-divider   { border-right-color: #e5e7eb !important; }
-      .scrollable, .scroll-180, .scroll-200,
-      .scroll-220, .scroll-240, .scroll-700 { max-height: none !important; overflow: visible !important; }
-      .conf-fill           { transition: none !important; }
-      .conf-fill-green     { background: #22c55e !important; }
-      .conf-fill-amber     { background: #f59e0b !important; }
-      .conf-fill-red       { background: #ef4444 !important; }
-      .conf-track          { background: #e5e7eb !important; }
-      .dot-accent          { background: #3b82f6 !important; }
-      .dot-cyan            { background: #06b6d4 !important; }
-      .dot-green           { background: #22c55e !important; }
-      .dot-yellow          { background: #f59e0b !important; }
-      .dot-purple          { background: #8b5cf6 !important; }
+      @page {
+        size: A4 portrait;
+        margin: 12mm 10mm;
+      }
+
+      body,
+      html {
+        background: #ffffff !important;
+        color: #111111 !important;
+      }
+
+      body::before {
+        display: none !important;
+      }
+
+      .wrap {
+        max-width: 100% !important;
+        padding: 4px 0 !important;
+      }
+
+      .fixed-bottom,
+      .trade-footer {
+        display: none !important;
+      }
+
+      .panel {
+        background: #ffffff !important;
+        border: 1px solid #cccccc !important;
+        box-shadow: none !important;
+        page-break-inside: avoid;
+      }
+
+      .panel-accent-left {
+        border-left: 3px solid #3b82f6 !important;
+      }
+
+      .panel-header {
+        background: #f4f4f4 !important;
+        color: #444444 !important;
+        border-color: #cccccc !important;
+      }
+
+      .panel-body,
+      .panel-body-flush {
+        background: #ffffff !important;
+      }
+
+      .header-bar {
+        background: #ffffff !important;
+        border-color: #cccccc !important;
+      }
+
+      .stock-name,
+      .stock-price {
+        color: #111111 !important;
+      }
+
+      .stock-tag {
+        background: #f0f0f0 !important;
+        border-color: #cccccc !important;
+        color: #555555 !important;
+      }
+
+      .stock-52w {
+        color: #666666 !important;
+      }
+
+      .horizon-tabs {
+        background: #f0f0f0 !important;
+        border-color: #cccccc !important;
+      }
+
+      .horizon-tab {
+        color: #555555 !important;
+      }
+
+      .horizon-tab.active {
+        background: #3b82f6 !important;
+        color: #ffffff !important;
+      }
+
+      .btn-pdf {
+        display: none !important;
+      }
+
+      .signal-buy,
+      .signal-strong {
+        background: #dcfce7 !important;
+        color: #166534 !important;
+        border-color: #22c55e !important;
+      }
+
+      .signal-sell,
+      .signal-avoid {
+        background: #fee2e2 !important;
+        color: #991b1b !important;
+        border-color: #ef4444 !important;
+      }
+
+      .signal-hold,
+      .signal-watch,
+      .signal-moderate {
+        background: #fef3c7 !important;
+        color: #92400e !important;
+        border-color: #f59e0b !important;
+      }
+
+      .signal-blocked {
+        background: #fee2e2 !important;
+        color: #991b1b !important;
+        border-color: #ef4444 !important;
+      }
+
+      .score-pill-sm {
+        border: 1px solid #cccccc !important;
+      }
+
+      .pill-green {
+        background: #dcfce7 !important;
+        color: #166534 !important;
+      }
+
+      .pill-red {
+        background: #fee2e2 !important;
+        color: #991b1b !important;
+      }
+
+      .pill-yellow {
+        background: #fef3c7 !important;
+        color: #92400e !important;
+      }
+
+      .pill-blue {
+        background: #dbeafe !important;
+        color: #1d4ed8 !important;
+      }
+
+      .pill-muted {
+        background: #f3f4f6 !important;
+        color: #374151 !important;
+      }
+
+      .score-green {
+        color: #166534 !important;
+      }
+
+      .score-amber {
+        color: #92400e !important;
+      }
+
+      .score-red {
+        color: #991b1b !important;
+      }
+
+      .score-accent,
+      .clr-accent2 {
+        color: #1d4ed8 !important;
+      }
+
+      .score-label,
+      .clr-muted,
+      .clr-muted2 {
+        color: #6b7280 !important;
+      }
+
+      .clr-text {
+        color: #111111 !important;
+      }
+
+      .clr-green {
+        color: #166534 !important;
+      }
+
+      .clr-red {
+        color: #991b1b !important;
+      }
+
+      .clr-yellow {
+        color: #92400e !important;
+      }
+
+      .clr-cyan {
+        color: #0e7490 !important;
+      }
+
+      .strat-card {
+        background: #f9f9f9 !important;
+        border-color: #cccccc !important;
+      }
+
+      .strat-card.best {
+        background: #eff6ff !important;
+        border-color: #93c5fd !important;
+      }
+
+      .strat-card.qualified {
+        background: #f0fdf4 !important;
+        border-color: #86efac !important;
+      }
+
+      .sbc-blue {
+        background: #eff6ff !important;
+      }
+
+      .sbc-green {
+        background: #f0fdf4 !important;
+      }
+
+      .sbc-yellow {
+        background: #fffbeb !important;
+      }
+
+      .sbc-val-blue {
+        color: #1d4ed8 !important;
+      }
+
+      .sbc-val-green {
+        color: #166534 !important;
+      }
+
+      .sbc-val-yellow {
+        color: #92400e !important;
+      }
+
+      .tbl th {
+        background: #f3f4f6 !important;
+        color: #374151 !important;
+        border-color: #e5e7eb !important;
+      }
+
+      .tbl td {
+        border-color: #e5e7eb !important;
+      }
+
+      .tbl tr:hover td {
+        background: #ffffff !important;
+      }
+
+      .tbl tr.used td {
+        background: #eff6ff !important;
+      }
+
+      .pattern-item {
+        background: #f9f9f9 !important;
+        border-color: #cccccc !important;
+      }
+
+      .pattern-item.bull {
+        border-left-color: #22c55e !important;
+      }
+
+      .pattern-item.bear {
+        border-left-color: #ef4444 !important;
+      }
+
+      .pattern-title-bull {
+        color: #166534 !important;
+      }
+
+      .pattern-title-bear {
+        color: #991b1b !important;
+      }
+
+      .exec-box {
+        background: #f9f9f9 !important;
+        border-color: #cccccc !important;
+      }
+
+      .exec-cell {
+        border-color: #cccccc !important;
+      }
+
+      .exec-entry-color {
+        color: #1d4ed8 !important;
+      }
+
+      .exec-sl-color {
+        color: #991b1b !important;
+      }
+
+      .exec-t-color {
+        color: #166534 !important;
+      }
+
+      .rr-fill-sl {
+        background: #fca5a5 !important;
+        opacity: 1 !important;
+      }
+
+      .rr-fill-t1 {
+        background: #86efac !important;
+        opacity: 1 !important;
+      }
+
+      .rr-lbl-sl {
+        color: #991b1b !important;
+      }
+
+      .rr-lbl-en {
+        color: #1d4ed8 !important;
+      }
+
+      .rr-lbl-t1 {
+        color: #166534 !important;
+      }
+
+      .conflict-banner {
+        background: #fffbeb !important;
+        border-left-color: #f59e0b !important;
+      }
+
+      .conflict-title {
+        color: #92400e !important;
+      }
+
+      .conflict-text {
+        color: #374151 !important;
+      }
+
+      .setup-selected {
+        background: #eff6ff !important;
+        border-color: #93c5fd !important;
+      }
+
+      .analysis-box {
+        background: #eff6ff !important;
+      }
+
+      .analysis-box strong {
+        color: #1d4ed8 !important;
+      }
+
+      .score-box {
+        background: #f0fdf4 !important;
+      }
+
+      .score-box strong {
+        color: #166534 !important;
+      }
+
+      .accordion-button {
+        background: #f3f4f6 !important;
+        color: #374151 !important;
+      }
+
+      .accordion-body {
+        background: #ffffff !important;
+        color: #111111 !important;
+      }
+
+      .accordion-item {
+        border-top-color: #e5e7eb !important;
+      }
+
+      .meta-tag {
+        background: #f3f4f6 !important;
+        border-color: #e5e7eb !important;
+        color: #374151 !important;
+      }
+
+      .gate-name {
+        color: #374151 !important;
+      }
+
+      .gate-pass {
+        color: #166534 !important;
+      }
+
+      .gate-fail {
+        color: #991b1b !important;
+      }
+
+      .gate-skip {
+        color: #9ca3af !important;
+      }
+
+      .sec-label {
+        color: #6b7280 !important;
+      }
+
+      .sec-label::after {
+        background: #e5e7eb !important;
+      }
+
+      .panel-col-divider {
+        border-right-color: #e5e7eb !important;
+      }
+
+      .scrollable,
+      .scroll-180,
+      .scroll-200,
+      .scroll-220,
+      .scroll-240,
+      .scroll-700 {
+        max-height: none !important;
+        overflow: visible !important;
+      }
+
+      .conf-fill {
+        transition: none !important;
+      }
+
+      .conf-fill-green {
+        background: #22c55e !important;
+      }
+
+      .conf-fill-amber {
+        background: #f59e0b !important;
+      }
+
+      .conf-fill-red {
+        background: #ef4444 !important;
+      }
+
+      .conf-track {
+        background: #e5e7eb !important;
+      }
+
+      .dot-accent {
+        background: #3b82f6 !important;
+      }
+
+      .dot-cyan {
+        background: #06b6d4 !important;
+      }
+
+      .dot-green {
+        background: #22c55e !important;
+      }
+
+      .dot-yellow {
+        background: #f59e0b !important;
+      }
+
+      .dot-purple {
+        background: #8b5cf6 !important;
+      }
     }
 
     /* ── Scrollable height variants ── */
-    .scroll-180 { max-height: 180px; }
-    .scroll-200 { max-height: 200px; }
-    .scroll-220 { max-height: 220px; }
-    .scroll-240 { max-height: 240px; }
-    .scroll-700 { max-height: 700px; }
+    .scroll-180 {
+      max-height: 180px;
+    }
+
+    .scroll-200 {
+      max-height: 200px;
+    }
+
+    .scroll-220 {
+      max-height: 220px;
+    }
+
+    .scroll-240 {
+      max-height: 240px;
+    }
+
+    .scroll-700 {
+      max-height: 700px;
+    }
 
     /* ── Pill size variant ── */
-    .pill-lg { font-size: 0.8rem; padding: 4px 10px; }
+    .pill-lg {
+      font-size: 0.8rem;
+      padding: 4px 10px;
+    }
 
     /* ── Accordion body compact ── */
-    .accordion-body-sm { padding: 10px 8px !important; }
+    .accordion-body-sm {
+      padding: 10px 8px !important;
+    }
   </style>
 </head>
 
 <body>
-<div class="wrap">
+  <div class="wrap">
 
-  <!-- ═══════════════════════════════════════════════════════════
+    <!-- ═══════════════════════════════════════════════════════════
        HEADER
   ═══════════════════════════════════════════════════════════ -->
-  <div class="header-bar">
-    <div class="header-identity">
-      <div>
-        <div class="stock-name">{{ fundamentals.get('name') | default('-') }}</div>
-        <div class="header-meta">
-          <span class="stock-tag">{{ symbol }}</span>
-          <span class="stock-tag stock-tag-dim">{{ current_index | upper }}</span>
-          <span class="stock-52w">52W: {{ fundamentals.get('high52w') | default('-') }} / {{ fundamentals.get('low52w') | default('-') }}</span>
+    <div class="header-bar">
+      <div class="header-identity">
+        <div>
+          <div class="stock-name">{{ fundamentals.get('name') | default('-') }}</div>
+          <div class="header-meta">
+            <span class="stock-tag">{{ symbol }}</span>
+            <span class="stock-tag stock-tag-dim">{{ current_index | upper }}</span>
+            <span class="stock-52w">52W: {{ fundamentals.get('high52w') | default('-') }} / {{
+              fundamentals.get('low52w') | default('-') }}</span>
+          </div>
+        </div>
+        <div class="header-price">
+          <div class="stock-price">₹{{ indicators.get('price', {}).get('value') | default('N/A') }}</div>
         </div>
       </div>
-      <div class="header-price">
-        <div class="stock-price">₹{{ indicators.get('price', {}).get('value') | default('N/A') }}</div>
+
+      <div class="horizon-tabs">
+        {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
+        {% set p_score = all_horizon_scores.get(pname) if all_horizon_scores else None %}
+        {% set is_active = (selected_horizon == pname) %}
+        {% if is_active %}{% set _htab = 'horizon-tab active' %}{% else %}{% set _htab = 'horizon-tab' %}{% endif %}
+        <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ pname }}" class="{{ _htab }}">
+          {{ pname | replace('_', ' ') | title }}
+          {% if p_score is not none %}<span class="score-pill">{{ p_score | round(1) }}</span>{% endif %}
+        </a>
+        {% endfor %}
       </div>
-    </div>
 
-    <div class="horizon-tabs">
-      {% for pname in ['intraday', 'short_term', 'long_term', 'multibagger'] %}
-      {% set p_score = all_horizon_scores.get(pname) if all_horizon_scores else None %}
-      {% set is_active = (selected_horizon == pname) %}
-      {% if is_active %}{% set _htab = 'horizon-tab active' %}{% else %}{% set _htab = 'horizon-tab' %}{% endif %}
-      <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ pname }}" class="{{ _htab }}">
-        {{ pname | replace('_', ' ') | title }}
-        {% if p_score is not none %}<span class="score-pill">{{ p_score | round(1) }}</span>{% endif %}
-      </a>
-      {% endfor %}
-    </div>
-
-    {% set fs = profile_report.final_score | default(0) %}
-    {% set cat = profile_report.profile_signal | default(profile_report.category | default('HOLD')) %}
-    {% set _cat_cls = cat | lower %}
-    {% if fs >= 7 %}{% set _sc_cls = 'score-green' %}{% elif fs <= 4 %}{% set _sc_cls = 'score-red' %}{% else %}{% set _sc_cls = 'score-amber' %}{% endif %}
-
-    <div class="header-actions">
-      <span class="signal-badge signal-{{ _cat_cls }}">{{ cat }}</span>
-      <div class="score-display">
-        <div class="score-value {{ _sc_cls }}">{{ fs | round(1) }}</div>
-        <div class="score-label">/ 10</div>
-      </div>
-      <span class="conf-label">Conf.</span>
-      <span class="mono conf-value">{{ confidence }}%</span>
-      <button onclick="exportPDF()" class="btn-pdf">
-        <i class="bi bi-file-earmark-pdf me-1"></i>PDF
-      </button>
+      {% set fs = profile_report.final_score | default(0) %}
+      {% set cat = profile_report.profile_signal | default(profile_report.category | default('HOLD')) %}
+      {% set _cat_cls = cat | lower %}
+      {% if fs >= 7 %}{% set _sc_cls = 'score-green' %}{% elif fs <= 4 %}{% set _sc_cls='score-red' %}{% else %}{% set
+        _sc_cls='score-amber' %}{% endif %} <div class="header-actions">
+        <span class="signal-badge signal-{{ _cat_cls }}">{{ cat }}</span>
+        <div class="score-display">
+          <div class="score-value {{ _sc_cls }}">{{ fs | round(1) }}</div>
+          <div class="score-label">/ 10</div>
+        </div>
+        <span class="conf-label">Conf.</span>
+        <span class="mono conf-value">{{ confidence }}%</span>
+        <button onclick="exportPDF()" class="btn-pdf">
+          <i class="bi bi-file-earmark-pdf me-1"></i>PDF
+        </button>
     </div>
   </div>
 
@@ -1182,13 +2102,16 @@
         <b>{{ profile_report.final_score | default(0) | round(1) }}/10</b> ({{ prof_cat }}),
         but plan returned <span class="hl-yellow">{{ trade_sig }}</span> —
         {% set status = tr.status | default('') %}
-        {% if status == 'BLOCKED' %}execution gates failed{% if sig_ctx.rr_t1 is defined %} (R:R {{ sig_ctx.rr_t1 | round(2) }}){% endif %}
-        {% elif status == 'LOW_CONFIDENCE' %}confidence {{ sig_ctx.confidence | default(tr.final_confidence) }}% below minimum
+        {% if status == 'BLOCKED' %}execution gates failed{% if sig_ctx.rr_t1 is defined %} (R:R {{ sig_ctx.rr_t1 |
+        round(2) }}){% endif %}
+        {% elif status == 'LOW_CONFIDENCE' %}confidence {{ sig_ctx.confidence | default(tr.final_confidence) }}% below
+        minimum
         {% else %}no directional bias{% endif %}.
         {% if tr.block_reason %}<br><span class="clr-muted">{{ tr.block_reason }}</span>{% endif %}
       </div>
       {% if ns.alt_horizon %}
-      <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ ns.alt_horizon }}" class="btn-alt-horizon">
+      <a href="/analyze?symbol={{ symbol }}&index={{ current_index }}&horizon={{ ns.alt_horizon }}"
+        class="btn-alt-horizon">
         <i class="bi bi-arrow-right-circle"></i>
         Better fit: {{ ns.alt_horizon | replace('_',' ') | title }} ({{ ns.alt_score | round(1) }})
       </a>
@@ -1234,7 +2157,8 @@
             {% if bd %}
             <div class="strat-breakdown">
               <div class="strat-breakdown-cell sbc-blue">
-                <div class="sbc-val sbc-val-blue">{{ bd.dna_fit_score | default(bd.base_score) | round(0) | int }}%</div>
+                <div class="sbc-val sbc-val-blue">{{ bd.dna_fit_score | default(bd.base_score) | round(0) | int }}%
+                </div>
                 <div class="sbc-lbl">DNA Fit</div>
               </div>
               <div class="strat-breakdown-cell sbc-green">
@@ -1253,11 +2177,13 @@
           <div class="scrollable scroll-200">
             {% for candidate in strat_data.ranked %}
             {% set passes = candidate.weighted_score >= candidate.fit_threshold %}
-            {% if passes %}{% set _sc_cls2 = 'strat-card qualified mb-1' %}{% else %}{% set _sc_cls2 = 'strat-card mb-1' %}{% endif %}
+            {% if passes %}{% set _sc_cls2 = 'strat-card qualified mb-1' %}{% else %}{% set _sc_cls2 = 'strat-card mb-1'
+            %}{% endif %}
             <div class="{{ _sc_cls2 }}">
               <div class="d-flex justify-content-between align-items-center">
                 <div>
-                  {% if passes %}{% set _cn_cls = 'strat-cand-name strat-cand-name-pass' %}{% else %}{% set _cn_cls = 'strat-cand-name strat-cand-name-fail' %}{% endif %}
+                  {% if passes %}{% set _cn_cls = 'strat-cand-name strat-cand-name-pass' %}{% else %}{% set _cn_cls =
+                  'strat-cand-name strat-cand-name-fail' %}{% endif %}
                   <span class="{{ _cn_cls }}">
                     {{ candidate.name | replace('_', ' ') | title }}
                     {% if passes %}<i class="bi bi-check-circle-fill ms-1 fs-65"></i>{% endif %}
@@ -1265,13 +2191,16 @@
                   {% set cbd = candidate.breakdown if candidate.breakdown is defined else None %}
                   {% if cbd %}
                   <div class="d-flex gap-1 mt-1">
-                    <span class="score-pill-sm pill-blue">DNA {{ cbd.dna_fit_score | default(cbd.base_score) | round(0) | int }}%</span>
-                    <span class="score-pill-sm pill-green">Setup {{ cbd.setup_quality_score | default(0) | round(0) | int }}%</span>
+                    <span class="score-pill-sm pill-blue">DNA {{ cbd.dna_fit_score | default(cbd.base_score) | round(0)
+                      | int }}%</span>
+                    <span class="score-pill-sm pill-green">Setup {{ cbd.setup_quality_score | default(0) | round(0) |
+                      int }}%</span>
                   </div>
                   {% endif %}
                 </div>
                 <div class="text-end">
-                  {% if passes %}{% set _pp = 'score-pill-sm pill-green' %}{% else %}{% set _pp = 'score-pill-sm pill-muted' %}{% endif %}
+                  {% if passes %}{% set _pp = 'score-pill-sm pill-green' %}{% else %}{% set _pp = 'score-pill-sm
+                  pill-muted' %}{% endif %}
                   <div class="{{ _pp }}">{{ candidate.weighted_score | round(0) | int }}%</div>
                   <div class="clr-muted fs-60 mt-1">min {{ candidate.fit_threshold }}%</div>
                 </div>
@@ -1291,7 +2220,8 @@
             {% if summaries.confidence_narrative %}
             <div class="accordion-item">
               <h2 class="accordion-header">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseConfidence">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseConfidence">
                   <i class="bi bi-speedometer2 me-2"></i> Why this confidence?
                 </button>
               </h2>
@@ -1303,29 +2233,43 @@
             {% if summaries.setup_explanation or summaries.strategy_explanation %}
             <div class="accordion-item">
               <h2 class="accordion-header">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseContext">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseContext">
                   <i class="bi bi-lightbulb me-2"></i> Context &amp; Strategy
                 </button>
               </h2>
               <div id="collapseContext" class="accordion-collapse collapse">
                 <div class="accordion-body">
                   {% if profile_report.eval_ctx %}
-                  {% if summaries.setup_explanation %}<div class="mb-2"><strong>Setup:</strong> {{ summaries.setup_explanation }}</div>{% endif %}
-                  {% if summaries.strategy_explanation %}<div class="mb-2"><strong>Strategy:</strong> {{ summaries.strategy_explanation }}</div>{% endif %}
+                  {% if summaries.setup_explanation %}<div class="mb-2"><strong>Setup:</strong> {{
+                    summaries.setup_explanation }}</div>{% endif %}
+                  {% if summaries.strategy_explanation %}<div class="mb-2"><strong>Strategy:</strong> {{
+                    summaries.strategy_explanation }}</div>{% endif %}
                   <div class="sec-label mt-3">All Strategies</div>
                   <div class="scrollable scroll-240">
                     <table class="tbl">
-                      <thead><tr><th>Strategy</th><th>DNA</th><th>Setup</th><th>Score</th><th>Status</th></tr></thead>
+                      <thead>
+                        <tr>
+                          <th>Strategy</th>
+                          <th>DNA</th>
+                          <th>Setup</th>
+                          <th>Score</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
                       <tbody>
                         {% for strat in profile_report.eval_ctx.strategy.all_strategies %}
                         {% set is_q = strat.weighted_score >= strat.fit_threshold %}
                         {% set bd = strat.breakdown if strat.breakdown is defined else None %}
                         <tr>
                           <td class="td-fw6">{{ strat.name | replace('_',' ') | title }}</td>
-                          <td class="td-center mono">{% if bd %}{{ bd.dna_fit_score | default(bd.base_score) | round(0) | int }}%{% else %}-{% endif %}</td>
-                          <td class="td-center mono">{% if bd %}{{ bd.setup_quality_score | default(0) | round(0) | int }}%{% else %}-{% endif %}</td>
+                          <td class="td-center mono">{% if bd %}{{ bd.dna_fit_score | default(bd.base_score) | round(0)
+                            | int }}%{% else %}-{% endif %}</td>
+                          <td class="td-center mono">{% if bd %}{{ bd.setup_quality_score | default(0) | round(0) | int
+                            }}%{% else %}-{% endif %}</td>
                           <td class="td-center mono">{{ strat.weighted_score | round(0) | int }}%</td>
-                          <td>{% if is_q %}<span class="score-pill-sm pill-green">Qualified</span>{% else %}<span class="score-pill-sm pill-muted">Rejected</span>{% endif %}</td>
+                          <td>{% if is_q %}<span class="score-pill-sm pill-green">Qualified</span>{% else %}<span
+                              class="score-pill-sm pill-muted">Rejected</span>{% endif %}</td>
                         </tr>
                         {% endfor %}
                       </tbody>
@@ -1351,35 +2295,42 @@
         </div>
         <div class="panel-body">
           <table class="tbl">
-            <thead><tr><th>Metric</th><th class="text-end">Score</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th class="text-end">Score</th>
+              </tr>
+            </thead>
             <tbody>
               {% if profile_report.metric_details %}
               {% if profile_report.metric_details is mapping %}
               {% for key, score in profile_report.metric_details.items() | sort(attribute=1, reverse=True) %}
-              {% if loop.index <= 5 %}
-              <tr>
+              {% if loop.index <= 5 %} <tr>
                 <td class="td-muted2">{{ key | replace('_',' ') | title }}</td>
                 <td class="text-end">
-                  {% if score >= 7 %}{% set _sp = 'score-pill-sm pill-green' %}{% elif score <= 3 %}{% set _sp = 'score-pill-sm pill-red' %}{% else %}{% set _sp = 'score-pill-sm pill-yellow' %}{% endif %}
-                  <span class="{{ _sp }}">{{ score }}</span>
+                  {% if score >= 7 %}{% set _sp = 'score-pill-sm pill-green' %}{% elif score <= 3 %}{% set
+                    _sp='score-pill-sm pill-red' %}{% else %}{% set _sp='score-pill-sm pill-yellow' %}{% endif %} <span
+                    class="{{ _sp }}">{{ score }}</span>
                 </td>
-              </tr>
-              {% endif %}{% endfor %}
-              {% else %}
-              {% for item in profile_report.metric_details | sort(attribute='score', reverse=True) %}
-              {% if loop.index <= 5 %}
-              <tr>
-                <td class="td-muted2">{{ item.metric | default(item.name) | replace('_',' ') | title }}</td>
-                <td class="text-end">
-                  {% if item.score >= 7 %}{% set _sp2 = 'score-pill-sm pill-green' %}{% elif item.score <= 3 %}{% set _sp2 = 'score-pill-sm pill-red' %}{% else %}{% set _sp2 = 'score-pill-sm pill-yellow' %}{% endif %}
-                  <span class="{{ _sp2 }}">{{ item.score | round(1) }}</span>
-                </td>
-              </tr>
-              {% endif %}{% endfor %}
-              {% endif %}
-              {% else %}
-              <tr><td colspan="2" class="td-muted">No metric details</td></tr>
-              {% endif %}
+                </tr>
+                {% endif %}{% endfor %}
+                {% else %}
+                {% for item in profile_report.metric_details | sort(attribute='score', reverse=True) %}
+                {% if loop.index <= 5 %} <tr>
+                  <td class="td-muted2">{{ item.metric | default(item.name) | replace('_',' ') | title }}</td>
+                  <td class="text-end">
+                    {% if item.score >= 7 %}{% set _sp2 = 'score-pill-sm pill-green' %}{% elif item.score <= 3 %}{% set
+                      _sp2='score-pill-sm pill-red' %}{% else %}{% set _sp2='score-pill-sm pill-yellow' %}{% endif %}
+                      <span class="{{ _sp2 }}">{{ item.score | round(1) }}</span>
+                  </td>
+                  </tr>
+                  {% endif %}{% endfor %}
+                  {% endif %}
+                  {% else %}
+                  <tr>
+                    <td colspan="2" class="td-muted">No metric details</td>
+                  </tr>
+                  {% endif %}
             </tbody>
           </table>
 
@@ -1398,7 +2349,8 @@
           <div class="accordion mt-2" id="accordionDrivers">
             <div class="accordion-item">
               <h2 class="accordion-header">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseScoring">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseScoring">
                   <i class="bi bi-bar-chart me-2"></i> Why these scores?
                 </button>
               </h2>
@@ -1435,7 +2387,8 @@
               <span>Confidence</span>
               <span class="conf-row-val">{{ confidence }}%</span>
             </div>
-            {% if confidence >= 70 %}{% set _cf_cls = 'conf-fill conf-fill-green' %}{% elif confidence >= 50 %}{% set _cf_cls = 'conf-fill conf-fill-amber' %}{% else %}{% set _cf_cls = 'conf-fill conf-fill-red' %}{% endif %}
+            {% if confidence >= 70 %}{% set _cf_cls = 'conf-fill conf-fill-green' %}{% elif confidence >= 50 %}{% set
+            _cf_cls = 'conf-fill conf-fill-amber' %}{% else %}{% set _cf_cls = 'conf-fill conf-fill-red' %}{% endif %}
             <div class="conf-track">
               <div class="{{ _cf_cls }}" style="width:{{ confidence }}%;"></div>
             </div>
@@ -1445,7 +2398,8 @@
           <div class="accordion mt-2 text-start" id="accordionSignal">
             <div class="accordion-item">
               <h2 class="accordion-header">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseGate">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseGate">
                   <i class="bi bi-shield-check me-2"></i> Gate Status
                 </button>
               </h2>
@@ -1456,9 +2410,12 @@
                   {% for gate_name, result in profile_report.eval_ctx.structural_gates.by_gate.items() %}
                   <div class="gate-item">
                     <span class="gate-name">{{ gate_name | replace('_',' ') | title }}</span>
-                    {% if result.status == 'passed' %}<span class="gate-pass"><i class="bi bi-check-circle-fill"></i></span>
-                    {% elif result.status == 'skipped' %}<span class="gate-skip"><i class="bi bi-dash-circle" title="Optional — data unavailable"></i></span>
-                    {% else %}<span class="gate-fail"><i class="bi bi-x-circle-fill" title="{{ result.reason }}"></i></span>
+                    {% if result.status == 'passed' %}<span class="gate-pass"><i
+                        class="bi bi-check-circle-fill"></i></span>
+                    {% elif result.status == 'skipped' %}<span class="gate-skip"><i class="bi bi-dash-circle"
+                        title="Optional — data unavailable"></i></span>
+                    {% else %}<span class="gate-fail"><i class="bi bi-x-circle-fill"
+                        title="{{ result.reason }}"></i></span>
                     {% endif %}
                   </div>
                   {% endfor %}
@@ -1466,9 +2423,12 @@
                   {% for gate_name, result in profile_report.eval_ctx.opportunity_gates.gates.items() %}
                   <div class="gate-item">
                     <span class="gate-name">{{ gate_name | replace('_',' ') | title }}</span>
-                    {% if result.status == 'passed' %}<span class="gate-pass"><i class="bi bi-check-circle-fill"></i></span>
-                    {% elif result.status == 'skipped' %}<span class="gate-skip"><i class="bi bi-dash-circle" title="Optional — data unavailable"></i></span>
-                    {% else %}<span class="gate-fail"><i class="bi bi-x-circle-fill" title="{{ result.reason }}"></i></span>
+                    {% if result.status == 'passed' %}<span class="gate-pass"><i
+                        class="bi bi-check-circle-fill"></i></span>
+                    {% elif result.status == 'skipped' %}<span class="gate-skip"><i class="bi bi-dash-circle"
+                        title="Optional — data unavailable"></i></span>
+                    {% else %}<span class="gate-fail"><i class="bi bi-x-circle-fill"
+                        title="{{ result.reason }}"></i></span>
                     {% endif %}
                   </div>
                   {% endfor %}
@@ -1520,8 +2480,10 @@
             {% if best.patterns_primary %}
             <div class="d-flex flex-wrap gap-1 mt-2">
               <span class="setup-needs-lbl">Needs:</span>
-              {% for p in best.patterns_primary %}<span class="score-pill-sm pill-blue">{{ p | replace('_',' ') | title }}</span>{% endfor %}
-              {% for p in best.patterns_confirming | default([]) %}<span class="score-pill-sm pill-muted">{{ p | replace('_',' ') | title }}</span>{% endfor %}
+              {% for p in best.patterns_primary %}<span class="score-pill-sm pill-blue">{{ p | replace('_',' ') | title
+                }}</span>{% endfor %}
+              {% for p in best.patterns_confirming | default([]) %}<span class="score-pill-sm pill-muted">{{ p |
+                replace('_',' ') | title }}</span>{% endfor %}
             </div>
             {% endif %}
           </div>
@@ -1542,7 +2504,8 @@
       <div class="row g-2">
         <div class="col-md-4">
           <div class="sec-label"><i class="bi bi-check-circle clr-green me-1"></i>Also Qualified</div>
-          {% set other_candidates = setup_data.candidates | default([]) | selectattr("type", "ne", setup_data.best.type if setup_data.best else "") | list %}
+          {% set other_candidates = setup_data.candidates | default([]) | selectattr("type", "ne", setup_data.best.type
+          if setup_data.best else "") | list %}
           {% if other_candidates %}
           {% for c in other_candidates %}
           <div class="strat-card qualified mb-1">
@@ -1565,9 +2528,12 @@
           <div class="scrollable scroll-220">
             {% for reason, group in rejected | groupby('reason') %}
             {% set reason_lower = reason | lower %}
-            {% if 'pattern' in reason_lower or 'detection' in reason_lower %}{% set tag_cls='reason-pattern' %}{% set tag_ico='bi-grid-3x3-gap' %}
-            {% elif 'technical' in reason_lower or 'context' in reason_lower or 'fit' in reason_lower %}{% set tag_cls='reason-technical' %}{% set tag_ico='bi-bar-chart' %}
-            {% elif 'fundamental' in reason_lower %}{% set tag_cls='reason-fundamental' %}{% set tag_ico='bi-building' %}
+            {% if 'pattern' in reason_lower or 'detection' in reason_lower %}{% set tag_cls='reason-pattern' %}{% set
+            tag_ico='bi-grid-3x3-gap' %}
+            {% elif 'technical' in reason_lower or 'context' in reason_lower or 'fit' in reason_lower %}{% set
+            tag_cls='reason-technical' %}{% set tag_ico='bi-bar-chart' %}
+            {% elif 'fundamental' in reason_lower %}{% set tag_cls='reason-fundamental' %}{% set tag_ico='bi-building'
+            %}
             {% elif 'horizon' in reason_lower %}{% set tag_cls='reason-horizon' %}{% set tag_ico='bi-clock' %}
             {% else %}{% set tag_cls='reason-other' %}{% set tag_ico='bi-slash-circle' %}{% endif %}
             <div class="mb-2">
@@ -1643,12 +2609,14 @@
           <div class="exec-box row g-0 text-center">
             <div class="col-6 exec-cell">
               <div class="exec-lbl">Entry Zone</div>
-              {% if has_trade %}{% set _ec_cls = 'exec-num exec-entry-color' %}{% else %}{% set _ec_cls = 'exec-num exec-muted-color' %}{% endif %}
+              {% if has_trade %}{% set _ec_cls = 'exec-num exec-entry-color' %}{% else %}{% set _ec_cls = 'exec-num
+              exec-muted-color' %}{% endif %}
               <div class="{{ _ec_cls }}">{{ "₹" ~ tr.entry if tr.entry else '-' }}</div>
             </div>
             <div class="col-6 exec-cell">
               <div class="exec-lbl">Stop Loss</div>
-              {% if has_trade %}{% set _sl_cls = 'exec-num exec-sl-color' %}{% else %}{% set _sl_cls = 'exec-num exec-muted-color' %}{% endif %}
+              {% if has_trade %}{% set _sl_cls = 'exec-num exec-sl-color' %}{% else %}{% set _sl_cls = 'exec-num
+              exec-muted-color' %}{% endif %}
               <div class="{{ _sl_cls }}">{{ "₹" ~ tr.stop_loss if tr.stop_loss else '-' }}</div>
             </div>
           </div>
@@ -1656,19 +2624,23 @@
           <div class="row g-2 text-center">
             <div class="col-4 exec-cell">
               <div class="exec-lbl">Target 1</div>
-              <div class="exec-num exec-num-sm exec-t-color">{{ "₹" ~ tr.get("targets",{}).get("t1") if tr.get("targets",{}).get("t1") else '-' }}</div>
+              <div class="exec-num exec-num-sm exec-t-color">{{ "₹" ~ tr.get("targets",{}).get("t1") if
+                tr.get("targets",{}).get("t1") else '-' }}</div>
               {% if tr.entry and tr.get("targets",{}).get("t1") and tr.entry > 0 %}
               {% set pct1 = (tr.get("targets",{}).get("t1") - tr.entry) / tr.entry * 100 %}
-              {% if pct1 > 0 %}{% set _p1c_cls = 'exec-pct clr-green' %}{% else %}{% set _p1c_cls = 'exec-pct clr-red' %}{% endif %}
+              {% if pct1 > 0 %}{% set _p1c_cls = 'exec-pct clr-green' %}{% else %}{% set _p1c_cls = 'exec-pct clr-red'
+              %}{% endif %}
               <div class="{{ _p1c_cls }}">{{ "%.1f" | format(pct1) }}%</div>
               {% endif %}
             </div>
             <div class="col-4 exec-cell">
               <div class="exec-lbl">Target 2</div>
-              <div class="exec-num exec-num-sm exec-t-color">{{ "₹" ~ tr.get("targets",{}).get("t2") if tr.get("targets",{}).get("t2") else '-' }}</div>
+              <div class="exec-num exec-num-sm exec-t-color">{{ "₹" ~ tr.get("targets",{}).get("t2") if
+                tr.get("targets",{}).get("t2") else '-' }}</div>
               {% if tr.entry and tr.get("targets",{}).get("t2") and tr.entry > 0 %}
               {% set pct2 = (tr.get("targets",{}).get("t2") - tr.entry) / tr.entry * 100 %}
-              {% if pct2 > 0 %}{% set _p2c_cls = 'exec-pct clr-green' %}{% else %}{% set _p2c_cls = 'exec-pct clr-red' %}{% endif %}
+              {% if pct2 > 0 %}{% set _p2c_cls = 'exec-pct clr-green' %}{% else %}{% set _p2c_cls = 'exec-pct clr-red'
+              %}{% endif %}
               <div class="{{ _p2c_cls }}">{{ "%.1f" | format(pct2) }}%</div>
               {% endif %}
             </div>
@@ -1684,7 +2656,8 @@
             {% if summaries.trade_plan %}
             <div class="accordion-item">
               <h2 class="accordion-header">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTradePlan">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseTradePlan">
                   <i class="bi bi-clipboard-check me-2"></i> Why this plan?
                 </button>
               </h2>
@@ -1696,7 +2669,8 @@
             {% if summaries.rr_explanation %}
             <div class="accordion-item">
               <h2 class="accordion-header">
-                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseRR">
+                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                  data-bs-target="#collapseRR">
                   <i class="bi bi-calculator me-2"></i> Risk/Reward breakdown
                 </button>
               </h2>
@@ -1769,7 +2743,9 @@
       Pattern Radar
     </div>
     <div class="panel-body">
-      {% set pattern_keys = ['goldenCross','doubleTopBottom','cupHandle','darvasBox','flagPennant','minerviniStage2','bollingerSqueeze','threeLineStrike','ichimokuSignals'] %}
+      {% set pattern_keys =
+      ['goldenCross','doubleTopBottom','cupHandle','darvasBox','flagPennant','minerviniStage2','bollingerSqueeze','threeLineStrike','ichimokuSignals']
+      %}
       {% set ns2 = namespace(found=false) %}
       <div class="row g-2">
         {% for key in pattern_keys %}
@@ -1778,15 +2754,18 @@
         {% set ns2.found = true %}
         {% set score = pat.score | default(0) | int %}
         {% set is_bull = 'bull' in pat.desc|lower or 'golden' in pat.desc|lower %}
-        {% if is_bull %}{% set _pi_cls = 'pattern-item bull' %}{% set _pt_cls = 'pattern-title pattern-title-bull' %}{% else %}{% set _pi_cls = 'pattern-item bear' %}{% set _pt_cls = 'pattern-title pattern-title-bear' %}{% endif %}
+        {% if is_bull %}{% set _pi_cls = 'pattern-item bull' %}{% set _pt_cls = 'pattern-title pattern-title-bull' %}{%
+        else %}{% set _pi_cls = 'pattern-item bear' %}{% set _pt_cls = 'pattern-title pattern-title-bear' %}{% endif %}
         <div class="col-md-6">
           <div class="{{ _pi_cls }}">
             <div class="pattern-header">
               <span class="{{ _pt_cls }}">
-                {% if is_bull %}<i class="bi bi-graph-up-arrow me-1"></i>{% else %}<i class="bi bi-graph-down-arrow me-1"></i>{% endif %}
+                {% if is_bull %}<i class="bi bi-graph-up-arrow me-1"></i>{% else %}<i
+                  class="bi bi-graph-down-arrow me-1"></i>{% endif %}
                 {{ pat.desc | default(key | replace('_',' ') | title) }}
               </span>
-              {% if score >= 70 %}{% set _psp = 'score-pill-sm pill-green' %}{% elif score >= 40 %}{% set _psp = 'score-pill-sm pill-yellow' %}{% else %}{% set _psp = 'score-pill-sm pill-muted' %}{% endif %}
+              {% if score >= 70 %}{% set _psp = 'score-pill-sm pill-green' %}{% elif score >= 40 %}{% set _psp =
+              'score-pill-sm pill-yellow' %}{% else %}{% set _psp = 'score-pill-sm pill-muted' %}{% endif %}
               <span class="{{ _psp }}">{{ score }}%</span>
             </div>
             {% if pat.raw.meta %}
@@ -1819,7 +2798,8 @@
       <div class="accordion mt-2" id="accordionPatterns">
         <div class="accordion-item">
           <h2 class="accordion-header">
-            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseOpportunity">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+              data-bs-target="#collapseOpportunity">
               <i class="bi bi-graph-up-arrow me-2"></i> Opportunity Assessment
             </button>
           </h2>
@@ -1843,9 +2823,18 @@
     <div class="panel-body-flush">
       <div class="scrollable scroll-180">
         <table class="tbl">
-          <thead><tr><th>Event</th><th>Value</th><th>Ex-Date</th><th>Status</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Value</th>
+              <th>Ex-Date</th>
+              <th>Status</th>
+            </tr>
+          </thead>
           <tbody id="corpBody">
-            <tr><td colspan="4" class="corp-loading">Loading events...</td></tr>
+            <tr>
+              <td colspan="4" class="corp-loading">Loading events...</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1865,21 +2854,31 @@
         <div class="panel-body-flush">
           <div class="scrollable scroll-700">
             <table class="tbl">
-              <thead><tr><th class="tbl-th-icon"></th><th>Metric</th><th>Value</th><th>Score</th></tr></thead>
+              <thead>
+                <tr>
+                  <th class="tbl-th-icon"></th>
+                  <th>Metric</th>
+                  <th>Value</th>
+                  <th>Score</th>
+                </tr>
+              </thead>
               <tbody>
                 {% for k, v in fundamentals.items() %}{% if v is mapping %}
                 {% set val = (v.score | default(0)) | int %}
                 {% set is_used = (k in profile_report.metric_details) %}
                 {% if is_used %}{% set _tr_cls = 'used' %}{% else %}{% set _tr_cls = '' %}{% endif %}
-                {% if is_used %}{% set _td_cls = 'td-used-text' %}{% else %}{% set _td_cls = 'td-unused-text' %}{% endif %}
-                {% if is_used %}{% set _fw_cls = 'td-used-mono' %}{% else %}{% set _fw_cls = 'td-unused-mono' %}{% endif %}
+                {% if is_used %}{% set _td_cls = 'td-used-text' %}{% else %}{% set _td_cls = 'td-unused-text' %}{% endif
+                %}
+                {% if is_used %}{% set _fw_cls = 'td-used-mono' %}{% else %}{% set _fw_cls = 'td-unused-mono' %}{% endif
+                %}
                 <tr class="{{ _tr_cls }}">
                   <td class="td-used-indicator">{{ '●' if is_used else '' }}</td>
                   <td class="{{ _td_cls }}">{{ v.alias | default(k | replace('_',' ') | title) }}</td>
                   <td class="{{ _fw_cls }}">{{ (v.value if v.value is defined else v['value']) | default('N/A') }}</td>
                   <td>
-                    {% if val >= 8 %}{% set _vp = 'score-pill-sm pill-green' %}{% elif val <= 3 %}{% set _vp = 'score-pill-sm pill-red' %}{% else %}{% set _vp = 'score-pill-sm pill-yellow' %}{% endif %}
-                    <span class="{{ _vp }}">{{ val }}</span>
+                    {% if val >= 8 %}{% set _vp = 'score-pill-sm pill-green' %}{% elif val <= 3 %}{% set
+                      _vp='score-pill-sm pill-red' %}{% else %}{% set _vp='score-pill-sm pill-yellow' %}{% endif %}
+                      <span class="{{ _vp }}">{{ val }}</span>
                   </td>
                 </tr>
                 {% endif %}{% endfor %}
@@ -1899,21 +2898,31 @@
         <div class="panel-body-flush">
           <div class="scrollable scroll-700">
             <table class="tbl">
-              <thead><tr><th class="tbl-th-icon"></th><th>Indicator</th><th>Value</th><th>Score</th></tr></thead>
+              <thead>
+                <tr>
+                  <th class="tbl-th-icon"></th>
+                  <th>Indicator</th>
+                  <th>Value</th>
+                  <th>Score</th>
+                </tr>
+              </thead>
               <tbody>
                 {% for k, v in indicators.items() %}{% if v is mapping %}
                 {% set val = (v.score | default(0)) | int %}
                 {% set is_used = (k in profile_report.metric_details) %}
                 {% if is_used %}{% set _tr_cls2 = 'used' %}{% else %}{% set _tr_cls2 = '' %}{% endif %}
-                {% if is_used %}{% set _td_cls2 = 'td-used-text' %}{% else %}{% set _td_cls2 = 'td-unused-text' %}{% endif %}
-                {% if is_used %}{% set _fw_cls2 = 'td-used-mono' %}{% else %}{% set _fw_cls2 = 'td-unused-mono' %}{% endif %}
+                {% if is_used %}{% set _td_cls2 = 'td-used-text' %}{% else %}{% set _td_cls2 = 'td-unused-text' %}{%
+                endif %}
+                {% if is_used %}{% set _fw_cls2 = 'td-used-mono' %}{% else %}{% set _fw_cls2 = 'td-unused-mono' %}{%
+                endif %}
                 <tr class="{{ _tr_cls2 }}">
                   <td class="td-used-indicator">{{ '●' if is_used else '' }}</td>
                   <td class="{{ _td_cls2 }}">{{ v.alias | default(k | replace('_',' ') | title) }}</td>
                   <td class="{{ _fw_cls2 }}">{{ (v.value if v.value is defined else v['value']) | default('N/A') }}</td>
                   <td>
-                    {% if val >= 8 %}{% set _vp2 = 'score-pill-sm pill-green' %}{% elif val <= 3 %}{% set _vp2 = 'score-pill-sm pill-red' %}{% else %}{% set _vp2 = 'score-pill-sm pill-yellow' %}{% endif %}
-                    <span class="{{ _vp2 }}">{{ val }}</span>
+                    {% if val >= 8 %}{% set _vp2 = 'score-pill-sm pill-green' %}{% elif val <= 3 %}{% set
+                      _vp2='score-pill-sm pill-red' %}{% else %}{% set _vp2='score-pill-sm pill-yellow' %}{% endif %}
+                      <span class="{{ _vp2 }}">{{ val }}</span>
                   </td>
                 </tr>
                 {% endif %}{% endfor %}
@@ -1926,154 +2935,155 @@
   </div>
 
   {% endif %}
-</div>
+  </div>
 
-<!-- ═══════════════════════════════════════════════════════════
+  <!-- ═══════════════════════════════════════════════════════════
      STICKY FOOTER
 ═══════════════════════════════════════════════════════════ -->
-<div class="fixed-bottom trade-footer">
-  <div class="footer-wrap">
-    <div class="row align-items-center g-2">
-      <div class="col-4 col-md-3">
-        <label class="footer-risk-label" for="riskInput">Risk (₹)</label>
-        <input type="number" id="riskInput" class="form-control form-control-sm footer-input" value="500" step="500" oninput="calcSize()">
-      </div>
-      <div class="col-4 col-md-3 text-center footer-col-divider">
-        <div class="footer-qty-label">Buy Qty</div>
-        <div id="qtyDisplay" class="footer-qty-value">0</div>
-      </div>
-      <div class="col-4 col-md-3 text-center">
-        <div class="footer-cap-label">Req. Capital</div>
-        <div id="capitalDisplay" class="footer-cap-value">₹0</div>
-      </div>
-      <div class="col-md-3 d-none d-md-block text-end">
-        <div class="footer-switch-wrap">
-          <input class="form-check-input" type="checkbox" id="paperTradeCheck" onchange="toggleTradeState(this)">
-          <label class="footer-switch-label" for="paperTradeCheck">Mark Active</label>
+  <div class="fixed-bottom trade-footer">
+    <div class="footer-wrap">
+      <div class="row align-items-center g-2">
+        <div class="col-4 col-md-3">
+          <label class="footer-risk-label" for="riskInput">Risk (₹)</label>
+          <input type="number" id="riskInput" class="form-control form-control-sm footer-input" value="500" step="500"
+            oninput="calcSize()">
+        </div>
+        <div class="col-4 col-md-3 text-center footer-col-divider">
+          <div class="footer-qty-label">Buy Qty</div>
+          <div id="qtyDisplay" class="footer-qty-value">0</div>
+        </div>
+        <div class="col-4 col-md-3 text-center">
+          <div class="footer-cap-label">Req. Capital</div>
+          <div id="capitalDisplay" class="footer-cap-value">₹0</div>
+        </div>
+        <div class="col-md-3 d-none d-md-block text-end">
+          <div class="footer-switch-wrap">
+            <input class="form-check-input" type="checkbox" id="paperTradeCheck" onchange="toggleTradeState(this)">
+            <label class="footer-switch-label" for="paperTradeCheck">Mark Active</label>
+          </div>
         </div>
       </div>
     </div>
   </div>
-</div>
 
-<script>
-  const entryPrice = parseFloat("{{ trade_recommendation.entry | default(0) }}");
-  const stopLoss   = parseFloat("{{ trade_recommendation.stop_loss | default(0) }}");
-  const rawHorizon = "{{ selected_horizon }}";
+  <script>
+    const entryPrice = parseFloat("{{ trade_recommendation.entry | default(0) }}");
+    const stopLoss = parseFloat("{{ trade_recommendation.stop_loss | default(0) }}");
+    const rawHorizon = "{{ selected_horizon }}";
 
-  function calcSize() {
-    const risk = parseFloat(document.getElementById('riskInput').value) || 0;
-    if (entryPrice > 0 && stopLoss > 0 && entryPrice !== stopLoss) {
-      const riskPerShare = Math.abs(entryPrice - stopLoss);
-      if (riskPerShare < 0.05) { document.getElementById('qtyDisplay').innerText = "-"; return; }
-      const qty = Math.floor(risk / riskPerShare);
-      document.getElementById('qtyDisplay').innerText = qty;
-      document.getElementById('capitalDisplay').innerText = '₹' + Math.round(qty * entryPrice).toLocaleString('en-IN');
-    } else {
-      document.getElementById('qtyDisplay').innerText = "-";
-      document.getElementById('capitalDisplay').innerText = "-";
-    }
-  }
-
-  async function toggleTradeState(el) {
-    const label = el.nextElementSibling;
-    el.disabled = true;
-    label.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    if (el.checked) {
-      const ok = await addPaperTrade();
-      if (ok)  { label.innerText = "Running"; label.style.color = "var(--green)"; }
-      else     { el.checked = false; label.innerText = "Mark Active"; label.style.color = ""; }
-    } else {
-      const ok = await removePaperTrade();
-      if (ok)  { label.innerText = "Mark Active"; label.style.color = ""; }
-      else     { el.checked = true; label.innerText = "Running"; label.style.color = "var(--green)"; }
-    }
-    el.disabled = false;
-  }
-
-  window.addEventListener('DOMContentLoaded', async () => {
-    calcSize();
-    const el = document.getElementById('paperTradeCheck');
-    if (el) {
-      try {
-        const res  = await fetch(`/api/paper_trade/status?symbol={{ symbol }}&horizon=${rawHorizon}`);
-        const data = await res.json();
-        if (data.active) {
-          el.checked = true;
-          el.nextElementSibling.innerText = "Running";
-          el.nextElementSibling.style.color = "var(--green)";
-        }
-      } catch(e) { console.error(e); }
-    }
-  });
-
-  async function loadCorporateActions() {
-    try {
-      const res  = await fetch(`/corporate_actions?ticker={{ symbol }}`);
-      const data = await res.json();
-      const body = document.getElementById('corpBody');
-      body.innerHTML = "";
-      if (!data || data.length === 0) {
-        body.innerHTML = `<tr><td colspan="4" class="corp-loading">No recent actions found.</td></tr>`;
-        return;
+    function calcSize() {
+      const risk = parseFloat(document.getElementById('riskInput').value) || 0;
+      if (entryPrice > 0 && stopLoss > 0 && entryPrice !== stopLoss) {
+        const riskPerShare = Math.abs(entryPrice - stopLoss);
+        if (riskPerShare < 0.05) { document.getElementById('qtyDisplay').innerText = "-"; return; }
+        const qty = Math.floor(risk / riskPerShare);
+        document.getElementById('qtyDisplay').innerText = qty;
+        document.getElementById('capitalDisplay').innerText = '₹' + Math.round(qty * entryPrice).toLocaleString('en-IN');
+      } else {
+        document.getElementById('qtyDisplay').innerText = "-";
+        document.getElementById('capitalDisplay').innerText = "-";
       }
-      data.forEach(a => {
-        const exDate   = new Date(a.ex_date);
-        const today    = new Date(); today.setHours(0,0,0,0);
-        const upcoming = exDate >= today;
-        let val = a.amount || a.ratio || '-';
-        if (typeof a.amount === 'number' && (a.type||"").toLowerCase().includes('dividend')) val = `₹${a.amount}`;
-        const cls = upcoming ? 'corp-upcoming' : 'corp-past';
-        body.insertAdjacentHTML('beforeend',
-          `<tr class="${cls}"><td>${a.type}</td><td>${val}</td><td class="mono">${a.ex_date||'-'}</td><td>${upcoming ? '🔔 Upcoming' : 'Past'}</td></tr>`
-        );
-      });
-    } catch(err) {
-      document.getElementById('corpBody').innerHTML =
-        `<tr><td colspan="4" class="corp-failed">Failed to load actions.</td></tr>`;
     }
-  }
-  window.addEventListener('DOMContentLoaded', loadCorporateActions);
 
-  /* ── PDF EXPORT ──────────────────────────────────────────────────
-     Strategy: use window.print() via @media print CSS, which is clean
-     and doesn't need html2pdf.js layout tricks at all.
-     We still offer html2pdf as fallback for users who need a saved file.
-  ─────────────────────────────────────────────────────────────── */
-  async function exportPDF() {
-    const btn = event.currentTarget;
-    const orig = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    btn.disabled = true;
+    async function toggleTradeState(el) {
+      const label = el.nextElementSibling;
+      el.disabled = true;
+      label.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+      if (el.checked) {
+        const ok = await addPaperTrade();
+        if (ok) { label.innerText = "Running"; label.style.color = "var(--green)"; }
+        else { el.checked = false; label.innerText = "Mark Active"; label.style.color = ""; }
+      } else {
+        const ok = await removePaperTrade();
+        if (ok) { label.innerText = "Mark Active"; label.style.color = ""; }
+        else { el.checked = true; label.innerText = "Running"; label.style.color = "var(--green)"; }
+      }
+      el.disabled = false;
+    }
 
-    // 1. Force full-width layout for capture (A4 = 794px @ 96dpi)
-    const wrap = document.querySelector('.wrap');
-    const footer = document.querySelector('.trade-footer');
-    const prevMaxW  = wrap.style.maxWidth;
-    const prevPad   = wrap.style.padding;
+    window.addEventListener('DOMContentLoaded', async () => {
+      calcSize();
+      const el = document.getElementById('paperTradeCheck');
+      if (el) {
+        try {
+          const res = await fetch(`/api/paper_trade/status?symbol={{ symbol }}&horizon=${rawHorizon}`);
+          const data = await res.json();
+          if (data.active) {
+            el.checked = true;
+            el.nextElementSibling.innerText = "Running";
+            el.nextElementSibling.style.color = "var(--green)";
+          }
+        } catch (e) { console.error(e); }
+      }
+    });
 
-    wrap.style.maxWidth = '794px';
-    wrap.style.padding  = '8px 12px';
-    if (footer) footer.style.display = 'none';
+    async function loadCorporateActions() {
+      try {
+        const res = await fetch(`/corporate_actions?ticker={{ symbol }}`);
+        const data = await res.json();
+        const body = document.getElementById('corpBody');
+        body.innerHTML = "";
+        if (!data || data.length === 0) {
+          body.innerHTML = `<tr><td colspan="4" class="corp-loading">No recent actions found.</td></tr>`;
+          return;
+        }
+        data.forEach(a => {
+          const exDate = new Date(a.ex_date);
+          const today = new Date(); today.setHours(0, 0, 0, 0);
+          const upcoming = exDate >= today;
+          let val = a.amount || a.ratio || '-';
+          if (typeof a.amount === 'number' && (a.type || "").toLowerCase().includes('dividend')) val = `₹${a.amount}`;
+          const cls = upcoming ? 'corp-upcoming' : 'corp-past';
+          body.insertAdjacentHTML('beforeend',
+            `<tr class="${cls}"><td>${a.type}</td><td>${val}</td><td class="mono">${a.ex_date || '-'}</td><td>${upcoming ? '🔔 Upcoming' : 'Past'}</td></tr>`
+          );
+        });
+      } catch (err) {
+        document.getElementById('corpBody').innerHTML =
+          `<tr><td colspan="4" class="corp-failed">Failed to load actions.</td></tr>`;
+      }
+    }
+    window.addEventListener('DOMContentLoaded', loadCorporateActions);
 
-    // 2. Apply print-mode class so @media print CSS fires via JS
-    document.body.classList.add('pdf-export');
+    /* ── PDF EXPORT ──────────────────────────────────────────────────
+       Strategy: use window.print() via @media print CSS, which is clean
+       and doesn't need html2pdf.js layout tricks at all.
+       We still offer html2pdf as fallback for users who need a saved file.
+    ─────────────────────────────────────────────────────────────── */
+    async function exportPDF() {
+      const btn = event.currentTarget;
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+      btn.disabled = true;
 
-    try {
-      await html2pdf().set({
-        margin:      [8, 8, 8, 8],
-        filename:    'Analysis_{{ symbol }}.pdf',
-        image:       { type: 'jpeg', quality: 0.98 },
-        html2canvas: {
-          scale:           2,
-          useCORS:         true,
-          logging:         false,
-          backgroundColor: '#ffffff',
-          windowWidth:     794,
-          onclone: function(doc) {
-            // Apply all @media print overrides via a <style> injected into the clone
-            const s = doc.createElement('style');
-            s.textContent = `
+      // 1. Force full-width layout for capture (A4 = 794px @ 96dpi)
+      const wrap = document.querySelector('.wrap');
+      const footer = document.querySelector('.trade-footer');
+      const prevMaxW = wrap.style.maxWidth;
+      const prevPad = wrap.style.padding;
+
+      wrap.style.maxWidth = '794px';
+      wrap.style.padding = '8px 12px';
+      if (footer) footer.style.display = 'none';
+
+      // 2. Apply print-mode class so @media print CSS fires via JS
+      document.body.classList.add('pdf-export');
+
+      try {
+        await html2pdf().set({
+          margin: [8, 8, 8, 8],
+          filename: 'Analysis_{{ symbol }}.pdf',
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            backgroundColor: '#ffffff',
+            windowWidth: 794,
+            onclone: function (doc) {
+              // Apply all @media print overrides via a <style> injected into the clone
+              const s = doc.createElement('style');
+              s.textContent = `
               body,html{background:#fff!important;color:#111!important;}
               body::before{display:none!important;}
               .wrap{max-width:100%!important;padding:4px 0!important;}
@@ -2127,66 +3137,67 @@
               .conf-track{background:#e5e7eb!important;}
               .conf-fill-green{background:#22c55e!important;} .conf-fill-amber{background:#f59e0b!important;} .conf-fill-red{background:#ef4444!important;}
             `;
-            doc.head.appendChild(s);
-          }
-        },
-        jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak:   { mode: ['avoid-all', 'css'], avoid: ['.panel', '.header-bar', 'tr'] }
-      }).from(wrap).save();
-    } catch(err) {
-      alert('PDF export failed: ' + err.message);
-    } finally {
-      wrap.style.maxWidth = prevMaxW;
-      wrap.style.padding  = prevPad;
-      if (footer) footer.style.display = '';
-      document.body.classList.remove('pdf-export');
-      btn.innerHTML = orig;
-      btn.disabled  = false;
-    }
-  }
-
-  async function addPaperTrade() {
-    let days = null;
-    const estStr = "{{ trade_recommendation.est_time_str | default('') }}";
-    if (estStr) {
-      const m = estStr.match(/(\d+)/);
-      if (m) {
-        days = parseInt(m[1], 10);
-        if (estStr.toLowerCase().includes('week'))  days *= 7;
-        if (estStr.toLowerCase().includes('month')) days *= 30;
+              doc.head.appendChild(s);
+            }
+          },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+          pagebreak: { mode: ['avoid-all', 'css'], avoid: ['.panel', '.header-bar', 'tr'] }
+        }).from(wrap).save();
+      } catch (err) {
+        alert('PDF export failed: ' + err.message);
+      } finally {
+        wrap.style.maxWidth = prevMaxW;
+        wrap.style.padding = prevPad;
+        if (footer) footer.style.display = '';
+        document.body.classList.remove('pdf-export');
+        btn.innerHTML = orig;
+        btn.disabled = false;
       }
     }
-    try {
-      const res = await fetch("/api/paper_trade/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol:               "{{ symbol }}",
-          entry_price:          parseFloat("{{ trade_recommendation.entry or 0 }}") || 0,
-          target_1:             parseFloat("{{ trade_recommendation.targets.t1 if (trade_recommendation.targets and trade_recommendation.targets.t1) else 0 }}") || null,
-          target_2:             parseFloat("{{ trade_recommendation.targets.t2 if (trade_recommendation.targets and trade_recommendation.targets.t2) else 0 }}") || null,
-          stop_loss:            parseFloat("{{ trade_recommendation.stop_loss or 0 }}") || null,
-          estimated_hold_days:  days,
-          horizon:              rawHorizon,
-          position_size:        parseInt(document.getElementById('qtyDisplay')?.innerText) || null
-        })
-      });
-      const data = await res.json();
-      return data.status === 'success';
-    } catch(e) { alert('Failed to save paper trade.'); return false; }
-  }
 
-  async function removePaperTrade() {
-    try {
-      const res = await fetch("/api/paper_trade/remove", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: "{{ symbol }}", horizon: rawHorizon })
-      });
-      const data = await res.json();
-      return data.status === 'success';
-    } catch(e) { alert('Failed to remove paper trade.'); return false; }
-  }
-</script>
+    async function addPaperTrade() {
+      let days = null;
+      const estStr = "{{ trade_recommendation.est_time_str | default('') }}";
+      if (estStr) {
+        const m = estStr.match(/(\d+)/);
+        if (m) {
+          days = parseInt(m[1], 10);
+          if (estStr.toLowerCase().includes('week')) days *= 7;
+          if (estStr.toLowerCase().includes('month')) days *= 30;
+        }
+      }
+      try {
+        const res = await fetch("/api/paper_trade/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol: "{{ symbol }}",
+            entry_price: parseFloat("{{ trade_recommendation.entry or 0 }}") || 0,
+            target_1: parseFloat("{{ trade_recommendation.targets.t1 if (trade_recommendation.targets and trade_recommendation.targets.t1) else 0 }}") || null,
+            target_2: parseFloat("{{ trade_recommendation.targets.t2 if (trade_recommendation.targets and trade_recommendation.targets.t2) else 0 }}") || null,
+            stop_loss: parseFloat("{{ trade_recommendation.stop_loss or 0 }}") || null,
+            estimated_hold_days: days,
+            horizon: rawHorizon,
+            position_size: parseInt(document.getElementById('qtyDisplay')?.innerText) || null
+          })
+        });
+        const data = await res.json();
+        return data.status === 'success';
+      } catch (e) { alert('Failed to save paper trade.'); return false; }
+    }
+
+    async function removePaperTrade() {
+      try {
+        const res = await fetch("/api/paper_trade/remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol: "{{ symbol }}", horizon: rawHorizon })
+        });
+        const data = await res.json();
+        return data.status === 'success';
+      } catch (e) { alert('Failed to remove paper trade.'); return false; }
+    }
+  </script>
 </body>
+
 </html>

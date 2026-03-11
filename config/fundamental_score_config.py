@@ -882,8 +882,14 @@ def _normalize_growth(metric: str, val: float) -> float:
 
 
 def _normalize_health_quality(metric: str, val: float) -> float:
-    """Mixed directionality"""
-    if metric == "deRatio":  # Lower is better
+    if metric == "fcfYield":        # Higher is better
+        if val >= 10: return 10
+        elif val >= 7: return 8
+        elif val >= 4: return 5
+        elif val >= 2: return 3
+        else: return 1
+        
+    elif metric == "deRatio":  # Lower is better
         if val <= 0.3: return 10
         elif val <= 0.5: return 8
         elif val <= 1.0: return 5

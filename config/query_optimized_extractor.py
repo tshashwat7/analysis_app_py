@@ -96,6 +96,10 @@ class QueryOptimizedExtractor:
             # Add pattern-related sections if they exist
         }
         
+        # ✅ FIX: Include confidence config in hash input to prevent stale cache (Issue B)
+        if hasattr(self, 'base_extractor') and getattr(self.base_extractor, 'has_confidence_config', False):
+            cache_relevant["confidence"] = self.base_extractor.confidence_config
+            
         config_str = json.dumps(cache_relevant, sort_keys=True)
         return hashlib.md5(config_str.encode()).hexdigest()[:8] 
     # ========================================================================
@@ -282,13 +286,6 @@ class QueryOptimizedExtractor:
             "slope_diff_min": -0.05,
             "bullish_slope_min": 0.05
         })
-
-    def get_divergence_entry_gate(self) -> Dict[str, Any]:
-        """
-        ✅ NEW: Get divergence entry gate logic.
-        Returns: The master_config divergence block (if allow_entry is False, it's a hard block).
-        """
-        return self.base_extractor.get("divergence_entry_gate", {})
 
     def get_min_tradeable_confidence(self) -> float:
         """
@@ -494,12 +491,11 @@ class QueryOptimizedExtractor:
             return False, None, failure_reason
         
         # 3. Extract Adjustment Value
-        # Priority: multiplier > boost > penalty > amount
+        # ✅ FIX: Priority: multiplier > boost > penalty (removed "amount" fallback Issue A)
         adjustment = (
             modifier_config.get("confidence_multiplier") or
             modifier_config.get("confidence_boost") or
-            modifier_config.get("confidence_penalty") or
-            modifier_config.get("amount")  # For master_config enhancements
+            modifier_config.get("confidence_penalty")
         )
         
         reason = modifier_config.get("reason", "Criteria met")
@@ -664,7 +660,7 @@ class QueryOptimizedExtractor:
     def calculate_total_confidence_adjustment(
         self,
         evaluation_results: Dict[str, Any]
-    ) -> Tuple[float, List[str]]:
+    ) -> Dict[str, Any]:
         """
         Calculate total confidence adjustment from evaluation results.
         Handle ADX boosts and penalties separately
@@ -678,17 +674,16 @@ class QueryOptimizedExtractor:
             evaluation_results: Output from evaluate_all_confidence_modifiers()
         
         Returns:
-            Tuple of (total_adjustment: float, breakdown: List[str])
-        
+            Dict with keys:
+                - "adjustment" (float): Total confidence delta (already scaled)
+                - "breakdown" (List[str]): Human-readable audit trail
+                - "multiplier" (float): Divergence multiplier applied (1.0 if none)
+
         Example:
             >>> results = extractor.evaluate_all_confidence_modifiers(data, "MOMENTUM_BREAKOUT")
-            >>> total, breakdown = extractor.calculate_total_confidence_adjustment(results)
-            >>> print(total)  # 25.5
-            >>> for item in breakdown:
-            ...     print(item)
-            # volume_modifiers.surge_bonus: +10 (Strong volume confirmation)
-            # trend_strength_bands.strong: +15 (Strong sustained trend)
-            # adx_bands.explosive: +20 (Explosive ADX)
+            >>> adj_data = extractor.calculate_total_confidence_adjustment(results)
+            >>> print(adj_data["adjustment"])   # 17.5
+            >>> print(adj_data["multiplier"])   # 0.7 (moderate divergence)
         """
         total_additive = 0.0
         multipliers = []
@@ -714,13 +709,21 @@ class QueryOptimizedExtractor:
                         )
             
             elif category == "divergence_penalties":
-                # These are multiplicative
-                for severity, result in modifiers.items():
-                    if result["applies"] and result["adjustment"] is not None:
-                        multipliers.append(result["adjustment"])
-                        breakdown.append(
-                            f"divergence.{severity}: ×{result['adjustment']} ({result['reason']})"
-                        )
+                # These are multiplicative. ONLY APPLY THE FIRST MATCHING BAND.
+                # ✅ FIX: Priority explicitly fixed to [severe, moderate, minor] (Issue C)
+                div_applied = False
+                for severity in ["severe", "moderate", "minor"]:
+                    if severity in modifiers:
+                        result = modifiers[severity]
+                        if not div_applied and result["applies"] and result["adjustment"] is not None:
+                            multipliers.append(result["adjustment"])
+                            breakdown.append(
+                                f"divergence.{severity}: ×{result['adjustment']} ({result['reason']})"
+                            )
+                            div_applied = True
+                        elif div_applied:
+                            # Log skipped bands for visibility
+                            pass
             
             elif category == "conditional_adjustments":
                 # Penalties and bonuses are additive
@@ -768,11 +771,22 @@ class QueryOptimizedExtractor:
                         if result["applies"] and result["adjustment"] is not None:
                             unscaled_conditional += result["adjustment"]
             
+            # Note: if scaled_structural = 0, this results in final_multiplier doing nothing, 
+            # and only conditional bonuses/penalties being applied. This is expected behavior (Issue D).
             final_scaled_total = (scaled_structural * final_multiplier) + unscaled_conditional
             breakdown.append(f"Final multiplier (Structural only): ×{final_multiplier}")
-            return final_scaled_total, breakdown
+            
+            return {
+                "adjustment": final_scaled_total,
+                "breakdown": breakdown,
+                "multiplier": final_multiplier
+            }
         else:
-            return total_additive, breakdown
+            return {
+                "adjustment": total_additive,
+                "breakdown": breakdown,
+                "multiplier": 1.0
+            }
    
     # ========================================================================
     # GATE QUERIES (Most Important for Resolver)
@@ -839,7 +853,8 @@ class QueryOptimizedExtractor:
             if phase == "structural":
                 setup_gates = merged_context.get("technical", {})
             elif phase == "opportunity":
-                setup_gates = merged_context.get("opportunity", {})
+                # ✅ FIX R2-1: Force empty setup opportunity gates since they shouldn't exist
+                setup_gates = {}
 
         resolved = {}
         
@@ -862,6 +877,10 @@ class QueryOptimizedExtractor:
                     # Explicit None = disable gate
                     del resolved[metric]
         
+        # ✅ FIX Issue E: Simple unbounded cache evasion
+        if len(self._gate_cache) > 1000:
+            self._gate_cache.clear()
+
         # ✅ Cache with version
         self._gate_cache[cache_key] = (self._config_version, resolved)
         self.logger.debug(f"Cache MISS (v{self._config_version}): {cache_key}")
@@ -1147,8 +1166,15 @@ class QueryOptimizedExtractor:
         return self.base_extractor.get(f"strategy_market_cap_{strategy_name}", {})
 
     def is_strategy_blocked_for_horizon(self, strategy_name: str) -> bool:
-        """Check if strategy is blocked for this horizon."""
-        return strategy_name in self.base_extractor.blocked_strategies
+        """
+        Check if strategy is blocked for this horizon.
+        
+        ✅ NOW USES: strategy_matrix_config.py
+        A strategy is blocked if its fit multiplier for the horizon is 0.0.
+        """
+        strategy_config = self.base_extractor.get(f"strategy_{strategy_name}", {})
+        fit_multipliers = strategy_config.get("horizon_fit_multipliers", {})
+        return fit_multipliers.get(self.horizon, 1.0) == 0.0
     
     def get_setup_context_requirements(
         self, 
@@ -1364,8 +1390,20 @@ class QueryOptimizedExtractor:
         return self.get_setup_baseline_floor(setup_name)
 
     def is_setup_blocked_for_horizon(self, setup_name: str) -> bool:
-        """Check if setup is blocked for this horizon."""
-        return setup_name in self.base_extractor.blocked_setups
+        """
+        Check if setup is blocked for this horizon.
+        
+        ✅ NOW USES: setup_pattern_matrix_config.py
+        A setup is blocked if its horizon override explicitly sets confidence min to None.
+        """
+        horizon_override = self.base_extractor.get(
+            f"setup_{setup_name}_override_{self.horizon}", {}
+        )
+        opportunity = horizon_override.get("opportunity", {})
+        confidence = opportunity.get("confidence", {})
+        
+        # Explicit None in confidence min means blocked
+        return confidence.get("min") is None and "min" in confidence
 
     def get_setup_classification_rules(
             self,
@@ -1708,8 +1746,8 @@ class QueryOptimizedExtractor:
         """
 
         if self.horizon == "intraday":
-            day_trading = self.base_extractor.get("strategy_day_trading", {})
-            gates = day_trading.get("indian_market_gates", {})
+            exec_rules = self.get_execution_rules()
+            gates = exec_rules.get("indian_market_gates", {})
 
             return {
                 "enabled": bool(gates),
@@ -1936,14 +1974,14 @@ class QueryOptimizedExtractor:
             
             if category_scores:
                 # Map category scores to bucket names
-                namespace["fund_valuation_bucket"] = category_scores.get("valuation", {}).get("score", 0.0)
-                namespace["fund_profitability_bucket"] = category_scores.get("profitability", {}).get("score", 0.0)
-                namespace["fund_growth_bucket"] = category_scores.get("growth", {}).get("score", 0.0)
-                namespace["fund_health_bucket"] = category_scores.get("financial_health", {}).get("score", 0.0)
-                namespace["fund_quality_bucket"] = category_scores.get("quality", {}).get("score", 0.0)
-                namespace["fund_ownership_bucket"] = category_scores.get("ownership", {}).get("score", 0.0)
-                namespace["fund_dividend_bucket"] = category_scores.get("dividend", {}).get("score", 0.0)
-                namespace["fund_market_bucket"] = category_scores.get("market", {}).get("score", 0.0)
+                namespace["fund_valuation_bucket"] = category_scores.get("valuation", {}).get("score")
+                namespace["fund_profitability_bucket"] = category_scores.get("profitability", {}).get("score")
+                namespace["fund_growth_bucket"] = category_scores.get("growth", {}).get("score")
+                namespace["fund_health_bucket"] = category_scores.get("financial_health", {}).get("score")
+                namespace["fund_quality_bucket"] = category_scores.get("quality", {}).get("score")
+                namespace["fund_ownership_bucket"] = category_scores.get("ownership", {}).get("score")
+                namespace["fund_dividend_bucket"] = category_scores.get("dividend", {}).get("score")
+                namespace["fund_market_bucket"] = category_scores.get("market", {}).get("score")
         
         # ============================================================
         # NEW: Also expose technical composites if not already present
@@ -2099,13 +2137,17 @@ class QueryOptimizedExtractor:
             >>> elif ma_slope >= thresholds["slope"]["moderate"]:
             ...     trend_classification = "moderate"
         """
-        # Try horizon-specific first
-        horizon_thresholds = self.base_extractor.get("horizon_trend_thresholds")
-        if horizon_thresholds:
-            return horizon_thresholds
+        global_thresholds = self.base_extractor.get("trend_thresholds", {})
+        horizon_thresholds = self.base_extractor.get("horizon_trend_thresholds", {})
         
-        # Fallback to global (if exists)
-        return self.base_extractor.get("trend_thresholds", {})
+        # Deep merge: horizon overrides global per-key
+        merged = {**global_thresholds}
+        for section, vals in horizon_thresholds.items():
+            if isinstance(vals, dict) and section in merged:
+                merged[section] = {**merged[section], **vals}
+            else:
+                merged[section] = vals
+        return merged
     
     def get_momentum_thresholds(self) -> Dict[str, Any]:
         """
@@ -2133,13 +2175,17 @@ class QueryOptimizedExtractor:
             >>> elif rsi_slope <= thresholds["rsislope"]["deceleration_ceiling"]:
             ...     momentum_state = "decelerating"
         """
-        # Try horizon-specific first
-        horizon_thresholds = self.base_extractor.get("horizon_momentum_thresholds")
-        if horizon_thresholds:
-            return horizon_thresholds
+        global_thresholds = self.base_extractor.get("momentum_thresholds", {})
+        horizon_thresholds = self.base_extractor.get("horizon_momentum_thresholds", {})
         
-        # Fallback to global
-        return self.base_extractor.get("momentum_thresholds", {})
+        # Deep merge: horizon overrides global per-key
+        merged = {**global_thresholds}
+        for section, vals in horizon_thresholds.items():
+            if isinstance(vals, dict) and section in merged:
+                merged[section] = {**merged[section], **vals}
+            else:
+                merged[section] = vals
+        return merged
     
 
     def get_strategy_horizon_multiplier(self, strategy_name: str) -> float:

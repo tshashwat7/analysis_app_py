@@ -672,13 +672,7 @@ MASTER_CONFIG = {
                     "small_cap": {"max": 10000, "spread_pct": 0.005}
                 }
             },
-            
-            # Volume Signatures
-            "volume_signatures": {
-                "surge": {"threshold": 3.0, "confidence_adjustment": 15},
-                "drought": {"threshold": 0.7, "confidence_adjustment": -25},
-                "climax": {"threshold": 2.0, "rsi_condition_min": 70, "confidence_adjustment": -15 }
-            },
+
             
             # Wick Rejection
             "wickRejection": {
@@ -686,32 +680,7 @@ MASTER_CONFIG = {
                 "calculation": "abs(high - close) / abs(close - open)"
             },
             
-            # Divergence Detection
-            # "divergence_detection": {
-            #     "lookback": 10,
-            #     "slope_diff_min": -0.05,
-            #     "confidence_penalties": {
-            #         "bearish_divergence": 0.70,
-            #         "bullish_divergence": 0.70
-            #     },
-            #     "severity_bands": {
-            #         "minor": {
-            #             "rsislope": {"min": -0.03},
-            #             "confidence_penalty": 0.90,
-            #             "allow_entry": True
-            #         },
-            #         "moderate": {
-            #             "rsislope": {"min": -0.08},
-            #             "confidence_penalty": 0.70,
-            #             "allow_entry": True
-            #         },
-            #         "severe": {
-            #             "rsislope": {"min": -999},
-            #             "confidence_penalty": 0.50,
-            #             "allow_entry": False
-            #         }
-            #     }
-            # },
+
         },
         
         "position_sizing": {
@@ -791,6 +760,10 @@ MASTER_CONFIG = {
             "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
         },
         
+        "trend_thresholds": { #new addition
+            "slope": {"strong": 10.0, "moderate": 3.0}  # neutral mid-range fallback
+        },
+        
         "volatility": {
             "scoring_thresholds": {
                 "atrPct": {"excellent": 2.5, "good": 3.0, "fair": 4.5, "poor": 5.5},
@@ -845,211 +818,9 @@ MASTER_CONFIG = {
         # section in extract_global_sections(). Thresholds owned by
         # technical_score_config.py.
         
-        "strategy_preferences": {
-            # This layer controls TRADING preferences per horizon
-            # Independent of objective setup classification
-            "horizon_strategy_config": {
-                "intraday": {
-                    "preferred_setups": [
-                        "MOMENTUM_BREAKOUT",
-                        "VOLATILITY_SQUEEZE", 
-                        "TREND_PULLBACK"
-                    ],
-                    "blocked_setups": [
-                        "QUALITY_ACCUMULATION",
-                        "DEEP_VALUE_PLAY",
-                        "VALUE_TURNAROUND"
-                    ],
-                    "sizing_multipliers": {
-                        "VOLATILITY_SQUEEZE": 1.3,
-                        "MOMENTUM_BREAKOUT": 0.8
-                    },
-                    "fundamentalScore": {"min": None}
-                },
-                
-                "short_term": {
-                    "preferred_setups": [
-                        "MOMENTUM_BREAKOUT",
-                        "TREND_PULLBACK",
-                        "VOLATILITY_SQUEEZE",
-                        "REVERSAL_MACD_CROSS_UP"
-                    ],
-                    "blocked_setups": [],
-                    "sizing_multipliers": {
-                        "DEEP_PULLBACK": 1.5,
-                        "TREND_PULLBACK": 1.3,
-                        "MOMENTUM_BREAKOUT": 1.0
-                    },
-                    "fundamentalScore": {"min": 3.0}
-                },
-                
-                "long_term": {
-                    "preferred_setups": [
-                        "VALUE_TURNAROUND",
-                        "DEEP_VALUE_PLAY",
-                        "QUALITY_ACCUMULATION",
-                        "TREND_PULLBACK"
-                    ],
-                    "blocked_setups": [
-                        "VOLATILITY_SQUEEZE",
-                        "MOMENTUM_BREAKDOWN"
-                    ],
-                    "sizing_multipliers": {
-                        "VALUE_TURNAROUND": 1.5,
-                        "DEEP_VALUE_PLAY": 1.4,
-                        "QUALITY_ACCUMULATION": 1.3,
-                        "MOMENTUM_BREAKOUT": 0.8
-                    },
-                    "fundamentalScore": {"min": 6.0},
-                    "filters": {
-                        "require_low_debt": True,
-                        "roe": {"min": 15.0},
-                        "roce": {"min": 15.0},
-                        "deRatio": {"max": 0.5}
-                    }
-                },
-                
-                "multibagger": {
-                    "preferred_setups": [
-                        "VALUE_TURNAROUND",
-                        "DEEP_VALUE_PLAY",
-                        "QUALITY_ACCUMULATION"
-                    ],
-                    "blocked_setups": [
-                        "MOMENTUM_BREAKOUT",
-                        "VOLATILITY_SQUEEZE",
-                        "REVERSAL_MACD_CROSS_UP"
-                    ],
-                    "sizing_multipliers": {
-                        "VALUE_TURNAROUND": 1.8,
-                        "DEEP_VALUE_PLAY": 1.6,
-                        "QUALITY_ACCUMULATION": 1.5
-                    },
-                    "fundamentalScore": {"min": 8.0},
-                    "filters": {
-                        "require_low_debt": True,
-                        "roe": {"min": 20.0},
-                        "roce": {"min": 25.0},
-                        "piotroskiF": {"min": 7}
-                    }
-                }
-            }
-        },
         
-        "strategy_priority": {
-            "intraday": {
-                "blocked_strategies": [
-                    "value_investing",
-                    "income_investing",
-                    "position_trading",
-                    "canslim",
-                    "quality_growth",
-                    "reversal_trading"
-                ],
-                "priority_multipliers": {
-                    "day_trading": 1.3,
-                    "momentum": 1.2,
-                    "swing_trading": 1.1,
-                    "trend_following": 0.8,
-                    "minervini_growth": 0.5
-                }
-            },
-            
-            "short_term": {
-                "blocked_strategies": [],
-                "priority_multipliers": {
-                    "swing_trading": 1.2,
-                    "momentum": 1.15,
-                    "quality_growth": 1.1,
-                    "trend_following": 1.1,
-                    "reversal_trading": 1.1,
-                    "minervini_growth": 1.1,
-                    "canslim": 1.05,
-                    "value_investing": 0.85,
-                    "position_trading": 0.8,
-                    "income_investing": 0.7
-                }
-            },
-            
-            "long_term": {
-                "blocked_strategies": ["day_trading"],
-                "priority_multipliers": {
-                    "quality_growth": 1.35,
-                    "value_investing": 1.3,
-                    "position_trading": 1.25,
-                    "reversal_trading": 1.2,
-                    "income_investing": 1.2,
-                    "minervini_growth": 1.1,
-                    "canslim": 1.05,
-                    "trend_following": 1.0,
-                    "swing_trading": 0.8,
-                    "momentum": 0.7
-                }
-            },
-            
-            "multibagger": {
-                "blocked_strategies": [
-                    "day_trading",
-                    "momentum",
-                    "swing_trading"
-                ],
-                "priority_multipliers": {
-                    "quality_growth": 1.5,
-                    "value_investing": 1.45,
-                    "minervini_growth": 1.35,
-                    "canslim": 1.25,
-                    "position_trading": 1.2,
-                    "income_investing": 1.1,
-                    "reversal_trading": 1.05,
-                    "trend_following": 0.8
-                }
-            }
-        },
         
-        "setup_priority_design_philosophy": {
-            "long_term": {
-                "philosophy": "Value-first, quality-second, momentum-last",
-                "reasoning": "Long-term horizon prioritizes fundamental strength and value over technical momentum",
-                "conflict_resolution_rules": {
-                    "VALUE_TURNAROUND + QUALITY_ACCUMULATION": "VALUE_TURNAROUND wins (turning point is rarer opportunity)",
-                    "DEEP_VALUE_PLAY + QUALITY_ACCUMULATION": "DEEP_VALUE wins (cheaper entry with safety margin)",
-                    "TREND_PULLBACK + VALUE_TURNAROUND": "VALUE_TURNAROUND wins (fundamental catalyst > technical)"
-                },
-                "priority_order_rationale": [
-                    "90: VALUE_TURNAROUND - Highest conviction: value + improving momentum",
-                    "88: DEEP_VALUE_PLAY - Pure value with margin of safety",
-                    "85: QUALITY_ACCUMULATION - Quality + patient accumulation",
-                    "80: TREND_PULLBACK - Technical entry in established trend",
-                    "75: MOMENTUM_BREAKOUT - Pure momentum (lower for long-term)"
-                ]
-            },
-            
-            "short_term": {
-                "philosophy": "Momentum-first, trend-second, value-tertiary",
-                "reasoning": "Short-term trades capitalize on price momentum and technical patterns",
-                "conflict_resolution_rules": {
-                    "MOMENTUM_BREAKOUT + TREND_PULLBACK": "MOMENTUM_BREAKOUT wins (stronger signal)",
-                    "VOLATILITY_SQUEEZE + MOMENTUM_BREAKOUT": "VOLATILITY_SQUEEZE wins (earlier entry)",
-                    "VALUE_TURNAROUND + TREND_PULLBACK": "TREND_PULLBACK wins (faster payoff)"
-                }
-            },
-            
-            "intraday": {
-                "philosophy": "Momentum-only, fundamentals-never",
-                "reasoning": "Intraday scalping requires fast price action without fundamental considerations",
-                "conflict_resolution_rules": {
-                    "Any fundamental setup": "Block or heavily penalize - wrong timeframe"
-                }
-            },
-            
-            "multibagger": {
-                "philosophy": "Fundamentals-dominant, quality-obsessed, patience-required",
-                "reasoning": "Multi-year holds require exceptional business quality and value",
-                "conflict_resolution_rules": {
-                    "VALUE_TURNAROUND always wins": "Cheapness + improvement = perfect multibagger formula"
-                }
-            }
-        },
+
     
         "targets": {
             "resistance_cushion": 0.96,
@@ -1058,26 +829,19 @@ MASTER_CONFIG = {
             "support_buffer": 0.998,
             "cover_cushion": 1.005
         },
-        "divergence": {
-            "rsislope_deceleration_ceiling": -0.08,
-            "bearish_penalty": 0.70,
-            "bullish_penalty": 0.70,
-            "severity_bands": {
-                "severe": {
-                    "rsislope_threshold": -0.08,
-                    "allow_entry": False,
-                    "confidence_penalty": 1.0  # Legacy/unused
+        
+        "execution": {
+            "confidence_adjustments": {
+                "warning_penalty": -5,
+                "violation_penalty": -15,
+                "risk_score_thresholds": {
+                    "high": 80,
+                    "moderate": 60,
+                    "low": 40
                 },
-                "moderate": {
-                    "rsislope_threshold": -0.03,
-                    "allow_entry": True,         # Does not block Phase 6 execution
-                    "confidence_penalty": 0.7    # NOTE: Unused. Score penalties live in confidence_config.py
-                },
-                "minor": {
-                    "rsislope_threshold": 0.0,
-                    "allow_entry": True,         # Does not block Phase 6 execution
-                    "confidence_penalty": 0.9    # NOTE: Unused. Score penalties live in confidence_config.py
-                }
+                "risk_score_high_penalty": -10,
+                "risk_score_moderate_penalty": -5,
+                "risk_score_low_bonus": 5
             }
         }
     },
@@ -1183,7 +947,29 @@ MASTER_CONFIG = {
                     "resistance_mult": 1.003,
                     "support_mult": 0.997
                 },
-                "min_profit_pct": 0.3
+                "min_profit_pct": 0.3,
+                
+                # ✅ Moved from strategy matrix (Feedback R2-2)
+                "indian_market_gates": {
+                    "min_avg_volume": 500000,
+                    "max_spread_pct": 0.003,
+                    "min_delivery_pct": 40,
+                    "avoid_gsm": True,
+                    "time_filters": {
+                        "avoid_first_15_min": True,
+                        "avoid_last_15_min": True,
+                        "reduce_size_lunch": 0.5,
+                        "optimal_windows": [
+                            {"start": "09:45", "end": "11:30", "multiplier": 1.0},
+                            {"start": "13:30", "end": "15:00", "multiplier": 1.0}
+                        ]
+                    },
+                    "risk_controls": {
+                        "max_position_pct": 0.01,
+                        "mandatory_stop_loss": True,
+                        "max_trades_per_day": 3
+                    }
+                }
             },
             
             "lookback": {"python_data": 500},

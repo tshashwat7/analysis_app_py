@@ -597,131 +597,134 @@ METRIC_WEIGHTS = {
     # INTRADAY: Fast signals, price action, momentum
     # ==========================================================================
     "intraday": {
-        # TREND CATEGORY (20% of total score)
-        "maFastSlope": 0.40,          # Most important - immediate trend direction
-        "maTrendSignal": 0.35,      # MA alignment strength
-        "supertrendSignal": 0.25,     # Quick trend filter
-        
-        # MOMENTUM CATEGORY (35% of total score)
-        "momentumStrength": 0.30,     # Composite momentum
-        "rsi": 0.20,                  # Overbought/oversold
-        "rsislope": 0.20,             # Momentum acceleration
-        "macd": 0.10,                 # Trend momentum
-        "macdCross": 0.08,            # Entry signal
-        "stochK": 0.07,               # Fast oscillator
-        "stochCross": 0.05,          # Stochastic signal
-        
-        # VOLATILITY CATEGORY (10% of total score)
-        "volatilityQuality": 0.50,    # Composite volatility score
-        "atrPct": 0.25,               # Movement potential
-        "bbWidth": 0.15,              # Squeeze detection
-        "ttmSqueeze": 0.10,           # Pre-breakout compression
-        
-        # VOLUME CATEGORY (20% of total score)
-        "rvol": 0.35,                 # Relative volume
-        "volSpikeRatio": 0.30,        # Volume surge
-        "volSpikeSignal": 0.20,     # Volume signal classification
-        "cmfSignal": 0.15,            # Money flow
-        
-        # STRUCTURE CATEGORY (15% of total score)
-        "vwapBias": 0.40,             # Critical for intraday - institutional anchor
-        "priceAction": 0.25,          # Candle position
-        "wickRejection": 0.20,        # Support/resistance test
-        "gapPercent": 0.15,           # Gap moves
+        "trend": {
+            "maFastSlope": 0.40,          # Most important - immediate trend direction
+            "maTrendSignal": 0.35,      # MA alignment strength
+            "supertrendSignal": 0.25,     # Quick trend filter
+        },
+        "momentum": {
+            "momentumStrength": 0.30,     # Composite momentum
+            "rsi": 0.20,                  # Overbought/oversold
+            "rsislope": 0.20,             # Momentum acceleration
+            "macd": 0.10,                 # Trend momentum
+            "macdCross": 0.08,            # Entry signal
+            "stochK": 0.07,               # Fast oscillator
+            "stochCross": 0.05,          # Stochastic signal
+        },
+        "volatility": {
+            "volatilityQuality": 0.50,    # Composite volatility score
+            "atrPct": 0.25,               # Movement potential
+            "bbWidth": 0.15,              # Squeeze detection
+            "ttmSqueeze": 0.10,           # Pre-breakout compression
+        },
+        "volume": {
+            "rvol": 0.35,                 # Relative volume
+            "volSpikeRatio": 0.30,        # Volume surge
+            "volSpikeSignal": 0.20,     # Volume signal classification
+            "cmfSignal": 0.15,            # Money flow
+        },
+        "structure": {
+            "vwapBias": 0.40,             # Critical for intraday - institutional anchor
+            "priceAction": 0.25,          # Candle position
+            "wickRejection": 0.20,        # Support/resistance test
+            "gapPercent": 0.15,           # Gap moves
+        }
     },
     
     # ==========================================================================
     # SHORT-TERM: Balance momentum + trend, pattern recognition
     # ==========================================================================
     "short_term": {
-        # TREND CATEGORY (30% of total score)
-        "trendStrength": 0.30,        # Composite trend score
-        "maTrendSignal": 0.25,      # MA alignment
-        "maFastSlope": 0.15,          # Trend slope
-        "supertrendSignal": 0.15,     # Trend filter
-        "priceVsPrimaryTrendPct": 0.10,  # Pullback depth
-        "adx": 0.05,                  # Trend strength confirmation
-        
-        # MOMENTUM CATEGORY (30% of total score)
-        "momentumStrength": 0.35,     # Composite momentum
-        "rsi": 0.20,                  # Momentum level
-        "rsislope": 0.15,             # Momentum change
-        "macd": 0.12,                 # Trend momentum
-        "macdCross": 0.10,            # Entry signal
-        "stochK": 0.05,               # Oscillator
-        "stochCross": 0.03,          # Stochastic signal
-        
-        # VOLATILITY CATEGORY (15% of total score)
-        "volatilityQuality": 0.50,    # Composite volatility
-        "atrPct": 0.25,               # Volatility level
-        "bbWidth": 0.15,              # Bollinger squeeze
-        "bbpercentb": 0.10,           # BB position
-        
-        # VOLUME CATEGORY (15% of total score)
-        "rvol": 0.35,                 # Relative volume
-        "volSpikeRatio": 0.25,        # Volume surge
-        "obvDiv": 0.20,               # Volume divergence
-        "cmfSignal": 0.20,            # Money flow
-        
-        # STRUCTURE CATEGORY (10% of total score)
-        "position52w": 0.35,          # 52-week position (breakout proximity)
-        "priceAction": 0.25,          # Candle analysis
-        "wickRejection": 0.20,        # Support/resistance
-        "gapPercent": 0.20,           # Gap moves
+        "trend": {
+            "trendStrength": 0.30,        # Composite trend score
+            "maTrendSignal": 0.25,      # MA alignment
+            "maFastSlope": 0.15,          # Trend slope
+            "supertrendSignal": 0.15,     # Trend filter
+            "priceVsPrimaryTrendPct": 0.10,  # Pullback depth
+            "adx": 0.05,                  # Trend strength confirmation
+        },
+        "momentum": {
+            "momentumStrength": 0.35,     # Composite momentum
+            "rsi": 0.20,                  # Momentum level
+            "rsislope": 0.15,             # Momentum change
+            "macd": 0.12,                 # Trend momentum
+            "macdCross": 0.10,            # Entry signal
+            "stochK": 0.05,               # Oscillator
+            "stochCross": 0.03,          # Stochastic signal
+        },
+        "volatility": {
+            "volatilityQuality": 0.50,    # Composite volatility
+            "atrPct": 0.25,               # Volatility level
+            "bbWidth": 0.15,              # Bollinger squeeze
+            "bbpercentb": 0.10,           # BB position
+        },
+        "volume": {
+            "rvol": 0.35,                 # Relative volume
+            "volSpikeRatio": 0.25,        # Volume surge
+            "obvDiv": 0.20,               # Volume divergence
+            "cmfSignal": 0.20,            # Money flow
+        },
+        "structure": {
+            "position52w": 0.35,          # 52-week position (breakout proximity)
+            "priceAction": 0.25,          # Candle analysis
+            "wickRejection": 0.20,        # Support/resistance
+            "gapPercent": 0.20,           # Gap moves
+        }
     },
     
     # ==========================================================================
     # LONG-TERM: Trend dominance, relative strength, minimal noise
     # ==========================================================================
     "long_term": {
-        # TREND CATEGORY (45% of total score)
-        "trendStrength": 0.35,        # Composite trend (highest priority)
-        "maTrendSignal": 0.25,      # Long-term MA alignment
-        "adx": 0.20,                  # Sustained trend strength
-        "priceVsPrimaryTrendPct": 0.12,  # Pullback opportunity
-        "relStrengthNifty": 0.08,     # Outperformance vs benchmark
-        
-        # MOMENTUM CATEGORY (25% of total score)
-        "momentumStrength": 0.40,     # Composite momentum
-        "rsi": 0.25,                  # Momentum level
-        "macd": 0.20,                 # Trend momentum
-        "relStrengthNifty": 0.15,     # Benchmark comparison
-        
-        # VOLATILITY CATEGORY (5% of total score)
-        "volatilityQuality": 1.00,    # Only composite - raw vol is noise
-        
-        # VOLUME CATEGORY (15% of total score)
-        "rvol": 0.60,                 # Relative volume
-        "obvDiv": 0.40,               # Volume trend divergence
-        
-        # STRUCTURE CATEGORY (10% of total score)
-        "position52w": 0.60,          # Multi-year breakout level
-        "priceAction": 0.40,          # Weekly candle patterns
+        "trend": {
+            "trendStrength": 0.35,        # Composite trend (highest priority)
+            "maTrendSignal": 0.25,      # Long-term MA alignment
+            "adx": 0.20,                  # Sustained trend strength
+            "priceVsPrimaryTrendPct": 0.12,  # Pullback opportunity
+            "relStrengthNifty": 0.08,     # Outperformance vs benchmark
+        },
+        "momentum": {
+            "momentumStrength": 0.40,     # Composite momentum
+            "rsi": 0.25,                  # Momentum level
+            "macd": 0.20,                 # Trend momentum
+            "relStrengthNifty": 0.15,     # Benchmark comparison
+        },
+        "volatility": {
+            "volatilityQuality": 1.00,    # Only composite - raw vol is noise
+        },
+        "volume": {
+            "rvol": 0.60,                 # Relative volume
+            "obvDiv": 0.40,               # Volume trend divergence
+        },
+        "structure": {
+            "position52w": 0.60,          # Multi-year breakout level
+            "priceAction": 0.40,          # Weekly candle patterns
+        }
     },
     
     # ==========================================================================
     # MULTIBAGGER: Pure trend + benchmark outperformance, zero noise
     # ==========================================================================
     "multibagger": {
-        # TREND CATEGORY (50% of total score)
-        "trendStrength": 0.45,        # Multi-year trend (supreme priority)
-        "maTrendSignal": 0.30,      # Long-term MA alignment
-        "priceVsPrimaryTrendPct": 0.15,  # Entry timing
-        "relStrengthNifty": 0.10,     # Must outperform market
-        
-        # MOMENTUM CATEGORY (30% of total score)
-        "relStrengthNifty": 1.00,     # ONLY benchmark outperformance matters
-        
-        # STRUCTURE CATEGORY (15% of total score)
-        "position52w": 1.00,          # Multi-year breakout context
-        
-        # VOLUME CATEGORY (5% of total score)
-        "rvol": 1.00,                 # Accumulation detection only
-        
-        # VOLATILITY CATEGORY (0% - explicitly excluded)
-        # No volatility metrics - monthly oscillations are meaningless
+        "trend": {
+            "trendStrength": 0.45,        # Multi-year trend (supreme priority)
+            "maTrendSignal": 0.30,      # Long-term MA alignment
+            "priceVsPrimaryTrendPct": 0.15,  # Entry timing
+            "relStrengthNifty": 0.10,     # Must outperform market
+        },
+        "momentum": {
+            "relStrengthNifty": 1.00,     # ONLY benchmark outperformance matters
+        },
+        "volatility": {},
+        "volume": {
+            "rvol": 1.00,                 # Accumulation detection only
+        },
+        "structure": {
+            "position52w": 1.00,          # Multi-year breakout context
+        }
     }
 }
+
 
 # ==============================================================================
 # METRIC CATEGORIES (Same structure, but simpler usage)
@@ -1768,7 +1771,9 @@ def compute_category_score(
     Returns:
         (category_score_0_to_10, breakdown_dict)
     """
-    weights = METRIC_WEIGHTS.get(horizon, {})
+    horizon_weights = METRIC_WEIGHTS.get(horizon, {})
+    weights = horizon_weights.get(category, {})
+    
     total_weight = 0.0
     weighted_score = 0.0
     breakdown = {}

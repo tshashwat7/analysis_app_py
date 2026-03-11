@@ -117,28 +117,7 @@ STRATEGY_MATRIX = {
                 "fit_threshold": 70
             }
         },
-        # ✅ Indian market-specific gates (stays in strategy)
-        "indian_market_gates": {
-            "min_avg_volume": 500000,
-            "max_spread_pct": 0.003,
-            "min_delivery_pct": 40,
-            "avoid_gsm": True,
-            "time_filters": {
-                "avoid_first_15_min": True,
-                "avoid_last_15_min": True,
-                "reduce_size_lunch": 0.5,
-                "optimal_windows": [
-                    {"start": "09:45", "end": "11:30", "multiplier": 1.0},
-                    {"start": "13:30", "end": "15:00", "multiplier": 1.0}
-                ]
-            },
-            "risk_controls": {
-                "max_position_pct": 0.01,
-                "mandatory_stop_loss": True,
-                "max_trades_per_day": 3
-            }
-        },
-        
+
         "preferred_setups": ["MOMENTUM_BREAKOUT", "VOLATILITY_SQUEEZE", "PATTERN_DARVAS_BREAKOUT"],
         "avoid_setups": ["QUALITY_ACCUMULATION", "VALUE_TURNAROUND"],
         

@@ -105,7 +105,6 @@ CONFIDENCE_CONFIG = {
                     "gates": {
                         "rsislope": {"max": -0.08}
                     },
-                    "confidence_multiplier": 0.50,
                     "block_entry": True,
                     "reason": "Severe bearish divergence"
                 },

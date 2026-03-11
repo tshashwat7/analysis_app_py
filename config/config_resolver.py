@@ -28,7 +28,7 @@ from datetime import datetime, time
 import logging
 import re
 import numbers
-from config.config_helpers.logger_config import (
+from config.config_utility.logger_config import (
     METRICS,
     SafeDict,
     log_failures,
@@ -588,9 +588,7 @@ class ConfigResolver:
         with track_performance("calculate_scores"):
             ctx["scoring"] = self._calculate_all_scores(ctx)
         
-        with track_performance("build_conditions"):
-            ctx["conditions"] = self._build_conditions(ctx)
-        
+
         with track_performance("detect_volume_signature"):
             ctx["volume_signature"] = self.detect_volume_signature(safe_ind.raw)
         
@@ -990,7 +988,6 @@ class ConfigResolver:
     
     def _aggregate_hybrid_pillar(self, hybrid_metrics: Dict) -> Dict:
         """Aggregate hybrid metrics into single pillar score."""
-        from config.master_config import HYBRID_PILLAR_COMPOSITION
         
         # Get horizon-specific weights
         weights = self.extractor.get_hybrid_pillar_composition()
@@ -1028,48 +1025,7 @@ class ConfigResolver:
     # CONDITIONS & SETUP CLASSIFICATION (Refactored)
     # ========================================================================
     
-    def _build_conditions(self, ctx: Dict) -> Dict[str, bool]:
-        """Pre-calculate common boolean conditions."""
-        safe_ind = SafeDict(ctx["indicators"], context="conditions_indicators")
-        safe_fund = SafeDict(ctx["fundamentals"], context="conditions_fundamentals")
-        safe_price = SafeDict(ctx["price_data"], context="conditions_price")
-        
-        try:
-            bc = {
-                # Technical
-                "bb_width_tight": ensure_numeric(safe_ind.raw.get("bbWidth", 999)) < 5.0,
-                "rsi_oversold": ensure_numeric(safe_ind.raw.get("rsi", 50)) < 35,
-                "rsi_overbought": ensure_numeric(safe_ind.raw.get("rsi", 50)) > 70,
-                "trend_strong": ensure_numeric(safe_ind.raw.get("trendStrength", 0)) >= 6.0,
-                "momentum_strong": ensure_numeric(safe_ind.raw.get("momentumStrength", 0)) >= 6.0,
-                "volatility_high_quality": ensure_numeric(safe_ind.raw.get("volatilityQuality", 0)) >= 7.0,
-                "adx_strong": ensure_numeric(safe_ind.raw.get("adx", 0)) >= 25,
-                "volume_surge": ensure_numeric(safe_ind.raw.get("rvol", 1.0)) >= 1.5,
-                "macd_bullish": ensure_numeric(safe_ind.raw.get("macdhistogram", 0)) > 0,
-                
-                # Fundamental
-                "roe_excellent": ensure_numeric(safe_fund.raw.get("roe", 0)) >= 20,
-                "roce_excellent": ensure_numeric(safe_fund.raw.get("roce", 0)) >= 25,
-                "low_debt": ensure_numeric(safe_fund.raw.get("deRatio", 999)) <= 0.5,
-                "quality_compounder": (
-                    ensure_numeric(safe_fund.raw.get("roe", 0)) >= 20 and 
-                    ensure_numeric(safe_fund.raw.get("roce", 0)) >= 25 and 
-                    ensure_numeric(safe_fund.raw.get("epsGrowth5y", 0)) >= 15
-                ),
-                
-                # Position
-                "near_52w_high": ensure_numeric(safe_price.raw.get("position52w", 0)) >= 85,
-                "deep_in_base": ensure_numeric(safe_price.raw.get("position52w", 0)) < 50,
-                
-                # MA alignment
-                "price_above_fast_ma": ensure_numeric(safe_price.raw.get("price", 0)) > ensure_numeric(safe_ind.raw.get("maFast", 0)),
-                "ma_aligned_bullish": self._check_ma_alignment(safe_price.raw, safe_ind.raw)
-            }
-        except Exception as e:
-            self.logger.debug(f"Error building conditions: {e}")
-            bc = {}
-        
-        return bc
+
     
     def _check_ma_alignment(self, price: Dict, ind: Dict) -> bool:
         """Check if MAs are in bullish alignment."""
@@ -1178,7 +1134,8 @@ class ConfigResolver:
 
             # Context requirements
             meets_ctx, ctx_reason = self._validate_context_requirements_via_extractor(
-                setup_name, fund, ctx["price_data"], ind
+                setup_name, fund, ctx["price_data"], ind,
+                scoring=ctx.get("scoring")
             )
             if not meets_ctx:
                 rejected.append({
@@ -1327,11 +1284,7 @@ class ConfigResolver:
         return min(score, 100.0)
     
     def _validate_context_requirements_via_extractor(
-        self,
-        setup_name: str,
-        fundamentals: Dict,
-        price_data: Dict,
-        indicators: Optional[Dict] = None
+        self, setup_name: str, fundamentals: Dict, price_data: Dict, indicators: Dict = None, scoring: Dict = None
     ) -> Tuple[bool, str]:
         """
         ✅ REFACTORED: Validate context requirements using extractor.
@@ -1375,9 +1328,20 @@ class ConfigResolver:
             # Check requirement for existence
             if fundamental_reqs.get("required", False):
                 required_keys = [k for k in fundamental_reqs.keys() if k != "required"]
-                # Use `is not None` — a legitimate 0.0 value (e.g. deRatio=0) is falsy
-                # but still means the fundamental data is present and valid.
-                if not fundamentals or not any(fundamentals.get(k) is not None for k in required_keys):
+                
+                # Separate computed score keys from raw fundamental keys
+                raw_required_keys = [k for k in required_keys if k != "fundamentalScore"]
+                computed_score_valid = (
+                    "fundamentalScore" in required_keys
+                    and scoring is not None
+                    and scoring.get("fundamental", {}).get("score") is not None
+                )
+
+                has_raw = raw_required_keys and any(
+                    fundamentals.get(k) is not None for k in raw_required_keys
+                )
+
+                if not fundamentals or (not has_raw and not computed_score_valid):
                     return False, f"Required fundamentals missing for {setup_name}"
             
             # Check actual constraint thresholds
@@ -1385,13 +1349,20 @@ class ConfigResolver:
                 if fund_field == "required" or not fundamentals:
                     continue
                 
+                if fund_field == "fundamentalScore":
+                    if scoring:
+                        actual_val = ensure_numeric(scoring.get("fundamental", {}).get("score"))
+                    else:
+                        actual_val = None
+                else:
+                    actual_val = ensure_numeric(fundamentals.get(fund_field))
+                
+                if actual_val is None:
+                    continue
+                
                 if isinstance(fund_value, dict):
                     min_val = fund_value.get("min")
                     max_val = fund_value.get("max")
-                    
-                    actual_val = ensure_numeric(fundamentals.get(fund_field))
-                    if actual_val is None:
-                        continue
                     
                     if min_val is not None and actual_val < min_val:
                         return False, f"Fundamental {fund_field} {actual_val:.2f} < required {min_val}"
@@ -1399,10 +1370,6 @@ class ConfigResolver:
                     if max_val is not None and actual_val > max_val:
                         return False, f"Fundamental {fund_field} {actual_val:.2f} > max {max_val}"
                 else:
-                    actual_val = ensure_numeric(fundamentals.get(fund_field))
-                    if actual_val is None:
-                        continue
-                    
                     if actual_val < fund_value:
                         return False, f"Fundamental {fund_field} {actual_val:.2f} < required {fund_value}"
         
@@ -2421,11 +2388,11 @@ class ConfigResolver:
         # Inject fundamental category buckets (Bug 3 Fix)
         if "category_scores" in fundamental_score_block:
             cat_scores = fundamental_score_block["category_scores"]
-            flat_data["fund_growth_bucket"] = cat_scores.get("growth", {}).get("score", 0.0)
-            flat_data["fund_health_bucket"] = cat_scores.get("financial_health", {}).get("score", 0.0)
-            flat_data["fund_quality_bucket"] = cat_scores.get("quality", {}).get("score", 0.0)
-            flat_data["fund_valuation_bucket"] = cat_scores.get("valuation", {}).get("score", 0.0)
-            flat_data["fund_dividend_bucket"] = cat_scores.get("dividend", {}).get("score", 0.0)
+            flat_data["fund_growth_bucket"] = cat_scores.get("growth", {}).get("score")
+            flat_data["fund_health_bucket"] = cat_scores.get("financial_health", {}).get("score")
+            flat_data["fund_quality_bucket"] = cat_scores.get("quality", {}).get("score")
+            flat_data["fund_valuation_bucket"] = cat_scores.get("valuation", {}).get("score")
+            flat_data["fund_dividend_bucket"] = cat_scores.get("dividend", {}).get("score")
 
         # Inject pattern_count (Bug 4 Fix)
         pv = ctx.get("pattern_validation", {}).get("by_setup", {}).get(setup_type, {})
@@ -2440,9 +2407,12 @@ class ConfigResolver:
         )
 
         # This handles divergence multiplier internally
-        total_adjustment, breakdown = self.extractor.calculate_total_confidence_adjustment(
+        adj_data = self.extractor.calculate_total_confidence_adjustment(
             modifier_results
         )
+        total_adjustment = adj_data["adjustment"]
+        breakdown = adj_data["breakdown"]
+        divergence_multiplier = adj_data["multiplier"]
         self.logger.debug(
             "Calculating confidence modifiers for setup '%s' with data keys: %s",
             setup_type,
@@ -2450,15 +2420,10 @@ class ConfigResolver:
         )
 
 
-        # Extract divergence multiplier for reporting
-        divergence_multiplier = 1.0
-        for item in breakdown:
-            if "Final multiplier" in item:
-                try:
-                    divergence_multiplier = float(item.split("×")[1])
-                except:
-                    pass
-                break
+        # divergence_multiplier is now a direct return value (Issue 7 fix)
+        self.logger.debug(
+            "Confidence adjustment multiplier: %s", divergence_multiplier
+        )
 
         # Build structured adjustments with multiplier already applied
         structured_adjustments = []
@@ -2565,42 +2530,48 @@ class ConfigResolver:
         execution = ctx.get("execution_rules", {}).get("summary", {})
         exec_adjustment = 0
         exec_breakdown = []
+        
+        # Get dynamic adjustment values from master_config via extractor
+        exec_cfg = self.extractor.base_extractor.get("execution", {})
+        conf_adj = exec_cfg.get("confidence_adjustments", {})
+        
+        warning_pen = conf_adj.get("warning_penalty", -5)
+        violation_pen = conf_adj.get("violation_penalty", -15)
+        risk_thresh = conf_adj.get("risk_score_thresholds", {"high": 80, "moderate": 60, "low": 40})
+        risk_high_pen = conf_adj.get("risk_score_high_penalty", -10)
+        risk_mod_pen = conf_adj.get("risk_score_moderate_penalty", -5)
+        risk_low_bonus = conf_adj.get("risk_score_low_bonus", 5)
 
         warnings = execution.get("warnings", [])
         violations = execution.get("violations", [])
         risk_score = execution.get("execution_risk_score", 0)
 
         for rule in warnings:
-            raw_penalty = -5
-            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_adjustment += warning_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
             exec_breakdown.append(
-                f"execution_warning.{rule}: {raw_penalty * divergence_multiplier:+.1f}"
+                f"execution_warning.{rule}: {warning_pen * divergence_multiplier:+.1f}"
             )
 
         for rule in violations:
-            raw_penalty = -15
-            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_adjustment += violation_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
             exec_breakdown.append(
-                f"execution_violation.{rule}: {raw_penalty * divergence_multiplier:+.1f}"
+                f"execution_violation.{rule}: {violation_pen * divergence_multiplier:+.1f}"
             )
 
-        if risk_score >= 80:
-            raw_penalty = -10
-            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+        if risk_score >= risk_thresh.get("high", 80):
+            exec_adjustment += risk_high_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
             exec_breakdown.append(
-                f"execution_risk_score >= 80: {raw_penalty * divergence_multiplier:+.1f}"
+                f"execution_risk_score >= {risk_thresh.get('high', 80)}: {risk_high_pen * divergence_multiplier:+.1f}"
             )
-        elif risk_score >= 60:
-            raw_penalty = -5
-            exec_adjustment += raw_penalty * divergence_multiplier  # ✅ APPLY MULTIPLIER
+        elif risk_score >= risk_thresh.get("moderate", 60):
+            exec_adjustment += risk_mod_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
             exec_breakdown.append(
-                f"execution_risk_score >= 60: {raw_penalty * divergence_multiplier:+.1f}"
+                f"execution_risk_score >= {risk_thresh.get('moderate', 60)}: {risk_mod_pen * divergence_multiplier:+.1f}"
             )
-        elif risk_score < 40:
-            raw_bonus = 5
-            exec_adjustment += raw_bonus * divergence_multiplier  # ✅ APPLY MULTIPLIER
+        elif risk_score <= risk_thresh.get("low", 40) and risk_score > 0:
+            exec_adjustment += risk_low_bonus * divergence_multiplier  # Bonus for very clean execution
             exec_breakdown.append(
-                f"execution_risk_score < 40: {raw_bonus * divergence_multiplier:+.1f}"
+                f"execution_risk_score <= {risk_thresh.get('low', 40)}: {risk_low_bonus * divergence_multiplier:+.1f}"
             )
 
         if exec_adjustment != 0:
@@ -2786,25 +2757,18 @@ class ConfigResolver:
         # ───────────────────────────────────────
         # ✅ NEW: Rule 5: Divergence Entry Gate
         # ───────────────────────────────────────
-        divergence_gate = self.extractor.get_divergence_entry_gate()
-        if divergence_gate and "severity_bands" in divergence_gate:
-            rsislope = ctx.get("indicators", {}).get("rsislope")
-            if rsislope is not None:
-                severe_band = divergence_gate["severity_bands"].get("severe", {})
-                if not severe_band.get("allow_entry", True):
-                    threshold = severe_band.get("rsislope_threshold", -0.08)
-                    if rsislope <= threshold:
-                        rule_results["divergence_gate"] = _normalize({
-                            "passed": False,
-                            "severity": 100,
-                            "reason": f"Severe divergence blocked entry (rsislope: {rsislope:.3f} <= {threshold})"
-                        }, "divergence_gate")
-                    else:
-                        rule_results["divergence_gate"] = _normalize({"passed": True}, "divergence_gate")
-                else:
-                    rule_results["divergence_gate"] = _normalize({"passed": True}, "divergence_gate")
-            else:
-                rule_results["divergence_gate"] = _normalize({"skipped": True, "reason": "Missing rsislope"}, "divergence_gate")
+        # ───────────────────────────────────────
+        # ✅ NEW: Rule 5: Divergence Entry Gate
+        # ───────────────────────────────────────
+        divergence = ctx.get("divergence", {})
+        if not divergence.get("allow_entry", True):
+            rule_results["divergence_gate"] = _normalize({
+                "passed": False,
+                "severity": 100,
+                "reason": divergence.get("warning", "Severe divergence blocked entry")
+            }, "divergence_gate")
+        else:
+            rule_results["divergence_gate"] = _normalize({"passed": True}, "divergence_gate")
 
         # ───────────────────────────────────────
         # Aggregate risk score (NOT a decision)
@@ -3528,14 +3492,13 @@ class ConfigResolver:
 
         # 3. Detect BEARISH Divergence (Price ↑, RSI ↓)
         if price_slope > 0 and rsi_slope < bear_trigger:
-            # ✅ Use config-based momentum thresholds for adaptive severity
-            mom_thresholds = self.extractor.get_momentum_thresholds()
-            rsi_decel = mom_thresholds.get("rsislope", {}).get("deceleration_ceiling", -0.05)
             
-            # Adaptive severity based on threshold multiples
-            if rsi_slope <= rsi_decel * 3:  # 3x threshold = severe
+            severe_thresh = div_penalties.get("severe", {}).get("gates", {}).get("rsislope", {}).get("max", -0.08)
+            moderate_thresh = div_penalties.get("moderate", {}).get("gates", {}).get("rsislope", {}).get("max", -0.03)
+            
+            if rsi_slope <= severe_thresh:
                 severity = "severe"
-            elif rsi_slope <= rsi_decel * 1.5:  # 1.5x threshold = moderate
+            elif rsi_slope <= moderate_thresh:
                 severity = "moderate"
             else:
                 severity = "minor"
@@ -3675,7 +3638,6 @@ class ConfigResolver:
         """
 
         opportunity = eval_ctx["opportunity_gates"]["overall"]
-        setup_pref = eval_ctx.get("setup_preferences", {})
         
         # ✅ Pattern entry validation (from evaluation phase)
         pattern_entry_ok = True
@@ -3716,7 +3678,6 @@ class ConfigResolver:
             structural  # ✅ FIXED: Include structural gates validation
             and execution_rules  # ✅ FIXED: Include execution rules validation
             and opportunity["passed"]
-            and not setup_pref.get("blocked", False)
             and pattern_entry_ok
             and divergence_ok  # ✅ RESTORED
             and vol_ok  # ✅ RESTORED
@@ -3733,8 +3694,6 @@ class ConfigResolver:
             elif not opportunity["passed"]:
                 failures = opportunity.get("failed_gates", [])
                 reason = f"Opportunity gates failed: {[f['gate'] for f in failures[:3]]}"
-            elif setup_pref.get("blocked"):
-                reason = setup_pref.get("blocked_reason")
             elif not pattern_entry_ok:
                 reason = f"Pattern entry blocked: {pattern_entry_reason}"
             elif not divergence_ok:  # ✅ RESTORED
@@ -3749,7 +3708,6 @@ class ConfigResolver:
             # ✅ Validation breakdown (for debugging)
             "checks": {
                 "opportunity_gates": opportunity["passed"],
-                "setup_not_blocked": not setup_pref.get("blocked", False),
                 "pattern_entry": pattern_entry_ok,
                 "divergence": divergence_ok,
                 "volume": vol_ok,
@@ -4459,7 +4417,7 @@ class ConfigResolver:
         if constraints:
             return {
                 "gates": constraints,
-                "source": "strategy_matrix",
+                "source": "horizon_execution",
                 "blocking": constraints.get("blocking", False),
                 "strategy": eval_ctx["strategy"]["primary"]
             }
@@ -4548,61 +4506,7 @@ class ConfigResolver:
         Horizon override > Global baseline > Default (40)
         """
         return self.extractor.get_setup_confidence_floor(setup_name)
-    
-    def _validate_indian_market_gates(self, eval_ctx: Dict) -> Tuple[bool, str]:
-        """✅ Validate Indian market gates using extractor."""
-        # ✅ Get market constraints via extractor
-        # this method is obsolete since we do not have capacity to calulate spread and delivery pct
-        # and we are not using this method anywhere
-        # remove this method in future for now just early return
-        return True, "Indian market gates not configured"
-        constraints = self.extractor.get_market_constraints_config()
-        
-        if not constraints:
-            return False, "No Indian market gates configured"
-        
-        gates = constraints.get("gates", {})
-        if not gates:
-            return True, "No gates defined"
-            
-        price_data = eval_ctx.get("price_data", {})
-        
-        # Check min average volume
-        min_vol = gates.get("min_avg_volume")
-        if min_vol:
-            actual_vol = price_data.get("avgVolume", 0)
-            if actual_vol < min_vol:
-                return False, f"Avg volume {actual_vol:,.0f} < required {min_vol:,.0f}"
-        
-        # Check max spread
-        max_spread = gates.get("max_spread_pct")
-        if max_spread:
-            spread = price_data.get("spread_pct") or \
-                    price_data.get("bidAskSpread") or \
-                    price_data.get("spreadPct", 0)
-            
-            if spread > max_spread:
-                return False, f"Spread {spread:.2%} > max {max_spread:.2%}"
-        
-        # Check min delivery
-        min_delivery = gates.get("min_delivery_pct")
-        if min_delivery:
-            delivery = price_data.get("delivery_pct") or \
-                    price_data.get("deliveryPct", 0)
-            
-            if delivery < min_delivery:
-                return False, f"Delivery {delivery:.1f}% < required {min_delivery}%"
-        
-        # Check GSM avoidance
-        if gates.get("avoid_gsm"):
-            gsm_flag = price_data.get("gsm_flag") or \
-                    price_data.get("gsmFlag") or \
-                    price_data.get("in_gsm", False)
-            
-            if gsm_flag:
-                return False, "Stock in GSM - blocked"
-        
-        return True, "All Indian market gates passed"
+
 
 def create_resolver(master_config: Dict, horizon: str) -> ConfigResolver:
     """Factory function to create resolver instance."""

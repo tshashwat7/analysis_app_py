@@ -100,8 +100,6 @@ class ConfigExtractor:
         try:
             self.extract_global_sections()
             self.extract_horizon_sections()
-            self.extract_setup_sections()
-            self.extract_strategy_sections()
             self.extract_risk_sections()
             self.extract_gate_sections()
             self.extract_matrix_sections()
@@ -395,21 +393,13 @@ class ConfigExtractor:
             source="master_config.HORIZON_PILLAR_WEIGHTS"
         )
 
-        # ✅ NEW: Extract divergence entry gate
-        self.sections["divergence_entry_gate"] = ConfigSection(
-            data=global_cfg.get("divergence", {}),
-            source="global.divergence"
-        )
+
 
         # Calculation Engine
         calc_engine = global_cfg.get("calculation_engine", {})
         self.sections["spread_adjustment"] = ConfigSection(
             data=calc_engine.get("spread_adjustment", {}),
             source="global.calculation_engine.spread_adjustment"
-        )
-        self.sections["volume_signatures"] = ConfigSection(
-            data=calc_engine.get("volume_signatures", {}),
-            source="global.calculation_engine.volume_signatures"
         )
 
         # Core Sections
@@ -514,68 +504,6 @@ class ConfigExtractor:
         self.sections["horizon_momentum_thresholds"] = ConfigSection(
             data=horizon_cfg.get("momentum_thresholds", {}),
             source=f"horizons.{self.horizon}.momentum_thresholds"
-        )
-
-    def extract_setup_sections(self):
-        """Extract setup-related config sections."""
-        global_cfg = self.master_config.get("global", {})
-        calc_engine = global_cfg.get("calculation_engine", {})
-
-        # Priority overrides
-        priority_overrides = calc_engine.get("horizon_priority_overrides", {})
-        self.sections["horizon_priority_overrides"] = ConfigSection(
-            data=priority_overrides.get(self.horizon, {}),
-            source=f"global.calculation_engine.horizon_priority_overrides.{self.horizon}"
-        )
-
-    def extract_strategy_sections(self):
-        """Extract strategy-related config sections."""
-        global_cfg = self.master_config.get("global", {})
-
-        # Strategy preferences
-        strategy_prefs = global_cfg.get("strategy_preferences", {})
-        horizon_strategy = strategy_prefs.get("horizon_strategy_config", {}).get(self.horizon, {})
-
-        self.sections["blocked_setups"] = ConfigSection(
-            data=set(horizon_strategy.get("blocked_setups", [])),
-            source=f"global.strategy_preferences.horizon_strategy_config.{self.horizon}.blocked_setups"
-        )
-        self.sections["preferred_setups"] = ConfigSection(
-            data=horizon_strategy.get("preferred_setups", []),
-            source=f"global.strategy_preferences.horizon_strategy_config.{self.horizon}.preferred_setups"
-        )
-        
-        # Position sizing multipliers
-        global_mults = global_cfg.get("position_sizing", {}).get("global_setup_multipliers", {})
-        
-        # Get horizon-specific multipliers
-        horizon_cfg = self.master_config.get("horizons", {}).get(self.horizon, {})
-        horizon_sizing = horizon_cfg.get("risk_management", {})
-        horizon_mults = horizon_sizing.get("setup_size_multipliers", {})
-        
-        # Merge with horizon overrides taking precedence
-        merged_multipliers = {**global_mults, **horizon_mults}
-        
-        self.sections["sizing_multipliers"] = ConfigSection(
-            data=merged_multipliers,
-            source=f"global.position_sizing.global_setup_multipliers + horizons.{self.horizon}.risk_management.setup_size_multipliers"
-        )
-        
-        horizon_base_mult = horizon_sizing.get("base_multiplier", 1.0)
-        self.sections["horizon_base_multiplier"] = ConfigSection(
-            data=horizon_base_mult,
-            source=f"horizons.{self.horizon}.risk_management.base_multiplier"
-        )
-
-        # Strategy priority
-        strategy_priority = global_cfg.get("strategy_priority", {}).get(self.horizon, {})
-        self.sections["blocked_strategies"] = ConfigSection(
-            data=set(strategy_priority.get("blocked_strategies", [])),
-            source=f"global.strategy_priority.{self.horizon}.blocked_strategies"
-        )
-        self.sections["strategy_multipliers"] = ConfigSection(
-            data=strategy_priority.get("priority_multipliers", {}),
-            source=f"global.strategy_priority.{self.horizon}.priority_multipliers"
         )
 
     def extract_risk_sections(self):
@@ -857,14 +785,6 @@ class ConfigExtractor:
                         data=market_cap_reqs,
                         source=f"strategy_matrix.{strategy_name}.market_cap_requirements"
                     )
-
-                # Extract Indian market gates (day_trading specific)
-                indian_gates = strategy_config.get("indian_market_gates", {})
-                if indian_gates:
-                    self.sections[f"strategy_indian_gates_{strategy_name}"] = ConfigSection(
-                        data=indian_gates,
-                        source=f"strategy_matrix.{strategy_name}.indian_market_gates"
-                )
 
             self.logger.info("✅ Strategy matrix extracted successfully")
 
