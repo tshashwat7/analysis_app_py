@@ -44,345 +44,7 @@ MIN_FIT_SCORE = 10.0
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# SAFE CONDITION EVALUATOR (Embedded - No External Dependencies)
-# ============================================================================
 
-class ConditionEvaluator:
-    """
-    Enhanced condition evaluator supporting:
-    - Numeric/string comparisons
-    - Math functions (abs, min, max, round)
-    - Nested dict value extraction
-    - Logical operators (AND/OR)
-    """
-    
-    OPERATORS = {
-        ">=": lambda a, b: a >= b,
-        "<=": lambda a, b: a <= b,
-        ">": lambda a, b: a > b,
-        "<": lambda a, b: a < b,
-        "==": lambda a, b: a == b,
-        "!=": lambda a, b: a != b,
-    }
-    
-    # Math functions available in conditions
-    MATH_FUNCTIONS = {
-        "abs": abs,
-        "min": min,
-        "max": max,
-        "round": round,
-    }
-    
-    @classmethod
-    def evaluate_condition(cls, condition: str, namespace: Dict[str, Any]) -> bool:
-        """
-        Evaluate condition with smart value extraction from nested dicts.
-        
-        Examples:
-            "abs(price - maFast) / maFast <= 0.05"  # Math functions
-            "ttmSqueeze == 'Squeeze On'"             # String comparison
-            "price < bbLow"                          # Numeric comparison (auto-extracts from nested)
-        """
-        if not condition or not condition.strip():
-            return False
-        
-        # Handle logical operators — use regex split so detection and splitting
-        # are both case-insensitive (avoids " AND " detected but not split).
-        if re.search(r'\s+and\s+', condition, flags=re.IGNORECASE):
-            parts = re.split(r'\s+and\s+', condition, flags=re.IGNORECASE)
-            return all(cls.evaluate_condition(part.strip(), namespace) for part in parts)
-        
-        if re.search(r'\s+or\s+', condition, flags=re.IGNORECASE):
-            parts = re.split(r'\s+or\s+', condition, flags=re.IGNORECASE)
-            return any(cls.evaluate_condition(part.strip(), namespace) for part in parts)
-        
-        # Parse single comparison
-        condition = condition.strip()
-
-        # ✅ FIXED: Use regex for robust operator splitting
-        for op_str, op_func in cls.OPERATORS.items():
-            # Create regex pattern that matches operator with word boundaries
-            # Escape special regex characters in operator
-            escaped_op = re.escape(op_str)
-            pattern = rf'\s{escaped_op}\s'
-
-            match = re.search(pattern, f' {condition} ')
-            if match:
-                # Split at the matched position
-                match_pos = match.start() - 1  # Adjust for the leading space we added
-                left = condition[:match_pos].strip()
-                right = condition[match_pos + 1 + len(op_str):].strip()  # +1 to skip the space before operator
-
-                if not left or not right:
-                    continue
-
-                # Evaluate left side (may contain math expressions)
-                try:
-                    left_value = cls._evaluate_expression(left, namespace)
-                except Exception as e:
-                    return False
-                
-                # Parse right value
-                right_value = cls._parse_right_operand(right, namespace)
-                
-                if left_value is None or right_value is None:
-                    return False
-                
-                try:
-                    return cls._compare_values(left_value, right_value, op_func)
-                except (TypeError, ValueError):
-                    return False
-        
-        return False
-    
-    @classmethod
-    def _evaluate_expression(cls, expr: str, namespace: Dict[str, Any]) -> Any:
-        """
-        Evaluate expression with auto-extraction from nested dicts.
-        
-        Handles:
-        - Simple variables: "price" → extracts from {"price": {"value": 954.55, ...}}
-        - Math functions: "abs(price - maFast)" → evaluates with extracted values
-        - Arithmetic: "price - maFast" → evaluates with extracted values
-        """
-        expr = expr.strip()
-        
-        # Check if expression contains functions or operators
-        has_function = any(f"{func}(" in expr for func in cls.MATH_FUNCTIONS.keys())
-        has_operator = any(op in expr for op in ['+', '-', '*', '/', '(', ')'])
-        
-        if has_function or has_operator:
-            # Build safe namespace with extracted values
-            safe_namespace = cls._build_safe_namespace(namespace)
-            
-            try:
-                result = eval(expr, {"__builtins__": {}}, safe_namespace)
-                
-                # ✅ DEBUG: Log successful evaluation
-                logger.debug(
-                    f"Expression evaluated: '{expr}' = {result:.4f} | "
-                    f"Available vars: {list(safe_namespace.keys())[:10]}"
-                )
-                
-                return result
-            except Exception as e:
-                # ✅ IMPROVED: Log detailed error
-                logger.warning(
-                    f"⚠️ eval failed in _evaluate_expression: {e} | "
-                    f"Expression: '{expr}' | "
-                    f"Namespace keys: {list(safe_namespace.keys())}"
-                )
-                return None
-        else:
-            # Simple variable lookup with auto-extraction
-            value = namespace.get(expr)
-            return cls._extract_value_from_metric(value)
-
-    @classmethod
-    def _build_safe_namespace(cls, namespace: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Build safe namespace with extracted values + math functions.
-        
-        Converts:
-        {"price": {"value": 954.55, ...}} → {"price": 954.55, "abs": <function>, ...}
-        """
-        safe = {**cls.MATH_FUNCTIONS}
-        
-        for key, value in namespace.items():
-            extracted = cls._extract_value_from_metric(value)
-            if extracted is not None:
-                safe[key] = extracted
-        
-        return safe
-    
-    @classmethod
-    def _extract_value_from_metric(cls, value: Any) -> Any:
-        """
-        Extract usable value from metric (handles nested dicts).
-        
-        Extraction priority:
-        1. Simple values (int/float/str/bool) → return as-is
-        2. Nested dict with raw → extract raw (unless pattern)
-        3. Nested dict with value → extract value
-        4. Nested dict with score → extract score
-        
-        Special handling for patterns:
-        - Pattern dicts (with raw.found) are preserved for pattern detection
-        """
-        if value is None:
-            return None
-        
-        # Normalize numpy scalars → native Python float early so all
-        # downstream isinstance(x, (int, float)) checks work correctly.
-        # Must come BEFORE the bool check because np.bool_ is also a
-        # numbers.Number subclass.
-        if not isinstance(value, (bool, str)) and isinstance(value, numbers.Number):
-            return float(value)
-        
-        # Already primitive
-        if isinstance(value, (int, float, str, bool)):
-            return value
-        
-        # Nested dict
-        if isinstance(value, dict):
-            # Check if this is a pattern metric (has nested raw.found)
-            raw = value.get('raw')
-            if isinstance(raw, dict) and 'found' in raw:
-                # This is a pattern - DON'T extract nested value
-                # Return top-level 'value' or 'found' instead
-                if 'value' in value and not isinstance(value['value'], dict):
-                    return value['value']
-                if 'found' in value:
-                    return value['found']
-                return value  # Return whole dict as fallback
-            
-            # Extract from nested dict: priority raw > value > score
-            if raw is not None and not isinstance(raw, dict):
-                if isinstance(raw, str):
-                    return raw  # String metric
-                else:
-                    try:
-                        return float(raw)
-                    except (ValueError, TypeError):
-                        pass
-            
-            val = value.get('value')
-            if val is not None and not isinstance(val, dict):
-                if isinstance(val, str):
-                    return val
-                else:
-                    try:
-                        return float(val)
-                    except (ValueError, TypeError):
-                        pass
-            
-            score = value.get('score')
-            if score is not None:
-                try:
-                    return float(score)
-                except (ValueError, TypeError):
-                    pass
-        
-        return value
-    
-    @classmethod
-    def _parse_right_operand(cls, right: str, namespace: Dict[str, Any]) -> Any:
-        """Parse right side of comparison."""
-        right = right.strip()
-        
-        # String literal
-        if (right.startswith("'") and right.endswith("'")) or \
-           (right.startswith('"') and right.endswith('"')):
-            return right[1:-1]
-        
-        # Boolean
-        if right.lower() == "true":
-            return True
-        if right.lower() == "false":
-            return False
-        
-        # Variable from namespace (with auto-extraction)
-        if right in namespace:
-            return cls._extract_value_from_metric(namespace[right])
-        
-        # Numeric literal
-        try:
-            if '.' not in right:
-                return int(right)
-            return float(right)
-        except ValueError:
-            return None
-    
-    @classmethod
-    def _compare_values(cls, left: Any, right: Any, op_func) -> bool:
-        """
-        Type-aware comparison that handles mixed types gracefully.
-        
-        Rules:
-        1. Both strings → Direct string comparison
-        2. Both numeric → Numeric comparison  
-        3. String vs numeric → Try conversion, fail gracefully
-        4. Boolean → Exact match only
-        """
-        # Handle None values
-        if left is None or right is None:
-            return False
-        
-        # Both strings
-        if isinstance(left, str) and isinstance(right, str):
-            return op_func(left, right)
-        
-        # Both booleans
-        if isinstance(left, bool) and isinstance(right, bool):
-            return op_func(left, right)
-        
-        # Both numeric — use numbers.Number to catch numpy scalars (np.float64 etc.)
-        _left_num = isinstance(left, numbers.Number) and not isinstance(left, bool)
-        _right_num = isinstance(right, numbers.Number) and not isinstance(right, bool)
-        if _left_num and _right_num:
-            return op_func(float(left), float(right))
-        
-        # Mixed: try conversion
-        if isinstance(left, str) and _right_num:
-            try:
-                return op_func(float(left), float(right))
-            except (ValueError, TypeError):
-                return False
-        
-        if _left_num and isinstance(right, str):
-            try:
-                return op_func(float(left), float(right))
-            except (ValueError, TypeError):
-                return False
-        
-        # Boolean vs other
-        if isinstance(left, bool) or isinstance(right, bool):
-            return False
-        
-        return False
-    
-    @classmethod
-    def evaluate_conditions_list(cls, conditions: list, namespace: Dict[str, Any]) -> bool:
-        """Evaluate list of conditions (all must pass). Empty list = no constraints = pass."""
-        if not conditions:
-            return True  # BUG 4 FIX: vacuously true — no constraints means pass
-        return all(cls.evaluate_condition(cond, namespace) for cond in conditions)
-
-    @classmethod
-    def evaluate_gate_config(
-        cls, 
-        actual_value: Any, 
-        gate_config: Union[Dict, float, int], 
-        metric_name: str
-    ) -> Tuple[bool, Optional[str]]:
-        """
-        ✅ NEW: Handles structured gate configs (Dict/Numeric).
-        Reuses cls._compare_values for consistent type safety.
-        """
-        if actual_value is None:
-            return False, f"{metric_name} is Missing/None"
-
-        # Normalize to min/max
-        mn, mx = None, None
-        if isinstance(gate_config, dict):
-            mn = gate_config.get("min")
-            mx = gate_config.get("max")
-        elif isinstance(gate_config, numbers.Number) and not isinstance(gate_config, bool):
-            mn = gate_config
-        
-        # Check Min
-        if mn is not None:
-            # Reuse _compare_values from your existing string evaluator!
-            if not cls._compare_values(actual_value, mn, lambda a, b: a >= b):
-                return False, f"{metric_name} {actual_value} < min {mn}"
-
-        # Check Max
-        if mx is not None:
-            if not cls._compare_values(actual_value, mx, lambda a, b: a <= b):
-                return False, f"{metric_name} {actual_value} > max {mx}"
-
-        return True, None
 # ============================================================================
 # HELPER FUNCTIONS (Minimal - Most Logic in Resolver)
 # ============================================================================
@@ -1086,15 +748,13 @@ class ConfigResolver:
                 continue
 
             pattern_rules = rules.get("pattern_detection", {})
-            fund_conditions = rules.get("fundamental_conditions", [])
-            tech_conditions = rules.get("technical_conditions", [])
+            fundamental_gates = rules.get("fundamental_gates", {})
+            technical_gates = rules.get("technical_gates", {})
             require_fund = rules.get("require_fundamentals", False)
 
             # Fundamentals availability check
-            if require_fund and fund_conditions:
-                needed = set()
-                for cond in fund_conditions:
-                    needed.update(self._extract_variables_from_condition(cond))
+            if require_fund and fundamental_gates:
+                needed = [k for k in fundamental_gates.keys() if not k.startswith("_")]
                 if needed and not any(fund.get(k) is not None for k in needed):
                     rejected.append({
                         "type": setup_name,
@@ -1113,24 +773,28 @@ class ConfigResolver:
                 continue
 
             # Fundamental conditions
-            if fund_conditions and not self._evaluate_conditions_list(
-                fund_conditions, fund, context=setup_name
-            ):
-                rejected.append({
-                    "type": setup_name,
-                    "reason": "fundamental_conditions_failed"
-                })
-                continue
+            if fundamental_gates:
+                passes, _ = self.extractor.evaluate_confidence_gates(
+                    fundamental_gates, fund, empty_gates_pass=True
+                )
+                if not passes:
+                    rejected.append({
+                        "type": setup_name,
+                        "reason": "fundamental_conditions_failed"
+                    })
+                    continue
 
             # Technical conditions
-            if not self._evaluate_conditions_list(
-                tech_conditions, tech_namespace, context=setup_name
-            ):
-                rejected.append({
-                    "type": setup_name,
-                    "reason": "technical_conditions_failed"
-                })
-                continue
+            if technical_gates:
+                passes, _ = self.extractor.evaluate_confidence_gates(
+                    technical_gates, tech_namespace, empty_gates_pass=True
+                )
+                if not passes:
+                    rejected.append({
+                        "type": setup_name,
+                        "reason": "technical_conditions_failed"
+                    })
+                    continue
 
             # Context requirements
             meets_ctx, ctx_reason = self._validate_context_requirements_via_extractor(
@@ -1262,24 +926,36 @@ class ConfigResolver:
         score = 50.0  # Base score
 
         # Check technical conditions
-        tech_conditions = rules.get("technical_conditions", [])
-        if tech_conditions:
-            passed = sum(
-                1 for cond in tech_conditions
-                if self._evaluate_conditions_list([cond], tech_namespace, setup_name)
-            )
-            # +5 points per passed condition
-            score += (passed / len(tech_conditions)) * 30
+        technical_gates = rules.get("technical_gates", {})
+        if technical_gates:
+            passed = 0
+            gate_count = 0
+            for metric, gate in technical_gates.items():
+                if metric.startswith("_"): continue
+                gate_count += 1
+                metric_passes, _ = self.extractor.evaluate_confidence_gates(
+                    {metric: gate}, tech_namespace, empty_gates_pass=True
+                )
+                if metric_passes:
+                    passed += 1
+            if gate_count > 0:
+                score += (passed / gate_count) * 30
 
         # Check fundamental conditions
-        fund_conditions = rules.get("fundamental_conditions", [])
-        if fund_conditions:
-            passed = sum(
-                1 for cond in fund_conditions
-                if self._evaluate_conditions_list([cond], fundamentals, setup_name)
-            )
-            # +2 points per passed condition
-            score += (passed / len(fund_conditions)) * 20
+        fundamental_gates = rules.get("fundamental_gates", {})
+        if fundamental_gates:
+            passed = 0
+            gate_count = 0
+            for metric, gate in fundamental_gates.items():
+                if metric.startswith("_"): continue
+                gate_count += 1
+                metric_passes, _ = self.extractor.evaluate_confidence_gates(
+                    {metric: gate}, fundamentals, empty_gates_pass=True
+                )
+                if metric_passes:
+                    passed += 1
+            if gate_count > 0:
+                score += (passed / gate_count) * 20
 
         return min(score, 100.0)
     
@@ -1440,97 +1116,6 @@ class ConfigResolver:
         
         return True
     
-    def _evaluate_conditions_list(
-        self,
-        conditions: List[str],
-        namespace: Dict[str, Any],
-        context: str = ""
-    ) -> bool:
-        """Evaluate a list of conditions against a namespace."""
-        if not conditions:
-            return True
-        
-        evaluator = ConditionEvaluator
-        
-        for condition in conditions:
-            result = evaluator.evaluate_condition(condition, namespace)
-            
-            # Extract ACTUAL variables (excluding functions)
-            variables = self._extract_variables_from_condition(condition)
-            
-            # ✅ IMPROVED: Extract values properly for logging
-            var_values = {}
-            for var in variables:
-                raw_val = namespace.get(var)
-                # Extract numeric value for display
-                if isinstance(raw_val, dict):
-                    # Use explicit None checks — a legitimate 0.0 value is falsy
-                    # but still valid and must not be skipped.
-                    _v = raw_val.get("value")
-                    if _v is None:
-                        _v = raw_val.get("raw")
-                    if _v is None:
-                        _v = raw_val.get("score")
-                    var_values[var] = _v
-                else:
-                    var_values[var] = raw_val
-            
-            # ✅ IMPROVED: Calculate actual expression result for complex conditions
-            if any(func in condition for func in ['abs', 'min', 'max', 'round']):
-                # This is a math expression - try to evaluate left side
-                try:
-                    # Extract left side before comparison operator
-                    for op in ['<=', '>=', '<', '>', '==', '!=']:
-                        if f" {op} " in condition:
-                            left_expr = condition.split(op)[0].strip()
-                            left_result = evaluator._evaluate_expression(left_expr, namespace)
-                            if left_result is not None:
-                                var_values[f"COMPUTED[{left_expr}]"] = round(left_result, 4)
-                            break
-                except Exception:
-                    pass
-            
-            METRICS.log_condition_evaluation(
-                condition=condition,
-                result=result,
-                context=context,
-                variables=var_values  # ✅ Now shows computed values too
-            )
-            
-            if not result:
-                return False
-        
-        return True
-
-    def _extract_variables_from_condition(self, condition: str) -> List[str]:
-        """
-        Extract variable names from condition string.
-        
-        Excludes:
-        - Math functions (abs, min, max, round)
-        - Operators (and, or)
-        - Numeric literals
-        - Tokens inside string literals (e.g. 'Squeeze On')
-        """
-        import re
-        
-        # Remove quoted string literals before tokenizing
-        # This prevents 'Squeeze On' from being split into variable tokens
-        cleaned = re.sub(r"'[^']*'", '', condition)
-        cleaned = re.sub(r'"[^"]*"', '', cleaned)
-        
-        # Extract all word-like tokens
-        all_tokens = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', cleaned)
-        
-        # Filter out math functions and operators
-        excluded = {'abs', 'min', 'max', 'round', 'and', 'or', 'true', 'false', 'True', 'False'}
-        
-        variables = [
-            token for token in all_tokens
-            if token not in excluded and not token.isdigit()
-        ]
-        
-        return variables
 
     
     # ========================================================================
@@ -1929,8 +1514,6 @@ class ConfigResolver:
         scoring_rule_results = {}
         
         if scoring_rules:
-            evaluator = ConditionEvaluator()
-            
             # Build namespace
             namespace = {}
             for key, value in {**indicators, **fundamentals}.items():
@@ -1946,22 +1529,22 @@ class ConfigResolver:
                     namespace[key] = value
             
             for rule_name, rule_config in scoring_rules.items():
-                condition = rule_config.get("condition", "")
+                gates = rule_config.get("gates", {})
                 points = rule_config.get("points", 0)
                 reason = rule_config.get("reason", "")
                 
                 matched = False
-                if condition:
+                if gates:
                     try:
-                        matched = evaluator.evaluate_condition(condition, namespace)
+                        matched, _ = self.extractor.evaluate_confidence_gates(gates, namespace, empty_gates_pass=True)
                     except Exception as e:
                         self.logger.debug(
-                            f"[{strategy_name}] Rule '{rule_name}' eval failed: {e}"
+                            f"[{strategy_name}] Rule '{rule_name}' gates eval failed: {e}"
                         )
                 
                 if return_breakdown:
                     scoring_rule_results[rule_name] = {
-                        "condition": condition,
+                        "gates": gates,
                         "matched": matched,
                         "points": points if matched else 0,
                         "reason": reason
@@ -2231,12 +1814,11 @@ class ConfigResolver:
                     stats["skipped"] += 1
                 continue
 
-            # ── Threshold check (Use Canonical Evaluator) ──
-            passed, reason = ConditionEvaluator.evaluate_gate_config(
-                actual, 
-                threshold, 
-                gate_name
+            # ── Threshold check (Use Extractor) ──
+            passed, reasons = self.extractor.evaluate_confidence_gates(
+                {gate_name: threshold}, {gate_name: actual}
             )
+            reason = reasons[0] if reasons and not passed else None
 
             gate_results[gate_name] = {
                 "status": "passed" if passed else "failed",
@@ -2467,7 +2049,6 @@ class ConfigResolver:
         setup_modifier_breakdown = []
 
         if setup_modifiers:
-            evaluator = ConditionEvaluator()
             # ✅ BUG FIX: Include price_data so conditions referencing
             # prev_close, price, volume etc. can resolve (4 setups use these)
             price_data = ctx.get("price_data", {})
@@ -2485,16 +2066,22 @@ class ConfigResolver:
 
             for category in ["penalties", "bonuses"]:
                 for name, config in setup_modifiers.get(category, {}).items():
-                    condition = config.get("condition")
-                    if not condition:
+                    gates = config.get("gates")
+                    if not gates:
                         continue
 
                     try:
-                        if evaluator.evaluate_condition(condition, namespace):
-                            amount = config.get("amount", 0)
-                            
-                            # ✅ Independent setup adjustments are NOT scaled by divergence (Issue 7 consistency)
-                            raw_delta = -amount if category == "penalties" else amount
+                        passes, failures = self.extractor.evaluate_confidence_gates(
+                            gates, namespace, empty_gates_pass=False
+                        )
+                        if passes:
+                            if category == "penalties":
+                                amount = config.get("confidence_penalty", 0)
+                                raw_delta = -float(amount)
+                            else:
+                                amount = config.get("confidence_boost", 0)
+                                raw_delta = float(amount)
+                                
                             delta = float(raw_delta)
                             
                             total_adjustment += delta
@@ -2518,7 +2105,7 @@ class ConfigResolver:
                                 "amount": delta,
                                 "raw_amount": raw_delta,  # ✅ Track original
                                 "divergence_multiplier": 1.0,  # ✅ Explicitly track unscaled
-                                "condition": condition
+                                "gates": gates
                             })
 
                     except Exception as e:
@@ -3087,7 +2674,7 @@ class ConfigResolver:
     def _validate_opportunity_gates(self, ctx: Dict) -> Dict[str, Any]:
         """
         ✅ PHASE 8: Validate opportunity gates (FINAL DECISION LAYER)
-        Uses Standardized ConditionEvaluator logic.
+        Uses gate-based evaluation via extractor.
         """
         setup_type = ctx["setup"]["type"]
         
@@ -3134,12 +2721,11 @@ class ConfigResolver:
                 stats["failed"] += 1
                 continue
 
-            # 4. Evaluate ( Use Canonical Evaluator)
-            passed, reason = ConditionEvaluator.evaluate_gate_config(
-                actual_value,
-                threshold,
-                gate_name
+            # 4. Evaluate (Use Extractor)
+            passed, reasons = self.extractor.evaluate_confidence_gates(
+                {gate_name: threshold}, {gate_name: actual_value}
             )
+            reason = reasons[0] if reasons and not passed else None
 
             gate_results[gate_name] = {
                 "status": "passed" if passed else "failed",
@@ -3231,48 +2817,34 @@ class ConfigResolver:
             "execution_risk_score": execution.get("summary", {}).get("execution_risk_score"),
         }
 
-    def validate_pattern_conditions(self, conditions: List[str], namespace: Dict[str, Any], pattern_name: str, logic: str = "AND") -> bool:
+    def validate_pattern_gates(self, gates: Dict[str, Any], data: Dict[str, Any], pattern_name: str) -> bool:
         """
-        Validate pattern-specific conditions (invalidation/breakdown).
-        
-        This is a specialized wrapper for pattern validation that:
-        - Automatically extracts values from nested indicator dicts
-        - Supports pattern metadata access (age_candles, width, state, etc.)
-        - Logs pattern-specific failures
-        
+        Validate pattern-specific conditions using structured gate evaluation.
+
         Args:
-            conditions: List of condition strings from pattern invalidation config
-            namespace: Raw indicators dict (may contain nested structures)
-            pattern_name: Pattern name for logging
-            logic: "AND" or "OR" (default: "AND")
-        
+            gates: Gate config dict, e.g. {"_logic": "OR", "price": {"max_metric": "bbLow"}, "bbWidth": {"min": 10}}
+            data: Flat or nested indicators dict
+            pattern_name: Pattern name for logging context
+
         Returns:
-            True if conditions trigger invalidation, False otherwise
-        
-        Examples:
-            conditions = ["price < bbLow", "bbWidth > 8.0"]
-            namespace = ctx["indicators"]  # Raw nested dict
-            validate_pattern_conditions(conditions, namespace, "bollingerSqueeze")
+            True if gates are triggered (breakdown/invalidation condition met), False otherwise.
         """
-        if not conditions:
-            return True
-        
-        evaluator = ConditionEvaluator
-        results = []
-        for condition in conditions:
-            result = evaluator.evaluate_condition(condition, namespace)
-            results.append(result)
-            # Log pattern-specific evaluation
-            METRICS.log_condition_evaluation(
-                condition=condition,
-                result=result,
-                context=f"pattern_invalidation_{pattern_name}",
-                variables={k: namespace.get(k) for k in self._extract_variables_from_condition(condition)}
+        if not gates:
+            return False
+
+        triggered, gate_results = self.extractor.evaluate_invalidation_gates(gates, data)
+
+        for gr in gate_results:
+            METRICS.log_gate_check(
+                gate_name=gr["metric"],
+                phase=f"pattern_invalidation_{pattern_name}",
+                passed=gr["triggered"],
+                actual=data.get(gr["metric"]),
+                required=gates.get(gr["metric"]),
+                context=pattern_name,
             )
-            
-        if logic.upper() == "OR":
-            return any(results)  
-        return all(results)
+
+        return triggered
     
     
     def _validate_patterns(self, ctx: Dict) -> Dict[str, Any]:
@@ -3337,25 +2909,23 @@ class ConfigResolver:
                 if not pattern_ctx:
                     continue
 
-                # 1. Check invalidation (breakdown) - EXISTING
+                # 1. Check invalidation (breakdown) via gates
                 if pattern_ctx.invalidation:
-                    conditions = pattern_ctx.invalidation.get("conditions", [])
-                    logic = pattern_ctx.invalidation.get("_logic", "AND")
-                    
-                    if conditions:
-                        is_invalidated = self.validate_pattern_conditions(
-                            conditions,
+                    inv_gates = pattern_ctx.invalidation.get("gates", {})
+
+                    if inv_gates:
+                        is_invalidated = self.validate_pattern_gates(
+                            inv_gates,
                             ctx["indicators"],
                             pattern_name,
-                            logic=logic
                         )
 
                         invalidation_status[pattern_name] = {
                             "invalidated": is_invalidated,
                             "rules": pattern_ctx.invalidation,
-                            "reason": "Breakdown conditions met" if is_invalidated else "Valid"
+                            "reason": "Breakdown gates triggered" if is_invalidated else "Valid"
                         }
-                        
+
                         METRICS.log_pattern_validation(
                             pattern_name=pattern_name,
                             found=True,
@@ -3363,28 +2933,23 @@ class ConfigResolver:
                             invalidated=is_invalidated,
                             reason=invalidation_status[pattern_name]["reason"]
                         )
-                
-                # ✅ 2. Check entry rules - REUSES EXISTING METHOD!
-                entry_conditions = pattern_ctx.entry_rules.get("conditions", [])
-                
-                if entry_conditions:
-                    # Build namespace with pattern metadata
+
+                # 2. Check entry rules via gates
+                entry_gates = pattern_ctx.entry_rules.get("gates", {})
+
+                if entry_gates:
                     namespace = self._build_pattern_namespace(
                         ctx, pattern_name, pattern_data
                     )
-                    
-                    # ✅ REUSE: Same method used for invalidation!
-                    entry_passes = self.validate_pattern_conditions(
-                        entry_conditions,
-                        namespace,
-                        f"{pattern_name}_entry",
-                        logic="AND"  # Entry usually requires ALL conditions
+
+                    entry_passes, _ = self.extractor.evaluate_confidence_gates(
+                        entry_gates, namespace, empty_gates_pass=True
                     )
-                    
+
                     entry_validation_status[pattern_name] = {
                         "passes": entry_passes,
-                        "conditions_checked": entry_conditions,
-                        "reason": "All entry conditions met" if entry_passes else "Entry conditions failed"
+                        "gates_checked": list(entry_gates.keys()),
+                        "reason": "All entry gates passed" if entry_passes else "Entry gates failed"
                     }
 
             # ──────────────────────────────────────────────────────────────
@@ -3829,10 +3394,7 @@ class ConfigResolver:
         rr = risk_data.get("rrRatio")
         targets = risk_data.get("pattern_targets") or risk_data.get("generic_targets")
         
-        # # 2. Validate Price Logic
-        # valid = all([price > 0, sl_price is not None, sl_price < price])
-        # risk_per_share = price - sl_price if valid else None
-        # 2. Validate Price Logic – short‑circuit safely
+        # 2. Validate Price Logic – short-circuit safely
         if price is None or price <= 0 or sl_price is None:
             valid = False
         else:
@@ -4105,10 +3667,10 @@ class ConfigResolver:
                     if result:
                         return result
 
-            # ── doubleTopBottom ───────────────────────────────────────────────────
+            # ── bullishNecklinePattern / bearishNecklinePattern ───────────────────────────────────────────────────
             # Physics: target is already pre-calculated by detector (pattern height from neckline)
             # SL: just above/below neckline depending on direction
-            elif pattern_name == "doubleTopBottom":
+            elif pattern_name in ("bullishNecklinePattern", "bearishNecklinePattern"):
                 target   = _safe_float(meta.get("target"))
                 neckline = _safe_float(meta.get("neckline"))
                 pattern_type = meta.get("type", "bullish")  # "bullish" = double bottom
@@ -4452,11 +4014,6 @@ class ConfigResolver:
 
     def _can_execute(self, exec_ctx: Dict, eval_ctx: Dict) -> Dict[str, Any]:
         """Final execution decision combining all checks."""
-        # checks = {
-        #     "entry_permission": exec_ctx["entry_permission"]["allowed"],
-        #     "time_allowed": exec_ctx["time_constraints"]["allowed"],
-        #     "capital_available": exec_ctx["position_sizing"]["mode"] != "unknown"
-        # }
         checks = {
             "entry_permission": exec_ctx["entry_permission"]["allowed"],
             "time_allowed": exec_ctx["time_constraints"]["allowed"],

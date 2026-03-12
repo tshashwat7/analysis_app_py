@@ -38,22 +38,25 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "price_near_bb_low": {
-                "condition": "bbLow > 0 and price <= bbLow * 1.02",
+                "gates": {"bbpercentb": {"max": 0.05}},
                 "points": 35,
                 "reason": "Price near Buy Zone (BB Low)"
             },
             "rsi_dip": {
-                "condition": "rsi <= 45",
+                "gates": {"rsi": {"max": 45}},
                 "points": 25,
                 "reason": "RSI Oversold/Dip"
             },
             "double_bottom_reversal": {
-                "condition": "double_top_bottom_found == True and double_top_bottom_type == 'bullish'",
+                "gates": {
+                    "double_top_bottom_found": {"equals": True},
+                    "double_top_bottom_type": {"equals": "bullish"}
+                },
                 "points": 40,
                 "reason": "Double Bottom Reversal Pattern"
             },
             "squeeze_compression": {
-                "condition": "ttmSqueeze == 'Squeeze On'",
+                "gates": {"ttmSqueeze": {"equals": "Squeeze On"}},
                 "points": 10,
                 "reason": "Volatility Squeeze Active"
             }
@@ -91,17 +94,17 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "volume_surge": {
-                "condition": "rvol >= 1.5",
+                "gates": {"rvol": {"min": 1.5}},
                 "points": 25,
                 "reason": "Strong volume surge"
             },
             "intraday_volatility": {
-                "condition": "atrPct >= 1.5",
+                "gates": {"atrPct": {"min": 1.5}},
                 "points": 15,
                 "reason": "Sufficient intraday range"
             },
             "three_line_strike": {
-                "condition": "three_line_strike_found == True",
+                "gates": {"three_line_strike_found": {"equals": True}},
                 "points": 40,
                 "reason": "3-Line Strike Reversal"
             }
@@ -147,22 +150,29 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "ma_alignment": {
-                "condition": "price > maFast and maFast > maMid and maMid > maSlow",
+                "gates": {
+                    "price": {"min_metric": "maFast"},
+                    "maFast": {"min_metric": "maMid"},
+                    "maMid": {"min_metric": "maSlow"}
+                },
                 "points": 30,
                 "reason": "Bullish MA Alignment"
             },
             "strong_adx": {
-                "condition": "adx >= 25",
+                "gates": {"adx": {"min": 25}},
                 "points": 20,
                 "reason": "Strong Trend (ADX)"
             },
             "ichimoku_signal": {
-                "condition": "ichimoku_signals_found == True",
+                "gates": {"ichimoku_signals_found": {"equals": True}},
                 "points": 25,
                 "reason": "Ichimoku Cloud Signal"
             },
             "golden_cross_bullish": {
-                "condition": "golden_cross_found == True and golden_cross_type == 'bullish'",
+                "gates": {
+                    "golden_cross_found": {"equals": True},
+                    "golden_cross_type": {"equals": "bullish"}
+                },
                 "points": 25,
                 "reason": "Golden Cross (Major Trend)"
             }
@@ -196,17 +206,17 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "high_velocity": {
-                "condition": "maFastSlope >= 20",
+                "gates": {"maFastSlope": {"min": 20}},
                 "points": 40,
                 "reason": "High-velocity trend"
             },
             "rsi_momentum_zone": {
-                "condition": "rsi >= 65 and rsi <= 80",
+                "gates": {"rsi": {"min": 65, "max": 80}},
                 "points": 30,
                 "reason": "Bullish momentum zone"
             },
             "strong_trend": {
-                "condition": "adx >= 30",
+                "gates": {"adx": {"min": 30}},
                 "points": 30,
                 "reason": "Established strong trend"
             }
@@ -265,27 +275,30 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "vcp_confirmed": {
-                "condition": "minervini_stage2_found == True",
+                "gates": {"minervini_stage2_found": {"equals": True}},
                 "points": 50,
                 "reason": "VCP Pattern Confirmed"
             },
             "stage2_alignment": {
-                "condition": "price > maMid and maMid > maSlow",
+                "gates": {
+                    "price": {"min_metric": "maMid"},
+                    "maMid": {"min_metric": "maSlow"}
+                },
                 "points": 20,
                 "reason": "Stage 2 Trend Alignment"
             },
             "relative_strength": {
-                "condition": "relStrengthNifty > 0",
+                "gates": {"relStrengthNifty": {"min": 0.001}},
                 "points": 20,
                 "reason": "Outperforming Market"
             },
             "near_52w_high": {
-                "condition": "position52w >= 85",
+                "gates": {"position52w": {"min": 85}},
                 "points": 20,
                 "reason": "Near 52W Highs"
             },
             "deep_in_base_penalty": {
-                "condition": "position52w < 50",
+                "gates": {"position52w": {"max": 49.99}},
                 "points": -20,
                 "reason": "Deep in base (wait for breakout)"
             }
@@ -320,27 +333,27 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "earnings_acceleration": {
-                "condition": "quarterlyGrowth > epsGrowth5y",
+                "gates": {"quarterlyGrowth": {"min_metric": "epsGrowth5y"}},
                 "points": 30,
                 "reason": "Accelerating Earnings (C+A)"
             },
             "near_52w_highs": {
-                "condition": "position52w >= 90",
+                "gates": {"position52w": {"min": 90}},
                 "points": 25,
                 "reason": "Breaking to New Highs (N)"
             },
             "cup_handle_pattern": {
-                "condition": "cup_handle_found == True",
+                "gates": {"cup_handle_found": {"equals": True}},
                 "points": 30,
                 "reason": "Cup & Handle Pattern (N)"
             },
             "market_leader": {
-                "condition": "relStrengthNifty >= 1.2",
+                "gates": {"relStrengthNifty": {"min": 1.2}},
                 "points": 25,
                 "reason": "Market Leader (L)"
             },
             "institutional_base": {
-                "condition": "institutionalOwnership >= 20 and institutionalOwnership <= 60",
+                "gates": {"institutionalOwnership": {"min": 20, "max": 60}},
                 "points": 20,
                 "reason": "Stable institutional sponsorship (I)"
             }
@@ -387,27 +400,27 @@ STRATEGY_MATRIX = {
         },
         "scoring_rules": {
             "cheap_vs_sector": {
-                "condition": "peVsSector > 0 and peRatio > 0 and peVsSector < 0.8",
+                "gates": {"peVsSector": {"min": 0.001, "max": 0.8}, "peRatio": {"min": 0.001}},
                 "points": 35,
                 "reason": "Trading below sector average (cheap)"
             },
             "cheap_pb": {
-                "condition": "pbRatio > 0 and pbRatio < 1.5",
+                "gates": {"pbRatio": {"min": 0.001, "max": 1.5}},
                 "points": 25,
                 "reason": "Low Price to Book"
             },
             "strong_roe": {
-                "condition": "roe >= 15",
+                "gates": {"roe": {"min": 15}},
                 "points": 20,
                 "reason": "Strong Return on Equity"
             },
             "low_debt": {
-                "condition": "deRatio <= 0.5",
+                "gates": {"deRatio": {"max": 0.5}},
                 "points": 20,
                 "reason": "Conservative Debt Levels"
             },
             "sector_discount": {
-                "condition": "peVsSector > 0 and peVsSector < 0.7",
+                "gates": {"peVsSector": {"min": 0.001, "max": 0.7}},
                 "points": 10,
                 "reason": "Deep discount vs sector (30%+ cheaper)"
             }
@@ -441,17 +454,17 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "high_yield": {
-                "condition": "dividendyield >= 3.0",
+                "gates": {"dividendyield": {"min": 3.0}},
                 "points": 40,
                 "reason": "Attractive Dividend Yield"
             },
             "fcf_strength": {
-                "condition": "fcfYield >= 5.0",
+                "gates": {"fcfYield": {"min": 5.0}},
                 "points": 30,
                 "reason": "Strong Free Cash Flow"
             },
             "safe_payout": {
-                "condition": "dividendPayout > 0 and dividendPayout <= 60",
+                "gates": {"dividendPayout": {"min": 0.001, "max": 60}},
                 "points": 30,
                 "reason": "Sustainable Payout Ratio"
             }
@@ -485,17 +498,23 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "golden_cross": {
-                "condition": "golden_cross_found == True and golden_cross_type == 'bullish'",
+                "gates": {
+                    "golden_cross_found": {"equals": True},
+                    "golden_cross_type": {"equals": "bullish"}
+                },
                 "points": 50,
                 "reason": "Primary Trend Reversal (Golden Cross)"
             },
             "stable_volatility": {
-                "condition": "volatilityQuality >= 7.0",
+                "gates": {"volatilityQuality": {"min": 7.0}},
                 "points": 25,
                 "reason": "Stable, high-quality trend"
             },
             "ma_alignment": {
-                "condition": "price > maMid and maMid > maSlow",
+                "gates": {
+                    "price": {"min_metric": "maMid"},
+                    "maMid": {"min_metric": "maSlow"}
+                },
                 "points": 25,
                 "reason": "Triple MA Alignment"
             }
@@ -534,42 +553,42 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "consistent_quality": {
-                "condition": "roe >= 18 and roce >= 20 and roe3yAvg >= 18",
+                "gates": {"roe": {"min": 18}, "roce": {"min": 20}, "roe3yAvg": {"min": 18}},
                 "points": 35,
                 "reason": "Consistent quality metrics over 3 years"
             },
             "excellent_garp": {
-                "condition": "pegRatio > 0 and pegRatio <= 1.5",
+                "gates": {"pegRatio": {"min": 0.001, "max": 1.5}},
                 "points": 35,
                 "reason": "Excellent GARP (PEG ≤ 1.5)"
             },
             "acceptable_garp": {
-                "condition": "pegRatio > 1.5 and pegRatio <= 2.0",
+                "gates": {"pegRatio": {"min": 1.501, "max": 2.0}},
                 "points": 20,
                 "reason": "Acceptable GARP (PEG 1.5-2.0)"
             },
             "optimal_entry_zone": {
-                "condition": "trendStrength >= 4.0 and trendStrength <= 7.0 and rsi >= 50 and rsi <= 65",
+                "gates": {"trendStrength": {"min": 4.0, "max": 7.0}, "rsi": {"min": 50, "max": 65}},
                 "points": 10,
                 "reason": "In optimal entry zone - not overheated"
             },
             "balance_sheet_quality": {
-                "condition": "deRatio <= 0.5 and interestCoverage >= 5",
+                "gates": {"deRatio": {"max": 0.5}, "interestCoverage": {"min": 5}},
                 "points": 20,
                 "reason": "Conservative balance sheet"
             },
             "earnings_consistency": {
-                "condition": "earningsStability >= 7.0",
+                "gates": {"earningsStability": {"min": 7.0}},
                 "points": 15,
                 "reason": "Stable, predictable earnings"
             },
             "overheated_penalty": {
-                "condition": "trendStrength >= 9.0 or rsi >= 80",
+                "gates": {"_logic": "OR", "trendStrength": {"min": 9.0}, "rsi": {"min": 80}},
                 "points": -10,
                 "reason": "Extremely overextended - wait for pullback"
             },
             "multibagger_zone": {
-                "condition": "roe >= 22 and epsGrowth5y >= 20 and pegRatio <= 1.5 and peRatio <= 30",
+                "gates": {"roe": {"min": 22}, "epsGrowth5y": {"min": 20}, "pegRatio": {"max": 1.5}, "peRatio": {"max": 30}},
                 "points": 20,
                 "reason": "In multibagger zone (HDFC/Asian Paints profile)"
             }
@@ -605,37 +624,37 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "quality_in_distress": {
-                "condition": "roe >= 18 and roce >= 20 and priceVs52wHighPct <= 75",
+                "gates": {"roe": {"min": 18}, "roce": {"min": 20}, "priceVs52wHighPct": {"max": 75}},
                 "points": 40,
                 "reason": "Quality stock 25%+ off highs"
             },
             "oversold_rsi": {
-                "condition": "rsi <= 35",
+                "gates": {"rsi": {"max": 35}},
                 "points": 25,
                 "reason": "Deeply oversold"
             },
             "bullish_divergence": {
-                "condition": "rsislope >= 0.05 and price_slope <= -0.01",
+                "gates": {"rsislope": {"min": 0.05}, "price_slope": {"max": -0.01}},
                 "points": 30,
                 "reason": "Bullish divergence (Price falling but RSI rising)"
             },
             "consolidation_base": {
-                "condition": "bbWidth <= 5.0 and volatilityQuality >= 5.0",
+                "gates": {"bbWidth": {"max": 5.0}, "volatilityQuality": {"min": 5.0}},
                 "points": 20,
                 "reason": "Tight consolidation after fall"
             },
             "reversal_confirmation": {
-                "condition": "macdhistogram > 0 and supertrendSignal == 'Bullish'",
+                "gates": {"macdhistogram": {"min": 0.001}, "supertrendSignal": {"equals": "Bullish"}},
                 "points": 20,
                 "reason": "Technical reversal confirmed"
             },
             "still_falling_penalty": {
-                "condition": "trendStrength <= 2.0 and momentumStrength <= 2.0",
+                "gates": {"trendStrength": {"max": 2.0}, "momentumStrength": {"max": 2.0}},
                 "points": -25,
                 "reason": "Still in freefall - wait for stabilization"
             },
             "poor_quality_penalty": {
-                "condition": "roe < 12 or deRatio > 1.0",
+                "gates": {"_logic": "OR", "roe": {"max": 11.99}, "deRatio": {"min": 1.001}},
                 "points": -20,
                 "reason": "Quality too low for reversal play"
             }

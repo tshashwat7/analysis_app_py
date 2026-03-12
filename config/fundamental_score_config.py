@@ -435,37 +435,56 @@ FUNDAMENTAL_PENALTIES = {
 
 FUNDAMENTAL_BONUSES = [
     {
-        "condition": "roe >= 25 AND roce >= 20",
+        "gates": {
+            "roe": {"min": 25},
+            "roce": {"min": 20}
+        },
         "bonus": 0.20,
         "reason": "Exceptional capital efficiency"
     },
     {
-        "condition": "epsGrowth5y >= 20 AND profitGrowth3y >= 20",
+        "gates": {
+            "epsGrowth5y": {"min": 20},
+            "profitGrowth3y": {"min": 20}
+        },
         "bonus": 0.25,
         "reason": "Strong sustained growth"
     },
     {
-        "condition": "piotroskiF >= 8",
+        "gates": {
+            "piotroskiF": {"min": 8}
+        },
         "bonus": 0.15,
         "reason": "High Piotroski F-Score"
     },
     {
-        "condition": "deRatio <= 0.3 AND interestCoverage >= 10",
+        "gates": {
+            "deRatio": {"max": 0.3},
+            "interestCoverage": {"min": 10}
+        },
         "bonus": 0.15,
         "reason": "Fortress balance sheet"
     },
     {
-        "condition": "promoterHolding >= 60 AND promoterpledge == 0",
+        "gates": {
+            "promoterHolding": {"min": 60},
+            "promoterpledge": {"equals": 0}
+        },
         "bonus": 0.20,
         "reason": "Strong promoter conviction (no pledge)"
     },
     {
-        "condition": "fcfYield >= 8 AND ocfVsProfit >= 1.2",
+        "gates": {
+            "fcfYield": {"min": 8},
+            "ocfVsProfit": {"min": 1.2}
+        },
         "bonus": 0.15,
         "reason": "Excellent cash generation"
     },
     {
-        "condition": "marketCapCagr >= 30",
+        "gates": {
+            "marketCapCagr": {"min": 30}
+        },
         "bonus": 0.20,
         "reason": "Multi-year wealth creator"
     }
@@ -485,52 +504,6 @@ SECTOR_SPECIFIC_EXCLUSIONS = {
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
-
-def _evaluate_condition(condition: str, fundamentals: Dict) -> bool:
-    """Evaluate a simple condition on fundamental metrics."""
-    if " AND " not in condition:
-        return _evaluate_single_condition(condition, fundamentals)
-    
-    parts = condition.split(" AND ")
-    return all(_evaluate_single_condition(part.strip(), fundamentals) for part in parts)
-
-
-def _evaluate_single_condition(condition: str, fundamentals: Dict) -> bool:
-    """Evaluate a single condition."""
-    for op in [">=", "<=", "==", "!=", ">", "<"]:
-        if op in condition:
-            metric, value = condition.split(op)
-            metric = metric.strip()
-            value = value.strip()
-            
-            metric_data = fundamentals.get(metric, {})
-            
-            # Try to get raw value first, then score
-            if isinstance(metric_data, dict):
-                actual = metric_data.get("raw")
-                if actual is None:
-                    actual = metric_data.get("score")
-            else:
-                actual = metric_data
-            
-            if actual is None:
-                return False
-            
-            try:
-                threshold = float(value)
-                actual = float(actual)
-                
-                if op == ">=": return actual >= threshold
-                elif op == "<=": return actual <= threshold
-                elif op == ">": return actual > threshold
-                elif op == "<": return actual < threshold
-                elif op == "==": return actual == threshold
-                elif op == "!=": return actual != threshold
-            except (ValueError, TypeError):
-                return False
-    
-    return False
-
 
 def get_active_metrics_for_horizon(horizon: str, sector: str = None) -> dict:
     """Get active metrics for horizon with sector exclusions."""
@@ -648,31 +621,29 @@ def apply_fundamental_penalties(fundamentals: dict, horizon: str) -> tuple:
     return round(total, 2), reasons
 
 
-def _extract_metrics_from_condition(condition: str) -> list:
-    """Extract metric names from a condition."""
-    import re
-    return re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:>=|<=|==|!=|>|<)', condition)
 
 def apply_fundamental_bonuses(fundamentals: dict, horizon: str = "short_term") -> tuple:
     """
     Apply bonus rules to fundamental score.
-    
+
     Returns:
         (total_bonus, list_of_reasons)
     """
+    from config.gate_evaluator import evaluate_gates
     total = 0.0
     reasons = []
     excluded = set(HORIZON_METRIC_INCLUSION.get(horizon, {}).get("exclude", []))
-    
+
     for rule in FUNDAMENTAL_BONUSES:
-        rule_metrics = _extract_metrics_from_condition(rule["condition"])
+        rule_metrics = [k for k in rule["gates"].keys() if not k.startswith("_")]
         if any(m in excluded for m in rule_metrics):
             continue
-            
-        if _evaluate_condition(rule["condition"], fundamentals):
+
+        passes, _ = evaluate_gates(rule["gates"], fundamentals)
+        if passes:
             total += rule["bonus"]
             reasons.append(rule["reason"])
-    
+
     return round(total, 2), reasons
 
 

@@ -150,14 +150,14 @@ METRIC_REGISTRY = {
         "category": "trend", 
         "scoring_type": "mapping",
         "params": {
-            "1": 10,     # Strong Uptrend
-            "1.0": 10,   # Float match
-            "0.5": 7,    # Developing Uptrend (Matches your logic fix)
-            "0": 5,      # Neutral
-            "0.0": 5,    # Float match
-            "-0.5": 3,   # Developing Downtrend
-            "-1": 0,     # Strong Downtrend
-            "-1.0": 0    # Float match
+            1: 10,     # Strong Uptrend
+            1.0: 10,   # Float match
+            0.5: 7,    # Developing Uptrend (Matches your logic fix)
+            0: 5,      # Neutral
+            0.0: 5,    # Float match
+            -0.5: 3,   # Developing Downtrend
+            -1: 0,     # Strong Downtrend
+            -1.0: 0    # Float match
         },
         "description": "MA alignment signal (Supports Developing Trend 0.5)"
     },
@@ -924,42 +924,62 @@ TECHNICAL_PENALTIES = {
 
 TECHNICAL_BONUSES = [
     {
-        "condition": "trendStrength >= 8.0 AND momentumStrength >= 8.0",
+        "gates": {
+            "trendStrength": {"min": 8.0},
+            "momentumStrength": {"min": 8.0}
+        },
         "bonus": 0.20,
         "reason": "Exceptional trend + momentum synergy"
     },
     {
-        "condition": "rvol >= 2.5 AND volSpikeRatio >= 2.0",
+        "gates": {
+            "rvol": {"min": 2.5},
+            "volSpikeRatio": {"min": 2.0}
+        },
         "bonus": 0.15,
         "reason": "Strong volume confirmation"
     },
     {
-        "condition": "volatilityQuality >= 7.0",
+        "gates": {
+            "volatilityQuality": {"min": 7.0}
+        },
         "bonus": 0.10,
         "reason": "High-quality volatility"
     },
     {
-        "condition": "position52w >= 85 AND position52w <= 95",
+        "gates": {
+            "position52w": {"min": 85, "max": 95}
+        },
         "bonus": 0.15,
         "reason": "Near 52W high (breakout zone)"
     },
     {
-        "condition": "relStrengthNifty >= 15",
+        "gates": {
+            "relStrengthNifty": {"min": 15}
+        },
         "bonus": 0.12,
         "reason": "Strong outperformance vs Nifty"
     },
     {
-        "condition": "ttmSqueeze == Squeeze Off AND rvol >= 2.0",
+        "gates": {
+            "ttmSqueeze": {"equals": "Squeeze Off"},
+            "rvol": {"min": 2.0}
+        },
         "bonus": 0.15,
-        "reason": "Squeeze release with volume expansion"  # Squeeze Off = bands expanding after compression
+        "reason": "Squeeze release with volume expansion"
     },
     {
-        "condition": "cmfSignal >= 0.15",
+        "gates": {
+            "cmfSignal": {"min": 0.15}
+        },
         "bonus": 0.12,
         "reason": "Institutional accumulation confirmed"
     },
     {
-        "condition": "position52w >= 90 AND rvol >= 1.5",
+        "gates": {
+            "position52w": {"min": 90},
+            "rvol": {"min": 1.5}
+        },
         "bonus": 0.15,
         "reason": "Approaching 52-week breakout with volume"
     }
@@ -1012,7 +1032,7 @@ COMPOSITE_SCORING_CONFIG = {
                 },
                 "maTrendSignal": {
                     "weight": 0.30,  # Alignment of 20/50/200 MAs
-                    "mapping": {"1": 10, "1.0": 10, "0.5": 7, "0": 5, "0.0": 5, "-0.5": 3, "-1": 0, "-1.0": 0}
+                    "mapping": {1: 10, 1.0: 10, 0.5: 7, 0: 5, 0.0: 5, -0.5: 3, -1: 0, -1.0: 0}
                 },
                 "diSpread": {        # Trend conviction (ADX components)
                     "weight": 0.20,
@@ -1087,7 +1107,7 @@ COMPOSITE_SCORING_CONFIG = {
                 },
                 "maTrendSignal": {
                     "weight": 0.25,
-                    "mapping": {"1": 10, "1.0": 10, "0.5": 7, "0": 5, "0.0": 5, "-0.5": 3, "-1": 0, "-1.0": 0}
+                    "mapping": {1: 10, 1.0: 10, 0.5: 7, 0: 5, 0.0: 5, -0.5: 3, -1: 0, -1.0: 0}
                 },
                 "diSpread": {        # Distance between buyers and sellers
                     "weight": 0.25,
@@ -1154,7 +1174,7 @@ COMPOSITE_SCORING_CONFIG = {
                 },
                 "maTrendSignal": {
                     "weight": 0.30,
-                    "mapping": {"1": 10, "1.0": 10, "0.5": 5, "0": 0, "0.0": 0, "-0.5": 0, "-1": 0, "-1.0": 0} # Strict on LT
+                    "mapping": {1: 10, 1.0: 10, 0.5: 5, 0: 0, 0.0: 0, -0.5: 0, -1: 0, -1.0: 0} # Strict on LT
                 },
                 "diSpread": {
                     "weight": 0.30,
@@ -1201,7 +1221,7 @@ COMPOSITE_SCORING_CONFIG = {
             "metrics": {
                 "maTrendSignal": {
                     "weight": 0.50, # Must be in a clear structural uptrend
-                    "mapping": {"1": 10, "1.0": 10, "0.5": 4, "0": 0, "0.0": 0, "-0.5": 0, "-1": 0, "-1.0": 0}
+                    "mapping": {1: 10, 1.0: 10, 0.5: 4, 0: 0, 0.0: 0, -0.5: 0, -1: 0, -1.0: 0}
                 },
                 "maSlowSlope": {  # Velocity of the 12-month MA
                     "weight": 0.30,
@@ -1241,7 +1261,7 @@ def _apply_composite_scoring_rules(value: Any, rules: dict, metric_name: str = N
         Score between 0-10
     """
     if value is None:
-        return 0.0
+        return None  # Changed from 0.0 to None
     
     # Handle text mapping
     if "mapping" in rules:
@@ -1434,10 +1454,10 @@ def calculate_dynamic_score(metric_name: str, raw_value: Any, indicators: Dict =
     cfg = metric_registry.get(metric_name)
     if not cfg:
         logger.debug(f"Metric '{metric_name}' not in registry, using neutral score")
-        return 0.0
+        return None  # Changed from 0.0 to None
 
     if raw_value is None:
-        return 0.0
+        return None  # Changed from 0.0 to None
 
         
     scoring_type = cfg.get("scoring_type")
@@ -1502,9 +1522,17 @@ def calculate_dynamic_score(metric_name: str, raw_value: Any, indicators: Dict =
 
         if score is None:
             # Try case-insensitive match
-            for key, val in params.items():
-                if key.lower() == str_value.lower():
-                    return float(val)
+            # Try float comparison if both can be floats
+            try:
+                f_val = float(str_value)
+                for key, val in params.items():
+                    try:
+                        if abs(float(key) - f_val) < 1e-6:
+                            return float(val)
+                    except (ValueError, TypeError):
+                        continue
+            except (ValueError, TypeError):
+                pass
 
             logger.debug(f"No mapping for {metric_name}='{str_value}', using neutral")
             return 5.0
@@ -1567,7 +1595,7 @@ def extract_metric_score(metric_data: Any, metric_name: str, indicators: Dict = 
         Score between 0-10
     """
     if metric_data is None:
-        return 0.0   # No warning — metric simply not computed for this horizon
+        return None   # Changed from 0.0 to None
 
     # Handle dict format
     if isinstance(metric_data, dict):
@@ -1667,71 +1695,11 @@ def check_liquidity_penalty(indicators: Dict, horizon: str) -> Tuple[float, str]
     
     return 0.0, None
 
-
-def _evaluate_condition(condition: str, indicators: Dict) -> bool:
-    """
-    Simple condition evaluator (supports AND + basic comparisons).
-    
-    Examples:
-        "trendStrength >= 8.0 AND momentumStrength >= 8.0"
-        "position52w >= 85 AND position52w <= 95"
-    """
-    if " AND " not in condition:
-        return _evaluate_single_condition(condition, indicators)
-    
-    parts = condition.split(" AND ")
-    return all(_evaluate_single_condition(part.strip(), indicators) for part in parts)
-
-
 def _extract_raw_value(metric_data: dict) -> Any:
     """Helper to extract the unscaled raw value from the indicator dict."""
     if not metric_data or not isinstance(metric_data, dict):
         return None
     return metric_data.get("raw", metric_data.get("value"))
-
-def _evaluate_single_condition(condition: str, indicators: Dict) -> bool:
-    """Evaluate a single condition."""
-    # Parse operators (order matters - check >= before >)
-    for op in [">=", "<=", "==", "!=", ">", "<"]:
-        if op in condition:
-            metric, value = condition.split(op)
-            metric = metric.strip()
-            value = value.strip().strip("'\"")
-            
-            metric_data = indicators.get(metric, {})
-            
-            # Check if this metric is a composite (passthrough) or a raw metric
-            is_passthrough = METRIC_REGISTRY.get(metric, {}).get("scoring_type") == "passthrough"
-            
-            if is_passthrough:
-                actual = extract_metric_score(metric_data, metric, indicators)
-            else:
-                actual = _extract_raw_value(metric_data)
-            
-            if actual is None:
-                return False
-            
-            # Handle text comparisons first (e.g. ttmSqueeze == 'Squeeze On')
-            if op == "==" and not value.replace('.', '', 1).isdigit():
-                return str(actual).lower() == value.lower()
-            if op == "!=" and not value.replace('.', '', 1).isdigit():
-                return str(actual).lower() != value.lower()
-            
-            # Numeric comparison
-            try:
-                threshold = float(value)
-                actual_num = float(actual)
-            except (ValueError, TypeError):
-                return False
-            
-            if op == ">=": return actual_num >= threshold
-            elif op == "<=": return actual_num <= threshold
-            elif op == ">": return actual_num > threshold
-            elif op == "<": return actual_num < threshold
-            elif op == "==": return actual_num == threshold
-            elif op == "!=": return actual_num != threshold
-    
-    return False
 
 def get_active_metrics_for_horizon(horizon: str) -> dict:
     """
@@ -1801,7 +1769,7 @@ def compute_category_score(
         }
 
     if total_weight == 0:
-        return 0.0, breakdown
+        return None, breakdown
 
     normalized = weighted_score / total_weight
     return round(normalized, 2), breakdown
@@ -1844,24 +1812,20 @@ def apply_technical_penalties(indicators: dict, horizon: str) -> tuple:
 
     return round(total, 2), reasons
 
-def _extract_metrics_from_condition(condition: str) -> list:
-    """Extract metric names from a condition like 'trendStrength >= 8.0 AND rvol >= 2.5'."""
-    import re
-    # Match word sequences before operators
-    return re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:>=|<=|==|!=|>|<)', condition)
-
-
 def apply_technical_bonuses(indicators: dict, horizon: str = "short_term") -> tuple:
+    from config.gate_evaluator import evaluate_gates
     total = 0.0
     reasons = []
     excluded = set(HORIZON_METRIC_INCLUSION.get(horizon, {}).get("exclude", [])) 
 
     for rule in TECHNICAL_BONUSES:
-        # ← ADD THIS GUARD: skip bonus rules referencing excluded metrics
-        rule_metrics = _extract_metrics_from_condition(rule["condition"])
+        # skip bonus rules referencing excluded metrics
+        rule_metrics = [k for k in rule["gates"].keys() if not k.startswith("_")]
         if any(m in excluded for m in rule_metrics):
             continue
-        if _evaluate_condition(rule["condition"], indicators):
+            
+        passes, _ = evaluate_gates(rule["gates"], indicators)
+        if passes:
             total += rule["bonus"]
             reasons.append(rule["reason"])
 
@@ -1887,6 +1851,9 @@ def compute_technical_score(indicators: dict, horizon: str) -> dict:
         cat_score, breakdown = compute_category_score(
             indicators, horizon, category, metrics
         )
+
+        if cat_score is None:
+            continue
 
         weight = category_weights[category]
         total_score += cat_score * weight

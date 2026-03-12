@@ -40,9 +40,9 @@ Post-processing layer for real-time pattern monitoring.
 import logging
 from typing import Dict, Any, Optional, Tuple
 
-from config.config_resolver import ConditionEvaluator
-from config.config_helpers.logger_config import log_failures
-from config.config_helpers.market_utils import get_current_utc
+
+from config.config_utility.logger_config import log_failures
+from config.config_utility.market_utils import get_current_utc
 from services.data_fetch import _get_val, safe_float
 from services.patterns.pattern_state_manager import (
     get_breakdown_state,
@@ -464,13 +464,11 @@ def check_pattern_invalidation(
         inval_cfg = pattern_ctx.invalidation
         
         # ✅ Extract values directly from top level (no nesting!)
-        conditions = inval_cfg.get("conditions", [])
-        duration_candles = inval_cfg.get("duration_candles", 1)
+        gates = inval_cfg.get("gates", {})
         logic = inval_cfg.get("_logic", "AND")
-        duration_applies_to = inval_cfg.get("_duration_applies_to", [])
         
-        if not conditions:
-            logger.debug(f"[{symbol}] No invalidation conditions for {pattern_name}")
+        if not gates:
+            logger.debug(f"[{symbol}] No invalidation gates for {pattern_name}")
             continue
         
         # ✅ Extract pattern metadata (FIXED: raw.meta nesting)
@@ -479,31 +477,11 @@ def check_pattern_invalidation(
         # ✅ Build namespace for condition evaluation
         namespace = _build_invalidation_namespace(meta, indicators)
         
-        # ✅ Evaluate conditions       
-        condition_results = []
-        for idx, condition in enumerate(conditions):
-            try:
-                result_val = ConditionEvaluator.evaluate_condition(condition, namespace)
-                condition_results.append(result_val)
-                
-                logger.debug(
-                    f"[{symbol}][{pattern_name}] Condition {idx}: '{condition}' = {result_val}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"[{symbol}][{pattern_name}] Condition evaluation failed: '{condition}' | {e}"
-                )
-                condition_results.append(False)
-        
-        # ✅ Apply logic (OR/AND)
-        if logic.upper() == "OR":
-            is_broken = any(condition_results)
-        else:  # AND
-            is_broken = all(condition_results)
+        # ✅ Evaluate gates       
+        is_broken, gate_results = extractor.evaluate_invalidation_gates(gates, namespace)
         
         logger.info(
-            f"[{symbol}][{pattern_name}] Breakdown check: {is_broken} "
-            f"({sum(condition_results)}/{len(conditions)} conditions met, logic={logic})"
+            f"[{symbol}][{pattern_name}] Breakdown check: {is_broken} logic={logic})"
         )
         
         if not is_broken:
@@ -515,15 +493,11 @@ def check_pattern_invalidation(
             continue
         
         # ✅ Multi-candle confirmation logic
-        needs_duration = True
-        if duration_applies_to:
-            # Only conditions in duration_applies_to need multi-candle confirmation
-            needs_duration = any(
-                idx in duration_applies_to and condition_results[idx]
-                for idx in range(len(condition_results))
-            )
+        triggered_durations = [res["duration"] for res in gate_results if res["triggered"]]
+        duration_candles = max(triggered_durations) if triggered_durations else 1
+        needs_duration = duration_candles > 1
         
-        if needs_duration and duration_candles > 1:
+        if needs_duration:
             # Track breakdown progress in DB
             state = get_breakdown_state(symbol, pattern_name, horizon)
             
@@ -540,7 +514,7 @@ def check_pattern_invalidation(
                     symbol, pattern_name, horizon,
                     current_price,
                     pivot_level,
-                    str(conditions)
+                    str(gates)
                 )
                 logger.info(
                     f"⚠️ [{symbol}] {pattern_name} breakdown started (1/{duration_candles})"

@@ -696,6 +696,12 @@ MASTER_CONFIG = {
                 "REVERSAL_RSI_SWING_UP": 0.9,
                 "REVERSAL_ST_FLIP_UP": 1.1,
                 "QUALITY_ACCUMULATION_DOWNTREND": 0.9,
+                "PATTERN_DARVAS_BREAKOUT": 1.0,
+                "PATTERN_VCP_BREAKOUT": 1.0,
+                "PATTERN_CUP_BREAKOUT": 1.0,
+                "PATTERN_FLAG_BREAKOUT": 1.0,
+                "PATTERN_STRIKE_REVERSAL": 1.0,
+                "PATTERN_GOLDEN_CROSS": 1.0,
                 "MOMENTUM_BREAKOUT": 0.8,
                 "MOMENTUM_BREAKDOWN": 0.7,
                 "SELL_AT_RANGE_TOP": 0.7,
@@ -787,10 +793,6 @@ MASTER_CONFIG = {
                 "normal_trend": {"adx": {"min": 20}, "t1_mult": 1.5, "t2_mult": 3.0},
                 "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.2, "t2_mult": 2.5}
             },
-            "position_sizing": {
-                "min_capital": 25000,     # Optional: Warn if trade is too small?
-                "max_capital": 50000      # Hard Cap: Never invest more than this
-            },
             "rr_gates": {"min_t1": 1.5,"min_t2": 2.0,"min_structural": 2.0,"execution_floor": 1.0}
         },
         
@@ -809,28 +811,7 @@ MASTER_CONFIG = {
             "structure_validation": {
                 "breakout_tolerance": 1.001,
                 "breakdown_tolerance": 0.999
-            }
-        },
-        
-        "lookback": {"python_data": 600},
-        
-        # ❌ DELETED: global.scoring — deprecated, never extracted by any
-        # section in extract_global_sections(). Thresholds owned by
-        # technical_score_config.py.
-        
-        
-        
-
-    
-        "targets": {
-            "resistance_cushion": 0.96,
-            "support_cushion": 1.005,
-            "min_distance_pct": 0.5,
-            "support_buffer": 0.998,
-            "cover_cushion": 1.005
-        },
-        
-        "execution": {
+            },
             "confidence_adjustments": {
                 "warning_penalty": -5,
                 "violation_penalty": -15,
@@ -843,6 +824,16 @@ MASTER_CONFIG = {
                 "risk_score_moderate_penalty": -5,
                 "risk_score_low_bonus": 5
             }
+        },
+        
+        "lookback": {"python_data": 600},
+        
+        "targets": {
+            "resistance_cushion": 0.96,
+            "support_cushion": 1.005,
+            "min_distance_pct": 0.5,
+            "support_buffer": 0.998,
+            "cover_cushion": 1.005
         }
     },
     

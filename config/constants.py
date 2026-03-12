@@ -306,7 +306,8 @@ TECHNICAL_METRIC_MAP = {
     "flagPennant": "Flag/Pennant Pattern",
     "bollingerSqueeze": "Bollinger Squeeze",
     "goldenCross": "Golden/Death Cross",
-    "doubleTopBottom": "Double Top/Bottom",
+    "bullishNecklinePattern": "Bullish Neckline Breakout",
+    "bearishNecklinePattern": "Bearish Neckline Breakdown",
     "threeLineStrike": "Three-Line Strike",
     "minerviniStage2": "Minervini VCP / Stage 2",
     "ichimokuSignals": "Ichimoku Signals",
@@ -1637,7 +1638,8 @@ TRADE_ENHANCER = {
         "threeLineStrike",
         "ichimokuSignals",
         "goldenCross",
-        "doubleTopBottom"
+        "bullishNecklinePattern",
+        "bearishNecklinePattern"
     ],
 
     # ---------------------------------------------------------
@@ -1729,7 +1731,8 @@ TRADE_ENHANCER = {
         "bollingerSqueeze": "bbLow",
         "threeLineStrike": "entry",
         "ichimokuSignals": "cloud_bottom",
-        "doubleTopBottom": "neckline"
+        "bullishNecklinePattern": "neckline",
+        "bearishNecklinePattern": "neckline"
     },
 
     # ---------------------------------------------------------
@@ -1803,7 +1806,15 @@ PATTERNS = {
     # ==================================================================
     # DOUBLE TOP / BOTTOM
     # ==================================================================
-    "doubleTopBottom": {
+    "bullishNecklinePattern": {
+        "peak_window": 5,
+        "min_history": 60,
+        "window_size": 60,
+        "price_level_tolerance": 0.03,
+        "pattern_score": 80,
+        "pattern_quality": 8.5
+    },
+    "bearishNecklinePattern": {
         "peak_window": 5,
         "min_history": 60,
         "window_size": 60,

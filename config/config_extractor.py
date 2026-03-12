@@ -552,6 +552,36 @@ class ConfigExtractor:
             source=f"merged(global + {self.horizon}) rr_gates"
         )
 
+        # ✅ FIXED: Multipliers and Overrides consolidated here
+        # Priority overrides (moved from extract_setup_sections)
+        calc_engine = global_cfg.get("calculation_engine", {})
+        priority_overrides = calc_engine.get("horizon_priority_overrides", {})
+        self.sections["horizon_priority_overrides"] = ConfigSection(
+            data=priority_overrides.get(self.horizon, {}),
+            source=f"global.calculation_engine.horizon_priority_overrides.{self.horizon}"
+        )
+
+        # Position Sizing Multipliers (moved from extract_strategy_sections)
+        # ✅ FIXED: Only extract horizon-specific multipliers here.
+        # QueryOptimizedExtractor handles global multipliers separately.
+        horizon_mults = horizon_risk.get("setup_size_multipliers", {})
+        
+        self.sections["sizing_multipliers"] = ConfigSection(
+            data=horizon_mults,
+            source=f"horizons.{self.horizon}.risk_management.setup_size_multipliers"
+        )
+        
+        # Horizon base multiplier (defaults to 1.0 if not found)
+        self.sections["horizon_base_multiplier"] = ConfigSection(
+            data=horizon_risk.get("base_multiplier", 1.0),
+            source=f"horizons.{self.horizon}.risk_management.base_multiplier"
+        )
+
+        # Logic placeholders to satisfy properties
+        self.sections["blocked_setups"] = ConfigSection(data=set(), source="placeholder")
+        self.sections["blocked_strategies"] = ConfigSection(data=set(), source="placeholder")
+        self.sections["strategy_multipliers"] = ConfigSection(data={}, source="placeholder")
+
     def extract_gate_sections(self):
         """
         ✅ FIXED: Extract gates with NEW architecture.

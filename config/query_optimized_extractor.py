@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 import logging
 import json
+import config.gate_evaluator as _gate_evaluator
 
-from config.config_resolver import ConditionEvaluator
 from config.fundamental_score_config import compute_fundamental_score
 from config.technical_score_config import calculate_dynamic_score, compute_technical_score
 
@@ -76,9 +76,7 @@ class QueryOptimizedExtractor:
         # ❌ REMOVED: Dead confidence_cache
         # self._confidence_cache: Dict[str, Any] = {}
         
-        self._deprecation_warnings: List[str] = []
-        self._string_condition_usage_count = 0
-    
+
     def _compute_config_hash(self, config: Dict) -> str:
         """
         Compute hash of config for version tracking.
@@ -316,112 +314,36 @@ class QueryOptimizedExtractor:
         """
         return self.base_extractor.get_strict("high_confidence_override")
     # ========================================================================
-    # ✅ CONFIDENCE GATE EVALUATION ENGINE
+    # CONFIDENCE GATE EVALUATION ENGINE
+    # (Pure logic lives in config.gate_evaluator — these are thin wrappers)
     # ========================================================================
 
     def evaluate_confidence_gates(
-        self, 
-        gates: Dict[str, Any], 
+        self,
+        gates: Dict[str, Any],
         data: Dict[str, Any],
-        empty_gates_pass: bool = True
+        empty_gates_pass: bool = True,
     ) -> Tuple[bool, List[str]]:
         """
         Evaluate if market data meets gate conditions.
-        
-        Supports:
-        - Min/max thresholds
-        - AND/OR logic
-        - Missing data handling
-        - Detailed failure reasons
-        
-        Args:
-            gates: Gate config from confidence_config.py
-                Example: {
-                    "adx": {"min": 20},
-                    "rvol": {"min": 1.5},
-                    "_logic": "AND"
-                }
-            data: Market data dictionary
-                Example: {
-                    "adx": 25,
-                    "rvol": 2.3,
-                    "trendStrength": 6.5
-                }
-        
-        Returns:
-            Tuple of (passes: bool, failures: List[str])
-            - passes: True if gates pass, False otherwise
-            - failures: List of failure reasons (empty if passes)
-        
-        Example:
-            >>> gates = {"adx": {"min": 20}, "rvol": {"min": 1.5}}
-            >>> data = {"adx": 15, "rvol": 2.3}
-            >>> passes, failures = extractor.evaluate_confidence_gates(gates, data)
-            >>> print(passes)  # False
-            >>> print(failures)  # ['adx: 15 < min(20)']
 
-        correctly evaluates ALL thresholds for each metric
-        before determining pass/fail.
+        Delegates to :func:`config.gate_evaluator.evaluate_gates`.
+        See that function for full argument and return-value documentation.
         """
-        logic = gates.get("_logic", "AND").upper()
-        
-        results = []
-        failures = []
-        # Skip meta keys (prefixed with underscore)
-        for metric, thresholds in gates.items():
-            if metric.startswith("_"):
-                continue
-            
-            value = data.get(metric)
-            
-            if value is None:
-                results.append(False)
-                failures.append(f"{metric}: missing from data")
-                continue
-            # Validate thresholds structure
-            if not isinstance(thresholds, dict):
-                self.logger.warning(f"Invalid threshold format for {metric}: {thresholds}")
-                results.append(False)
-                failures.append(f"{metric}: invalid threshold config")
-                continue
-            
-            # Check ALL conditions before appending result
-            metric_passed = True
-            metric_failures = []
-            
-            # Check min threshold
-            if "min" in thresholds:
-                min_val = thresholds["min"]
-                if value < min_val:
-                    metric_passed = False
-                    metric_failures.append(f"{metric}: {value} < min({min_val})")
-            
-            # Check max threshold
-            if "max" in thresholds:
-                max_val = thresholds["max"]
-                if value > max_val:
-                    metric_passed = False
-                    metric_failures.append(f"{metric}: {value} > max({max_val})")
-            
-            # Append result AFTER checking all conditions
-            results.append(metric_passed)
-            if not metric_passed:
-                failures.extend(metric_failures)
-        
-        # Apply logic operator
-        if not results:
-            # ✅ EXPLICIT: No gates to evaluate
-            if empty_gates_pass:
-                return True, []  # No restrictions = pass
-            else:
-                return False, ["No gates defined"]
-        
-        if logic == "OR":
-            passes = any(results)
-        else:  # AND
-            passes = all(results)
-        
-        return passes, failures if not passes else []
+        return _gate_evaluator.evaluate_gates(gates, data, empty_gates_pass)
+
+    def evaluate_invalidation_gates(
+        self,
+        gates: Dict[str, Any],
+        data: Dict[str, Any],
+    ) -> Tuple[bool, List[Dict[str, Any]]]:
+        """
+        Evaluate invalidation / breakdown gate conditions.
+
+        Delegates to :func:`config.gate_evaluator.evaluate_invalidation_gates`.
+        See that function for full argument and return-value documentation.
+        """
+        return _gate_evaluator.evaluate_invalidation_gates(gates, data)
 
     def evaluate_confidence_modifier(
         self,
@@ -432,12 +354,10 @@ class QueryOptimizedExtractor:
         """
         Evaluate a confidence modifier (penalty/bonus) and return adjustment.
         
-        ✅ ENHANCED: Now supports BOTH structured gates AND string conditions.
-         and warns about deprecated string conditions.
+        ✅ ENHANCED: Now strictly supports structured gates.
         
         Handles:
         - Gate evaluation (from confidence_config.py)
-        - String condition evaluation (from master_config.enhancements)
         - Setup-specific application/exclusion
         - Confidence adjustments (boost/penalty/multiplier/amount)
         
@@ -448,10 +368,10 @@ class QueryOptimizedExtractor:
                     "confidence_boost": 10,
                     "reason": "Strong trend"
                 }
-                Example (condition): {
-                    "condition": "rvol >= 2.5",
-                    "amount": 12,
-                    "reason": "Volume surge"
+                Example (penalty): {
+                    "gates": {"rsi": {"max": 40}},
+                    "confidence_penalty": -8,
+                    "reason": "Weak momentum"
                 }
             data: Market data dictionary
             setup_type: Current setup type (for filtering)
@@ -469,34 +389,27 @@ class QueryOptimizedExtractor:
         if exclude_from and setup_type in exclude_from:
             return False, None, "Setup in exclude list"
         
-        # 2. Evaluation Logic (gates OR condition)
+        # 2. Evaluation Logic (gates)
         gates = modifier_config.get("gates")
-        condition = modifier_config.get("condition")
         
         if gates:
             # Path A: Structured dictionary evaluation
             applies, failures = self.evaluate_confidence_gates(gates, data)
             failure_reason = f"Gates failed: {'; '.join(failures)}" if not applies else ""
-            
-        elif condition:
-            # Path B: Legacy string condition evaluation
-            applies = self._evaluate_string_condition(condition, data)
-            failure_reason = "Condition not met" if not applies else ""
-            
         else:
             # No evaluation criteria
-            return False, None, "No evaluation criteria (gates/condition) found"
+            return False, None, "No evaluation criteria (gates) found"
         
         if not applies:
             return False, None, failure_reason
         
-        # 3. Extract Adjustment Value
-        # ✅ FIX: Priority: multiplier > boost > penalty (removed "amount" fallback Issue A)
-        adjustment = (
-            modifier_config.get("confidence_multiplier") or
-            modifier_config.get("confidence_boost") or
-            modifier_config.get("confidence_penalty")
-        )
+        # 3. Extract Adjustment Value — use explicit key presence check so that
+        #    confidence_boost: 0 (an intentional no-op) is not treated as falsy.
+        adjustment = None
+        for key in ("confidence_multiplier", "confidence_boost", "confidence_penalty"):
+            if key in modifier_config:
+                adjustment = modifier_config[key]
+                break
         
         reason = modifier_config.get("reason", "Criteria met")
         
@@ -626,8 +539,7 @@ class QueryOptimizedExtractor:
         #         "adjustment": enh_config.get("amount", adjustment),
         #         "reason": reason
         #     }
-        results["horizon_enhancements"] = {}  # Empty - all in confidence_config now
-        
+
         # Penalties
         for penalty_name, penalty_config in conditional.get("penalties", {}).items():
             applies, adjustment, reason = self.evaluate_confidence_modifier(
@@ -651,9 +563,7 @@ class QueryOptimizedExtractor:
             }
         
         # ❌ REMOVED: ADX bands (now ONLY in calculate_dynamic_confidence_floor)
-        results["_adx_note"] = (
-            "ADX boosts/penalties applied in calculate_dynamic_confidence_floor only."
-        )
+        self.logger.debug("ADX boosts/penalties applied in calculate_dynamic_confidence_floor only.")
         
         return results
 
@@ -741,14 +651,6 @@ class QueryOptimizedExtractor:
                             f"bonus.{bonus_name}: {result['adjustment']:+.1f} ({result['reason']})"
                         )
 
-        # Process Horizon Enhancements
-        # if "horizon_enhancements" in evaluation_results:
-        #     for enh_name, result in evaluation_results["horizon_enhancements"].items():
-        #         if result["applies"] and result["adjustment"] is not None:
-        #             total_additive += result["adjustment"]
-        #             breakdown.append(
-        #                 f"enhancement.{enh_name}: {result['adjustment']:+.1f} ({result['reason']})"
-        #             )
         # Apply multipliers (if any) ONLY to structural adjustments (non-conditional bonuses)
         if multipliers:
             # Use most severe multiplier (lowest value)
@@ -1142,13 +1044,13 @@ class QueryOptimizedExtractor:
     ) -> Dict[str, Dict]:
         """
         Get scoring rules for a strategy.
-        
+
         Returns:
             {
                 "rule_name": {
-                    "condition": "roe >= 20 and roce >= 25",
+                    "gates": {"roe": {"min": 20}, "roce": {"min": 25}},
                     "points": 30,
-                    "reason": "..."
+                    "reason": "Strong capital efficiency"
                 }
             }
         """
@@ -1864,55 +1766,7 @@ class QueryOptimizedExtractor:
     # ✅ CATEGORY 7: UTILITY METHODS
     # ========================================================================
 
-    def _evaluate_string_condition(
-        self, 
-        condition: str, 
-        data: Dict[str, Any]
-    ) -> bool:
-        """
-        ⚠️ This method is kept for backward compatibility only.
-        New code should use evaluate_confidence_gates() instead.
-        Evaluate string-based condition (for legacy enhancements).
-        
-        Handles conditions like:
-        - "rvol >= 2.5"
-        - "trendStrength >= 7.0 and momentumStrength >= 7.0"
-        - "setup_type == 'MOMENTUM_BREAKOUT' and volatilityQuality >= 6.0"
-        
-        Args:
-            condition: String condition to evaluate
-            data: Market data dictionary
-        
-        Returns:
-            True if condition passes, False otherwise
-        
-        Example:
-            >>> data = {"rvol": 3.2, "bbWidth": 2.8}
-            >>> extractor._evaluate_string_condition("rvol >= 2.5 and bbWidth < 3.0", data)
-            True
-        """
-        try:
-            if not ConditionEvaluator:
-                return False
-            
-            # Prepare flat namespace for evaluation
-            namespace = self._prepare_evaluation_namespace(data)
-            
-            # Evaluate condition
-            result = ConditionEvaluator.evaluate_condition(condition, namespace)
-            
-            self.logger.debug(
-                f"String condition '{condition}' evaluated to {result}"
-            )
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(
-                f"Failed to evaluate condition '{condition}': {e}",
-                exc_info=True
-            )
-            return False
+
 
     def _prepare_evaluation_namespace(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2215,91 +2069,6 @@ class QueryOptimizedExtractor:
     # ========================================================================
     # INTERNAL HELPERS
     # ========================================================================
-    def _handle_deprecated_condition(
-        self,
-        condition: str,
-        modifier_config: Dict[str, Any]
-    ):
-        """
-        Handle deprecated string condition with migration guidance.
-        
-        Args:
-            condition: String condition (e.g., "rvol >= 2.5")
-            modifier_config: Full modifier config (for context)
-        """
-        self._string_condition_usage_count += 1
-        
-        # Try to auto-convert to gates format
-        suggested_gates = self._suggest_gates_format(condition)
-        
-        # Build deprecation warning
-        modifier_name = modifier_config.get("reason", "unknown_modifier")
-        warning_msg = (
-            f"⚠️ DEPRECATED: String condition in '{modifier_name}'\n"
-            f"   Current: condition = \"{condition}\"\n"
-            f"   Migrate to: gates = {suggested_gates}\n"
-            f"   String conditions will be removed in v4.0"
-        )
-        
-        # Log warning (only once per unique condition)
-        if warning_msg not in self._deprecation_warnings:
-            self._deprecation_warnings.append(warning_msg)
-            self.logger.warning(warning_msg)
-    
-    def _suggest_gates_format(self, condition: str) -> Dict[str, Any]:
-        """
-        Auto-suggest gates format from string condition.
-        
-        This is a BEST-EFFORT parser. Complex conditions may not convert perfectly.
-        
-        Args:
-            condition: String condition (e.g., "rvol >= 2.5 and adx < 30")
-        
-        Returns:
-            Suggested gates dict
-        
-        Examples:
-            >>> self._suggest_gates_format("rvol >= 2.5")
-            {'rvol': {'min': 2.5}}
-            
-            >>> self._suggest_gates_format("rvol >= 2.5 and adx < 30")
-            {'rvol': {'min': 2.5}, 'adx': {'max': 30}, '_logic': 'AND'}
-        """
-        gates = {}
-        logic = "AND"
-        
-        # Detect OR logic
-        if " or " in condition.lower():
-            logic = "OR"
-            condition = condition.lower().replace(" or ", " and ")
-        
-        # Split on AND
-        parts = [p.strip() for p in condition.split(" and ")]
-        
-        for part in parts:
-            # Parse patterns like "rvol >= 2.5" or "adx < 30"
-            match = re.match(r'(\w+)\s*([><=]+)\s*([\d.]+)', part)
-            if match:
-                metric, operator, value = match.groups()
-                value = float(value)
-                
-                if metric not in gates:
-                    gates[metric] = {}
-                
-                if ">=" in operator or ">" in operator:
-                    gates[metric]["min"] = value
-                elif "<=" in operator or "<" in operator:
-                    gates[metric]["max"] = value
-                elif "==" in operator:
-                    gates[metric]["min"] = value
-                    gates[metric]["max"] = value
-        
-        # Add logic if multiple conditions
-        if len(gates) > 1 and logic == "OR":
-            gates["_logic"] = "OR"
-        
-        return gates if gates else {"_parse_failed": condition}
-    
 
     def _normalize_threshold(self, threshold: Any) -> Dict[str, float]:
         """
@@ -2557,3 +2326,14 @@ class QueryOptimizedExtractor:
     def blocked_strategies_list(self) -> List[str]:
         """Get list of strategies blocked for this horizon."""
         return list(self.base_extractor.blocked_strategies)
+
+
+# ==============================================================================
+# BACKWARDS-COMPAT RE-EXPORT
+# ==============================================================================
+# Code that previously did:
+#   from config.query_optimized_extractor import evaluate_gates
+# can migrate to:
+#   from config.gate_evaluator import evaluate_gates
+# The re-export below keeps old imports working during the transition.
+from config.gate_evaluator import evaluate_gates, evaluate_invalidation_gates  # noqa: F401

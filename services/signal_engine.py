@@ -24,10 +24,9 @@ import traceback
 import logging
 from datetime import datetime
 
-from config.config_helpers import get_resolver
 from config.constants import VALUE_WEIGHTS, GROWTH_WEIGHTS, QUALITY_WEIGHTS, MOMENTUM_WEIGHTS
 
-from config.config_helpers.logger_config import METRICS, track_performance, log_failures
+from config.config_utility.logger_config import METRICS, track_performance, log_failures
 
 # ============================================================================
 # ✅ v14.0 IMPORTS - Query Extractor Architecture
