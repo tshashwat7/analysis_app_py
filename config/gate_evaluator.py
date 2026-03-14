@@ -27,13 +27,16 @@ def _unwrap(value: Any) -> Any:
     """
     Unwrap a nested metric dict to its scalar value.
 
-    Priority: value → raw → the dict itself (if neither key exists).
+    Priority: value → raw → score → the dict itself (if no keys exist).
     If the input is already a scalar, return it unchanged.
+    Note: Skip string values (e.g., "0%") and fall through to numeric alternatives.
     """
     if isinstance(value, dict):
-        v = value.get("value")
-        if v is not None:
-            return v
+        # Priority: value -> raw -> score
+        for key in ["value", "raw", "score"]:
+            v = value.get(key)
+            if v is not None and not isinstance(v, str):
+                return v
         return value.get("raw")
     return value
 
@@ -55,16 +58,30 @@ def _check_single_metric(
     # min
     if "min" in thresholds:
         min_val = thresholds["min"]
-        if min_val is not None and value < min_val:
-            passed = False
-            failures.append(f"{metric}: {value} < min({min_val})")
+        if min_val is not None:
+            if value is None:
+                passed = False
+                failures.append(f"{metric}: missing value for min threshold")
+            elif not isinstance(value, (int, float)):
+                passed = False
+                failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for min check")
+            elif value < min_val:
+                passed = False
+                failures.append(f"{metric}: {value} < min({min_val})")
 
     # max
     if "max" in thresholds:
         max_val = thresholds["max"]
-        if max_val is not None and value > max_val:
-            passed = False
-            failures.append(f"{metric}: {value} > max({max_val})")
+        if max_val is not None:
+            if value is None:
+                passed = False
+                failures.append(f"{metric}: missing value for max threshold")
+            elif not isinstance(value, (int, float)):
+                passed = False
+                failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for max check")
+            elif value > max_val:
+                passed = False
+                failures.append(f"{metric}: {value} > max({max_val})")
 
     # equals
     if "equals" in thresholds:
@@ -83,7 +100,13 @@ def _check_single_metric(
         else:
             mult = thresholds.get("multiplier", 1.0)
             threshold = ref_val * mult
-            if value < threshold:
+            if value is None:
+                passed = False
+                failures.append(f"{metric}: missing value for min_metric check")
+            elif not isinstance(value, (int, float)):
+                passed = False
+                failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for min_metric check")
+            elif value < threshold:
                 passed = False
                 failures.append(f"{metric}: {value} < {ref_name}({ref_val}) * {mult}")
 
@@ -97,7 +120,13 @@ def _check_single_metric(
         else:
             mult = thresholds.get("multiplier", 1.0)
             threshold = ref_val * mult
-            if value > threshold:
+            if value is None:
+                passed = False
+                failures.append(f"{metric}: missing value for max_metric check")
+            elif not isinstance(value, (int, float)):
+                passed = False
+                failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for max_metric check")
+            elif value > threshold:
                 passed = False
                 failures.append(f"{metric}: {value} > {ref_name}({ref_val}) * {mult}")
 

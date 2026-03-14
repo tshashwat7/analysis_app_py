@@ -997,7 +997,7 @@ class ConfigExtractor:
         section = self.sections.get(section_name)
 
         if not section:
-            self.logger.error(f"Config section not found: {section_name}")
+            self.logger.debug(f"Config section not found: {section_name}")
             return default
 
         if not section.is_valid:

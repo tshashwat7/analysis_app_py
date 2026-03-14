@@ -26,7 +26,6 @@ Version: 6.0 - Fully Refactored
 from typing import Dict, Any, List, Optional, Tuple, Union
 from datetime import datetime, time
 import logging
-import re
 import numbers
 from config.config_utility.logger_config import (
     METRICS,
@@ -35,19 +34,10 @@ from config.config_utility.logger_config import (
     log_resolver_context_quality,
     track_performance
 )
-from config.master_config import GATE_METRIC_REGISTRY
-from config.fundamental_score_config import compute_fundamental_score
 from services.data_fetch import _get_val, _safe_float, _safe_get_raw_float, ensure_numeric
-from config.technical_score_config import calculate_dynamic_score, compute_technical_score
 
 MIN_FIT_SCORE = 10.0
 logger = logging.getLogger(__name__)
-
-
-
-# ============================================================================
-# HELPER FUNCTIONS (Minimal - Most Logic in Resolver)
-# ============================================================================
 
 # ============================================================================
 # CORE RESOLVER CLASS (v6.0 - Refactored)
@@ -125,11 +115,11 @@ class ConfigResolver:
         Flatten nested indicator dicts to simple numeric values.
         
         Ensures extractor receives clean data that matches test expectations.
+        ✅ ENHANCED: Now uses namespacing (prefix.key) to prevent collisions.
         
         Transforms:
-            {"rsi": {"value": 62.01, "score": 8}} → {"rsi": 62.01}
-            {"adx": 33.13} → {"adx": 33.13}
-            {"growth": {"epsGrowth5y": {"raw": 15.2, "score": 7}}} → {"epsGrowth5y": 15.2}
+            {"rsi": {"value": 62.01}} → {"rsi": 62.01}
+            {"growth": {"epsGrowth5y": {"raw": 15.2}}} → {"growth.epsGrowth5y": 15.2}
         
         Args:
             data: Raw indicator/fundamental data (may have nested dicts)
@@ -139,20 +129,22 @@ class ConfigResolver:
         """
         flattened = {}
         
-        def _recurse(d: Dict[str, Any], current_layer: Dict[str, Any]):
+        def _recurse(d: Dict[str, Any], prefix: str = ""):
             for k, v in d.items():
                 if v is None:
                     continue
                 
+                key_name = f"{prefix}{k}"
+                
                 # Already numeric - use as-is
                 if isinstance(v, (int, float)):
-                    current_layer[k] = float(v)
+                    flattened[key_name] = float(v)
                     continue
                 
                 # String number - try to convert
                 if isinstance(v, str):
                     try:
-                        current_layer[k] = float(v)
+                        flattened[key_name] = float(v)
                     except (ValueError, TypeError):
                         pass
                     continue
@@ -164,6 +156,9 @@ class ConfigResolver:
                     has_val = "value" in v
                     
                     if has_raw or has_val:
+                        # Priority: raw > value. Explicit iteration order ensures that
+                        # for metrics like promoterpledge ({"raw": 0, "value": "0%"}),
+                        # the numeric 'raw' is picked before a potentially non-numeric 'value' string.
                         candidates = []
                         if has_raw:
                             candidates.append(v["raw"])
@@ -175,11 +170,11 @@ class ConfigResolver:
                             if candidate is None:
                                 continue
                             if isinstance(candidate, (int, float)):
-                                current_layer[k] = float(candidate)
+                                flattened[key_name] = float(candidate)
                                 extracted = True
                                 break
                             try:
-                                current_layer[k] = float(candidate)
+                                flattened[key_name] = float(candidate)
                                 extracted = True
                                 break
                             except (ValueError, TypeError):
@@ -189,11 +184,10 @@ class ConfigResolver:
                         if extracted:
                             continue
                             
-                    # If it's NOT a leaf node (e.g. "growth", "financial_health"), recurse deeper
-                    # Only map the deeper keys explicitly, we don't need the parent prefix
-                    _recurse(v, current_layer)
+                    # If it's NOT a leaf node (e.g. "growth"), recurse deeper with prefix
+                    _recurse(v, f"{key_name}.")
         
-        _recurse(data, flattened)
+        _recurse(data)
         return flattened
 
     # ========================================================================
@@ -422,16 +416,24 @@ class ConfigResolver:
             strength_class = "weak"
             multiplier = 0.9
         
-        # Determine regime using config-based classification + ADX
-        # This maintains backward compatibility while using smart thresholds
-        if adx >= 25 and direction == "bullish" and strength_class == "strong":
+        # ── P3a: ADX-first regime (direction-agnostic) ────────────────────
+        # Regime drives RR target extension: strong ADX → wider targets.
+        # Direction is already captured in 'direction' field and in the
+        # trade setup itself (long/short).  Gating regime on bullish-only
+        # caused reversal setups (bearish slope, high ADX) to always receive
+        # conservative normal_trend multipliers.
+        #
+        # Thresholds mirror rr_regime_adjustments in master_config:
+        #   strong_trend: adx.min = 35
+        #   normal_trend: adx.min = 20
+        #   weak_trend:   adx.max = 20
+        if adx >= 35:
             regime = "strong"
-        elif adx >= 25 and direction == "bullish" and strength_class == "moderate":
-            regime = "strong"  # ADX strength compensates for moderate slope
-        elif adx >= 15:
+        elif adx >= 20:
             regime = "normal"
         else:
             regime = "weak"
+        # ── End P3a ───────────────────────────────────────────────────────
 
         return {
             "regime": regime,
@@ -663,7 +665,10 @@ class ConfigResolver:
             if not metric_data:
                 continue
             
-            score = metric_data.get('score', 0.0)
+            raw_score = metric_data.get('score')
+            # Guard: calculate_dynamic_score can return None (metric not in registry)
+            # or unexpectedly a dict (unwrap failure). Always produce a numeric score.
+            score = raw_score if isinstance(raw_score, (int, float)) else 0.0
             contribution = score * weight
             total_weighted_score += contribution
             total_weight += weight
@@ -774,25 +779,25 @@ class ConfigResolver:
 
             # Fundamental conditions
             if fundamental_gates:
-                passes, _ = self.extractor.evaluate_confidence_gates(
-                    fundamental_gates, fund, empty_gates_pass=True
+                passes, failures = self.extractor.evaluate_confidence_gates(
+                    fundamental_gates, fund, empty_gates_pass=False
                 )
                 if not passes:
                     rejected.append({
                         "type": setup_name,
-                        "reason": "fundamental_conditions_failed"
+                        "reason": failures[0] if failures else "fundamental_conditions_failed"
                     })
                     continue
 
             # Technical conditions
             if technical_gates:
-                passes, _ = self.extractor.evaluate_confidence_gates(
-                    technical_gates, tech_namespace, empty_gates_pass=True
+                passes, failures = self.extractor.evaluate_confidence_gates(
+                    technical_gates, tech_namespace, empty_gates_pass=False
                 )
                 if not passes:
                     rejected.append({
                         "type": setup_name,
-                        "reason": "technical_conditions_failed"
+                        "reason": failures[0] if failures else "technical_conditions_failed"
                     })
                     continue
 
@@ -1134,9 +1139,10 @@ class ConfigResolver:
                 ticker=ctx["meta"]["symbol"],
                 indicators=ctx["indicators"],
                 fundamentals=ctx["fundamentals"],
+                patterns=ctx.get("patterns"),  # ← Pass patterns for scoring rules
                 horizon=self.horizon,
-                include_rejected=True,     # ← Track all strategies
-                include_breakdown=True     # ← Get detailed breakdown
+                include_rejected=True,
+                include_breakdown=True
             )
             
             # Transform to expected format (backward compatible)
@@ -1194,8 +1200,9 @@ class ConfigResolver:
         indicators: Dict[str, Any],
         fundamentals: Dict[str, Any],
         horizon: str,
-        include_rejected: bool = False,      # ← NEW
-        include_breakdown: bool = False      # ← NEW
+        patterns: Optional[Dict] = None,      # ← ADD THIS
+        include_rejected: bool = False,
+        include_breakdown: bool = False
     ) -> Dict[str, Any]:
         """
         ✅ ENHANCED: Strategy fit analysis with optional detailed breakdown.
@@ -1205,6 +1212,7 @@ class ConfigResolver:
             indicators: Technical indicators
             fundamentals: Fundamental metrics
             horizon: Trading horizon
+            patterns: Detected patterns (for *_found flags)
             include_rejected: If True, include strategies that failed threshold
             include_breakdown: If True, include detailed fit breakdown per strategy
         
@@ -1240,11 +1248,13 @@ class ConfigResolver:
                 if include_breakdown:
                     base_fit, breakdown = self._calculate_strategy_fit_via_extractor(
                         strategy_name, indicators, fundamentals,
-                        return_breakdown=True  # ← Request breakdown
+                        patterns=patterns,       # ← Pass patterns
+                        return_breakdown=True
                     )
                 else:
                     base_fit = self._calculate_strategy_fit_via_extractor(
-                        strategy_name, indicators, fundamentals
+                        strategy_name, indicators, fundamentals,
+                        patterns=patterns        # ← Pass patterns
                     )
                     breakdown = None
                 
@@ -1393,7 +1403,8 @@ class ConfigResolver:
         strategy_name: str,
         indicators: Dict,
         fundamentals: Dict,
-        return_breakdown: bool = False  # ← ADD THIS
+        patterns: Optional[Dict] = None,
+        return_breakdown: bool = False
     ) -> Union[float, Tuple[float, Dict]]:
         """
         Calculate strategy fit using extractor methods.
@@ -1402,6 +1413,7 @@ class ConfigResolver:
             strategy_name: Strategy to evaluate
             indicators: Technical indicators
             fundamentals: Fundamental metrics
+            patterns: Detected patterns (for *_found flags)
             return_breakdown: If True, return (score, breakdown) tuple
         
         Returns:
@@ -1527,6 +1539,19 @@ class ConfigResolver:
                     namespace[key] = _v
                 else:
                     namespace[key] = value
+
+            # Inject pattern flags (Bug 2 fix)
+            if patterns:
+                pattern_flags = {}
+                for pat_name, pat_data in patterns.items():
+                    if isinstance(pat_data, dict):
+                        found = pat_data.get("found", False)
+                    elif isinstance(pat_data, bool):
+                        found = pat_data
+                    else:
+                        found = bool(pat_data)
+                    pattern_flags[f"{pat_name}_found"] = found
+                namespace.update(pattern_flags)
             
             for rule_name, rule_config in scoring_rules.items():
                 gates = rule_config.get("gates", {})
@@ -1791,7 +1816,8 @@ class ConfigResolver:
 
             # ── Missing metric ──
             if actual is None:
-                gate_meta = GATE_METRIC_REGISTRY.get(gate_name, {})
+                registry = self.extractor.get_gate_registry()
+                gate_meta = registry.get(gate_name, {})
 
                 is_optional = gate_meta.get("optional", False)
                 
@@ -1880,7 +1906,8 @@ class ConfigResolver:
         """
         
         # Get gate metadata
-        gate_meta = GATE_METRIC_REGISTRY.get(gate_name)
+        registry = self.extractor.get_gate_registry()
+        gate_meta = registry.get(gate_name)
         
         if not gate_meta:
             # Check if this is a config key, not a metric
@@ -1956,6 +1983,21 @@ class ConfigResolver:
 
         flat_data = self._flatten_indicator_data({**ind, **fund})
 
+        # ── P1: Inject raw fundamental scalars at top level ───────────────
+        # _flatten_indicator_data recurses into nested sub-category dicts
+        # (growth, quality, valuation …) and produces namespaced keys like
+        # 'growth.epsGrowth5y'.  Confidence gates reference bare names such
+        # as 'epsGrowth5y', 'roe', 'deRatio' — they would always see
+        # "missing from data" without this injection.
+        # Only inject if the bare key is not already present (the flattener
+        # may have extracted it from a top-level leaf dict directly).
+        for _fk, _fv in (fund or {}).items():
+            if _fk not in flat_data and isinstance(_fv, dict):
+                _raw = _fv.get("raw")
+                if _raw is not None and isinstance(_raw, (int, float)):
+                    flat_data[_fk] = float(_raw)
+        # ── End P1 ────────────────────────────────────────────────────────
+
         # Inject aggregate scores so validation_modifiers can reference them
         scoring = ctx.get("scoring", {})
         technical_score_block = scoring.get("technical", {}) or {}
@@ -1995,10 +2037,10 @@ class ConfigResolver:
         total_adjustment = adj_data["adjustment"]
         breakdown = adj_data["breakdown"]
         divergence_multiplier = adj_data["multiplier"]
-        self.logger.debug(
-            "Calculating confidence modifiers for setup '%s' with data keys: %s",
-            setup_type,
-            list(flat_data.keys())
+        
+        self.logger.info(
+            f"[CONF_DIAG] {setup_type} ({self.horizon}): base={base}, "
+            f"adj={total_adjustment}, multiplier={divergence_multiplier}"
         )
 
 
@@ -2178,6 +2220,20 @@ class ConfigResolver:
             "breakdown": exec_breakdown
         }
 
+        # ── P2: Full confidence chain diagnostic ──────────────────────────
+        _base_adj    = total_adjustment - exec_adjustment   # adj before exec rules
+        _setup_delta = _base_adj - adj_data["adjustment"]   # setup-modifier contribution
+        self.logger.info(
+            f"[CONF_DIAG] {setup_type} ({self.horizon}) chain: "
+            f"base={base} | "
+            f"modifiers={adj_data['adjustment']:+.1f} | "
+            f"setup_mods={_setup_delta:+.1f} | "
+            f"exec_rules={exec_adjustment:+.1f} | "
+            f"total_adj={total_adjustment:+.1f} | "
+            f"pre_clamp={base + total_adjustment:.1f}"
+        )
+        # ── End P2 ────────────────────────────────────────────────────────
+
         # ==========================================================
         # FINAL + CLAMP
         # ==========================================================
@@ -2221,6 +2277,7 @@ class ConfigResolver:
             "score": clamped,
             "confidence": round(clamped, 1),
             "tradeable": tradeable,
+            "block_entry": adj_data.get("block_entry", False),  # ✅ Propagate block_entry
             "min_tradeable_threshold": float(min_tradeable or 0.0),
             "floor": float(min_tradeable or 0.0),
             "below_threshold_by": below_by,
@@ -2759,6 +2816,34 @@ class ConfigResolver:
             "summary": stats
         }
     
+    def _build_opportunity_metrics(self, ctx: Dict) -> Dict[str, Any]:
+        """
+        ✅ Aggregate FINAL metrics required by opportunity gates.
+        ❌ No calculations
+        ❌ No thresholds
+        ❌ No decisions
+        """
+        scoring = ctx.get("scoring", {})
+        confidence = ctx.get("confidence", {})
+        execution = ctx.get("execution_rules", {})
+        risk = ctx.get("risk_candidates", {})
+
+        return {
+            # Core confidence
+            "confidence": confidence.get("clamped"),
+
+            # Scores (pure aggregation)
+            "technicalScore": scoring.get("technical", {}).get("score"),
+            "fundamentalScore": scoring.get("fundamental", {}).get("score"),
+            "hybridScore": scoring.get("hybrid", {}).get("score"),
+
+            # Risk / R:R (will be filled next)
+            "rrRatio": risk.get("rrRatio"),
+
+            # Safety metadata (already used)
+            "execution_risk_score": execution.get("summary", {}).get("execution_risk_score"),
+        }
+
     def _build_opportunity_context(self, ctx: Dict) -> Dict[str, Any]:
         """
         Build a flat, decision-ready context for opportunity gates.
@@ -2788,35 +2873,6 @@ class ConfigResolver:
         """
         return opportunity_ctx.get(gate_name)
 
-    def _build_opportunity_metrics(self, ctx: Dict) -> Dict[str, Any]:
-        """
-        ✅ Aggregate FINAL metrics required by opportunity gates.
-        ❌ No calculations
-        ❌ No thresholds
-        ❌ No decisions
-        """
-
-        scoring = ctx.get("scoring", {})
-        confidence = ctx.get("confidence", {})
-        execution = ctx.get("execution_rules", {})
-        risk = ctx.get("risk_candidates", {}) 
-
-        return {
-            # Core confidence
-            "confidence": confidence.get("clamped"),
-
-            # Scores (pure aggregation)
-            "technicalScore": scoring.get("technical", {}).get("score"),
-            "fundamentalScore": scoring.get("fundamental", {}).get("score"),
-            "hybridScore": scoring.get("hybrid", {}).get("score"),
-
-            # Risk / R:R (will be filled next)
-            "rrRatio": risk.get("rrRatio"),
-
-            # Safety metadata (already used)
-            "execution_risk_score": execution.get("summary", {}).get("execution_risk_score"),
-        }
-
     def validate_pattern_gates(self, gates: Dict[str, Any], data: Dict[str, Any], pattern_name: str) -> bool:
         """
         Validate pattern-specific conditions using structured gate evaluation.
@@ -2835,10 +2891,14 @@ class ConfigResolver:
         triggered, gate_results = self.extractor.evaluate_invalidation_gates(gates, data)
 
         for gr in gate_results:
+            # NOTE: for invalidation gates, gr["triggered"]=True means the BREAKDOWN condition
+            # fired (pattern is invalidated). We pass `passed=not gr["triggered"]` so the
+            # logger labels it consistently: GATE PASSED = pattern still healthy,
+            # GATE FAILED = breakdown condition met = pattern invalidated.
             METRICS.log_gate_check(
                 gate_name=gr["metric"],
                 phase=f"pattern_invalidation_{pattern_name}",
-                passed=gr["triggered"],
+                passed=not gr["triggered"],
                 actual=data.get(gr["metric"]),
                 required=gates.get(gr["metric"]),
                 context=pattern_name,
@@ -3237,6 +3297,7 @@ class ConfigResolver:
 
         structural = eval_ctx["structural_gates"]["overall"]["passed"]
         execution_rules = eval_ctx["execution_rules"]["overall"]["passed"]
+        confidence_block = eval_ctx["confidence"].get("block_entry", False)
 
         # ✅ ALL CHECKS MUST PASS
         allowed = (
@@ -3246,6 +3307,7 @@ class ConfigResolver:
             and pattern_entry_ok
             and divergence_ok  # ✅ RESTORED
             and vol_ok  # ✅ RESTORED
+            and not confidence_block  # ✅ NEW: Enforce confidence modifier block
         )
 
         reason = None
@@ -3265,6 +3327,8 @@ class ConfigResolver:
                 reason = f"Divergence block: {divergence_warning}"
             elif not vol_ok:  # ✅ RESTORED
                 reason = vol_warning
+            elif confidence_block:  # ✅ NEW: Reason for confidence block
+                reason = "Confidence modifier: Entry blocked"
 
         return {
             "allowed": allowed,

@@ -108,10 +108,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 2.0}  # Higher for intraday
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 70},
-                    "rrRatio": {"min": 1.5}
-                }
+
             },
             
             "short_term": {
@@ -123,10 +120,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 1.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65},
-                    "rrRatio": {"min": 1.5}
-                }
+
             },
             
             "long_term": {
@@ -137,9 +131,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None},
                         "rvol": {"min": 1.2}
                     }
-                },
-                "opportunity": {
-                    "confidence": {"min": 60}
                 }
             },
             
@@ -152,9 +143,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None}  # Not ideal for multibagger
-                }
+
             }
         },
         "description": "Darvas box breakout with volume confirmation"
@@ -190,29 +179,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             }
         },
         "horizon_overrides": {
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    }
-                }
-            }
-        },
-        "validation_modifiers": {
-            "penalties": {
-                "poor_stage2": {
-                    "gates": {"position52w": {"max": 79.999}},
-                    "confidence_penalty": 20,
-                    "reason": "VCP requires stock near 52W highs"
-                }
-            },
-            "bonuses": {}
-        },
-        "min_pattern_quality": 8.5,
-        "min_setup_score": 85,
-        "setup_type": "pattern_driven",
-        "horizon_overrides": {
             "intraday": {
                 "context_requirements": {
                     "technical": {
@@ -220,9 +186,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 5.5},
                         "volatilityQuality": {"min": 7.0}
                     }
-                },
-                "opportunity": {
-                    "confidence": {"min": 70}
                 }
             },
             
@@ -233,9 +196,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 4.5},
                         "volatilityQuality": {"min": 6.0}
                     }
-                },
-                "opportunity": {
-                    "confidence": {"min": 65}
                 }
             },
             
@@ -246,9 +206,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 4.0},
                         "volatilityQuality": {"min": 5.0}
                     }
-                },
-                "opportunity": {
-                    "confidence": {"min": 60}
                 }
             },
             
@@ -256,16 +213,13 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 "context_requirements": {
                     "fundamental": {
                         "required": True,
-                        "fundamentalScore": {"min": 8.0}
+                        "fundamentalScore": {"min": 7.5}
                     },
                     "technical": {
                         "adx": {"min": None},
                         "trendStrength": {"min": 3.5},
                         "volatilityQuality": {"min": None}
                     }
-                },
-                "opportunity": {
-                    "confidence": {"min": 65}
                 }
             }
         },
@@ -333,9 +287,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 4.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65}
-                }
+
             },
             
             "short_term": {
@@ -346,9 +298,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 4.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             },
             
             "long_term": {
@@ -359,9 +309,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "multibagger": {
@@ -376,9 +324,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             }
         },
         "description": "Cup and handle breakout pattern"
@@ -446,9 +392,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 2.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 70}
-                }
+
             },
             
             "short_term": {
@@ -460,9 +404,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 1.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65}
-                }
+
             },
             
             "long_term": {
@@ -474,9 +416,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 1.2}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             },
             
             "multibagger": {
@@ -488,9 +428,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None}  # Not ideal for multibagger
-                }
+
             }
         },
         "description": "Flag/pennant continuation breakout"
@@ -557,9 +495,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 1.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             },
             
             "short_term": {
@@ -570,9 +506,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 1.3}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "long_term": {
@@ -583,9 +517,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": 1.2}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "multibagger": {
@@ -600,9 +532,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "rvol": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             }
         },
         "description": "Three-line strike reversal pattern"
@@ -669,9 +599,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65}
-                }
+
             },
             
             "short_term": {
@@ -682,9 +610,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             },
             
             "long_term": {
@@ -699,9 +625,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "multibagger": {
@@ -716,9 +640,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             }
         },
         "description": "Long-term moving average golden cross"
@@ -767,10 +689,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 5.0}  # ⬆️ Tighter for intraday
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65},  # Higher bar for intraday
-                    "rrRatio": {"min": 1.5}
-                }
+
             },
             
             "short_term": {
@@ -781,10 +700,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 4.0}  # Standard
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60},
-                    "rrRatio": {"min": 1.5}
-                }
+
             },
             
             "long_term": {
@@ -795,9 +711,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}  # ⬇️ No requirement
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}  # Lower bar for long_term
-                }
+
             },
             
             "multibagger": {
@@ -808,9 +722,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             }
         },
         "validation_modifiers": {
@@ -902,10 +814,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 4.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65},
-                    "rrRatio": {"min": 1.5}
-                }
+
             },
             
             "short_term": {
@@ -916,10 +825,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65},
-                    "rrRatio": {"min": 1.5}
-                }
+
             },
             
             "long_term": {
@@ -930,9 +836,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             },
             
             "multibagger": {
@@ -943,9 +847,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None}  # Block for multibagger
-                }
+
             }
         },
         "description": "Bearish breakdown for short/avoid"
@@ -1019,10 +921,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 4.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60},
-                    "rrRatio": {"min": 1.5}
-                }
+
             },
             
             "short_term": {
@@ -1033,10 +932,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55},
-                    "rrRatio": {"min": 1.4}
-                }
+
             },
             
             "long_term": {
@@ -1051,9 +947,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "multibagger": {
@@ -1068,9 +962,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             }
         },
         "description": "Dip-buying in established uptrend"
@@ -1140,10 +1032,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55},
-                    "rrRatio": {"min": 2.0}
-                }
+
             },
             
             "short_term": {
@@ -1154,10 +1043,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50},
-                    "rrRatio": {"min": 2.0}
-                }
+
             },
             
             "long_term": {
@@ -1168,10 +1054,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 48},
-                    "rrRatio": {"min": 2.5}
-                }
+
             },
             
             "multibagger": {
@@ -1182,10 +1065,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50},
-                    "rrRatio": {"min": 3.0}
-                }
+
             }
         },
         "description": "Deeper retracement in strong trend"
@@ -1228,9 +1108,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 5.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "short_term": {
@@ -1240,9 +1118,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 5.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "long_term": {
@@ -1252,9 +1128,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 4.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "multibagger": {
@@ -1268,9 +1142,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 4.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             }
         },
         "validation_modifiers": {
@@ -1357,9 +1229,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 5.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "short_term": {
@@ -1369,9 +1239,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 5.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "long_term": {
@@ -1381,9 +1249,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 4.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "multibagger": {
@@ -1393,9 +1259,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None}          # Block for multibagger
-                }
+
             }
         },
         "description": "Short/sell setup following an established downtrend"
@@ -1450,9 +1314,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "required": False  # ⚠️ Fundamentals not relevant for intraday
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "short_term": {
@@ -1465,9 +1327,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 2.5}  # Very relaxed
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 45}
-                }
+
             },
             
             "long_term": {
@@ -1482,9 +1342,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 7.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None},  # Will use setup default
-                }
+
             },
             
             "multibagger": {
@@ -1494,9 +1352,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 8.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60},  # Higher bar for multibagger
-                }
+
             }
         },       
         "validation_modifiers": {
@@ -1575,9 +1431,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "required": False  # Not relevant for intraday
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 45}
-                }
+
             },
             
             "short_term": {
@@ -1590,9 +1444,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 2.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 40}
-                }
+
             },
             
             "long_term": {
@@ -1605,9 +1457,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 7.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 35}
-                }
+
             },
             
             "multibagger": {
@@ -1617,9 +1467,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 8.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             }
         },
         "validation_modifiers": {
@@ -1704,9 +1552,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "required": False
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "short_term": {
@@ -1719,9 +1565,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "long_term": {
@@ -1735,9 +1579,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 45}
-                }
+
             },
             
             "multibagger": {
@@ -1747,9 +1589,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 8.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 65}
-                }
+
             }
         },
         "validation_modifiers": {
@@ -1816,10 +1656,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 7.0}  # Keep tight
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60},
-                    "rrRatio": {"min": 1.8}
-                }
+
             },
             
             "short_term": {
@@ -1828,9 +1665,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 6.0}  # Slightly relaxed
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "long_term": {
@@ -1839,9 +1674,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 7.0}  # Back to default
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "multibagger": {
@@ -1851,9 +1684,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None}  # Block for multibagger
-                }
+
             }
         },
         "validation_modifiers": {
@@ -1947,9 +1778,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "short_term": {
@@ -1959,9 +1788,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 2.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "long_term": {
@@ -1975,9 +1802,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 48}
-                }
+
             },
             
             "multibagger": {
@@ -1991,9 +1816,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             }
         },
         "description": "Early reversal via MACD momentum shift"
@@ -2061,9 +1884,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "short_term": {
@@ -2073,9 +1894,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 2.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "long_term": {
@@ -2089,9 +1908,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 45}
-                }
+
             },
             
             "multibagger": {
@@ -2105,9 +1922,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             }
         },
         "description": "RSI oversold bounce reversal"
@@ -2152,9 +1967,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "short_term": {
@@ -2164,9 +1977,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 2.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "long_term": {
@@ -2176,9 +1987,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": 2.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 52}
-                }
+
             },
             
             "multibagger": {
@@ -2192,9 +2001,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "trendStrength": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             }
         },
         "description": "Supertrend reversal confirmation"
@@ -2256,9 +2063,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "required": False  # Not relevant for intraday
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 45}
-                }
+
             },
             
             "short_term": {
@@ -2273,9 +2078,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 6.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 40}
-                }
+
             },
             
             "long_term": {
@@ -2293,9 +2096,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 7.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None},  # Use default
-                }
+
             },
             
             "multibagger": {
@@ -2308,9 +2109,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "fundamentalScore": {"min": 8.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             }
         },
         "description": "Accumulation during downtrend/sideways in quality stocks"
@@ -2354,9 +2153,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             },
             
             "short_term": {
@@ -2365,9 +2162,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 2.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 60}
-                }
+
             },
             
             "long_term": {
@@ -2376,9 +2171,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "multibagger": {
@@ -2387,9 +2180,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None}  # Not applicable for multibagger
-                }
+
             }
         },
         "description": "Range-bound exit at resistance"
@@ -2433,9 +2224,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 3.0}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "short_term": {
@@ -2444,9 +2233,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": 2.5}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 55}
-                }
+
             },
             
             "long_term": {
@@ -2455,9 +2242,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": 50}
-                }
+
             },
             
             "multibagger": {
@@ -2466,9 +2251,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     }
                 },
-                "opportunity": {
-                    "confidence": {"min": None}  # Not applicable
-                }
+
             }
         },
         "description": "Partial profit in range-bound consolidation"
@@ -2551,12 +2334,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "min_pattern_quality": 0.0,
         "min_setup_score": 0.0,
         "setup_type": "fallback",
-        "horizon_overrides": {
-            "intraday": {"context_requirements": {"technical": {"adx": {"min": 0},"trendStrength": {"min": 0}}},"opportunity": {"confidence": {"min": 50}}},
-            "short_term": {"context_requirements": {"technical": {"adx": {"min": 0},    "trendStrength": {"min": 0}}},"opportunity": {"confidence": {"min": 50}}},
-            "long_term": {"context_requirements": {"technical": {"adx": {"min": 0},    "trendStrength": {"min": 0}}},"opportunity": {"confidence": {"min": 50}}},
-            "multibagger": {"context_requirements": {"technical": {"adx": {"min": 0},    "trendStrength": {"min": 0}}},"opportunity": {"confidence": {"min": 50}} }
-        },
+        "horizon_overrides": {},
         "description": "GENERIC fallback when no specific setup pattern matches"
     }
 }

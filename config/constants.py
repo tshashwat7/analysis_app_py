@@ -791,7 +791,7 @@ QUALITY_WEIGHTS = {
     "netProfitMargin": {"weight": 1.0, "direction": "normal"},
     "deRatio": {"weight": 1.0, "direction": "normal"},
     "promoterpledge": {"weight": 1.0, "direction": "normal"},
-    "roeStability": {"weight": 0.10,"direction": "invert"},
+    "roeStability": {"weight": 0.10, "direction": "normal"},
     "volatilityQuality": {"weight": 0.10, "direction": "normal"},
 }
 

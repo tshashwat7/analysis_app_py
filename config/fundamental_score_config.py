@@ -796,6 +796,7 @@ def _normalize_fundamental_metric(
 # Helper normalization functions (extract from fundamentals.py)
 def _normalize_valuation(metric: str, val: float) -> float:
     """Lower is better for valuation metrics"""
+    if val is None: return 0.0
     if metric == "peRatio":
         if val <= 10: return 10
         elif val <= 15: return 8
@@ -826,6 +827,7 @@ def _normalize_valuation(metric: str, val: float) -> float:
 
 def _normalize_profitability(metric: str, val: float) -> float:
     """Higher is better"""
+    if val is None: return 0.0
     if metric in ["roe", "roce", "roic"]:
         if val >= 25: return 10
         elif val >= 20: return 9
@@ -844,6 +846,7 @@ def _normalize_profitability(metric: str, val: float) -> float:
 
 def _normalize_growth(metric: str, val: float) -> float:
     """Higher is better"""
+    if val is None: return 0.0
     if val >= 30: return 10
     elif val >= 25: return 9
     elif val >= 20: return 8
@@ -853,6 +856,7 @@ def _normalize_growth(metric: str, val: float) -> float:
 
 
 def _normalize_health_quality(metric: str, val: float) -> float:
+    if val is None: return 0.0
     if metric == "fcfYield":        # Higher is better
         if val >= 10: return 10
         elif val >= 7: return 8
@@ -881,6 +885,12 @@ def _normalize_health_quality(metric: str, val: float) -> float:
         elif val >= 1.0: return 6
         else: return 4
 
+    elif metric == "roeStability": # Lower is better (std dev of ROE)
+        if val <= 2.0: return 10
+        elif val <= 4.0: return 8
+        elif val <= 7.0: return 5
+        else: return 1
+
     elif metric == "beta":
         # Lower beta = more stable. Score inverts at extremes.
         if 0.5 <= val <= 0.9: return 10   # Low vol, less market risk
@@ -896,6 +906,7 @@ def _normalize_health_quality(metric: str, val: float) -> float:
 
 def _normalize_ownership(metric: str, val: float) -> float:
     """Context-dependent scoring"""
+    if val is None: return 0.0
     if metric == "promoterHolding":
         if 50 <= val <= 70: return 10  # Sweet spot
         elif 40 <= val < 50 or 70 < val <= 80: return 8

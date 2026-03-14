@@ -384,10 +384,10 @@ class QueryOptimizedExtractor:
         exclude_from = modifier_config.get("exclude_setups")
         
         if apply_to and setup_type not in apply_to:
-            return False, None, "Setup not in apply_to list"
+            return False, None, "Setup not in apply_to list", False
         
         if exclude_from and setup_type in exclude_from:
-            return False, None, "Setup in exclude list"
+            return False, None, "Setup in exclude list", False
         
         # 2. Evaluation Logic (gates)
         gates = modifier_config.get("gates")
@@ -398,10 +398,10 @@ class QueryOptimizedExtractor:
             failure_reason = f"Gates failed: {'; '.join(failures)}" if not applies else ""
         else:
             # No evaluation criteria
-            return False, None, "No evaluation criteria (gates) found"
+            return False, None, "No evaluation criteria (gates) found", False
         
         if not applies:
-            return False, None, failure_reason
+            return False, None, failure_reason, False
         
         # 3. Extract Adjustment Value — use explicit key presence check so that
         #    confidence_boost: 0 (an intentional no-op) is not treated as falsy.
@@ -411,9 +411,10 @@ class QueryOptimizedExtractor:
                 adjustment = modifier_config[key]
                 break
         
+        block_entry = modifier_config.get("block_entry", False)
         reason = modifier_config.get("reason", "Criteria met")
         
-        return True, adjustment, reason
+        return True, adjustment, reason, block_entry
 
     def evaluate_all_confidence_modifiers(
         self,
@@ -454,13 +455,14 @@ class QueryOptimizedExtractor:
         results["volume_modifiers"] = {}
         
         for mod_name, mod_config in volume_mods.items():
-            applies, adjustment, reason = self.evaluate_confidence_modifier(
+            applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
                 mod_config, data, setup_type
             )
             results["volume_modifiers"][mod_name] = {
                 "applies": applies,
                 "adjustment": adjustment,
-                "reason": reason
+                "reason": reason,
+                "block_entry": block_entry
             }
         
         # 2. Universal Adjustments - Divergence
@@ -469,13 +471,14 @@ class QueryOptimizedExtractor:
         results["divergence_penalties"] = {}
         
         for severity, div_config in divergence.items():
-            applies, adjustment, reason = self.evaluate_confidence_modifier(
+            applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
                 div_config, data, setup_type
             )
             results["divergence_penalties"][severity] = {
                 "applies": applies,
                 "adjustment": adjustment,
-                "reason": reason
+                "reason": reason,
+                "block_entry": block_entry
             }
         
         # 3. Universal Adjustments - Trend Strength
@@ -505,13 +508,14 @@ class QueryOptimizedExtractor:
                 }
                 continue
             
-            applies, adjustment, reason = self.evaluate_confidence_modifier(
+            applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
                 band_config, data, setup_type
             )
             results["trend_strength_bands"][band_name] = {
                 "applies": applies,
                 "adjustment": adjustment,
-                "reason": reason
+                "reason": reason,
+                "block_entry": block_entry
             }
             
             if applies:
@@ -527,44 +531,49 @@ class QueryOptimizedExtractor:
             "bonuses": {}
         }
         
-        # Horizon Enhancements
-        # enhancements = self.base_extractor.get("enhancements", {})
-        # results["horizon_enhancements"] = {}
-        # for enh_name, enh_config in enhancements.items():
-        #     applies, adjustment, reason = self.evaluate_confidence_modifier(
-        #         enh_config, data, setup_type
-        #     )
-        #     results["horizon_enhancements"][enh_name] = {
-        #         "applies": applies,
-        #         "adjustment": enh_config.get("amount", adjustment),
-        #         "reason": reason
-        #     }
 
         # Penalties
         for penalty_name, penalty_config in conditional.get("penalties", {}).items():
-            applies, adjustment, reason = self.evaluate_confidence_modifier(
+            applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
                 penalty_config, data, setup_type
             )
             results["conditional_adjustments"]["penalties"][penalty_name] = {
                 "applies": applies,
                 "adjustment": adjustment,
-                "reason": reason
+                "reason": reason,
+                "block_entry": block_entry
             }
         
         # Bonuses
         for bonus_name, bonus_config in conditional.get("bonuses", {}).items():
-            applies, adjustment, reason = self.evaluate_confidence_modifier(
+            applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
                 bonus_config, data, setup_type
             )
             results["conditional_adjustments"]["bonuses"][bonus_name] = {
                 "applies": applies,
                 "adjustment": adjustment,
-                "reason": reason
+                "reason": reason,
+                "block_entry": block_entry
             }
         
-        # ❌ REMOVED: ADX bands (now ONLY in calculate_dynamic_confidence_floor)
-        self.logger.debug("ADX boosts/penalties applied in calculate_dynamic_confidence_floor only.")
+        # Combine block_entry flags (OR logic)
+        final_block = False
+        for cat in ["volume_modifiers", "divergence_penalties", "trend_strength_bands"]:
+            for res in results.get(cat, {}).values():
+                if res.get("applies") and res.get("block_entry"):
+                    final_block = True
+                    break
+            if final_block: break
         
+        if not final_block:
+            for cat in ["penalties", "bonuses"]:
+                for res in results.get("conditional_adjustments", {}).get(cat, {}).values():
+                    if res.get("applies") and res.get("block_entry"):
+                        final_block = True
+                        break
+                if final_block: break
+                    
+        results["block_entry"] = final_block
         return results
 
     def calculate_total_confidence_adjustment(
@@ -588,16 +597,19 @@ class QueryOptimizedExtractor:
                 - "adjustment" (float): Total confidence delta (already scaled)
                 - "breakdown" (List[str]): Human-readable audit trail
                 - "multiplier" (float): Divergence multiplier applied (1.0 if none)
+                - "block_entry" (bool): Whether any applied modifier requested an entry block
 
         Example:
             >>> results = extractor.evaluate_all_confidence_modifiers(data, "MOMENTUM_BREAKOUT")
             >>> adj_data = extractor.calculate_total_confidence_adjustment(results)
             >>> print(adj_data["adjustment"])   # 17.5
             >>> print(adj_data["multiplier"])   # 0.7 (moderate divergence)
+            >>> print(adj_data["block_entry"])  # True
         """
         total_additive = 0.0
         multipliers = []
         breakdown = []
+        block_entry = evaluation_results.get("block_entry", False)
         
         # Process all modifier categories
         for category, modifiers in evaluation_results.items():
@@ -614,6 +626,7 @@ class QueryOptimizedExtractor:
                 for mod_name, result in modifiers.items():
                     if result["applies"] and result["adjustment"] is not None:
                         total_additive += result["adjustment"]
+                        self.logger.info(f"[CONF_DIAG] Added {category}.{mod_name}: {result['adjustment']}, total_additive now: {total_additive}")
                         breakdown.append(
                             f"{category}.{mod_name}: {result['adjustment']:+.1f} ({result['reason']})"
                         )
@@ -665,13 +678,16 @@ class QueryOptimizedExtractor:
                     for mod_name, result in modifiers.items():
                         if result["applies"] and result["adjustment"] is not None:
                             scaled_structural += result["adjustment"]
+                            self.logger.info(f"[CONF_DIAG] Recalc Added {category}.{mod_name}: {result['adjustment']}, scaled_structural now: {scaled_structural}")
                 elif category == "conditional_adjustments":
                     for name, result in modifiers.get("penalties", {}).items():
                         if result["applies"] and result["adjustment"] is not None:
                             unscaled_conditional += result["adjustment"]
+                            self.logger.info(f"[CONF_DIAG] Recalc Added penalty.{name}: {result['adjustment']}, unscaled_conditional now: {unscaled_conditional}")
                     for name, result in modifiers.get("bonuses", {}).items():
                         if result["applies"] and result["adjustment"] is not None:
                             unscaled_conditional += result["adjustment"]
+                            self.logger.info(f"[CONF_DIAG] Recalc Added bonus.{name}: {result['adjustment']}, unscaled_conditional now: {unscaled_conditional}")
             
             # Note: if scaled_structural = 0, this results in final_multiplier doing nothing, 
             # and only conditional bonuses/penalties being applied. This is expected behavior (Issue D).
@@ -681,13 +697,16 @@ class QueryOptimizedExtractor:
             return {
                 "adjustment": final_scaled_total,
                 "breakdown": breakdown,
-                "multiplier": final_multiplier
+                "multiplier": final_multiplier,
+                "block_entry": block_entry
             }
         else:
+            self.logger.info(f"[CONF_DIAG] Returning total_additive: {total_additive}")
             return {
                 "adjustment": total_additive,
                 "breakdown": breakdown,
-                "multiplier": 1.0
+                "multiplier": 1.0,
+                "block_entry": block_entry
             }
    
     # ========================================================================
@@ -780,8 +799,10 @@ class QueryOptimizedExtractor:
                     del resolved[metric]
         
         # ✅ FIX Issue E: Simple unbounded cache evasion
-        if len(self._gate_cache) > 1000:
-            self._gate_cache.clear()
+        if len(self._gate_cache) >= 1000:
+            # Proper LRU: pop the oldest item (first in insertion order)
+            oldest_key = next(iter(self._gate_cache))
+            del self._gate_cache[oldest_key]
 
         # ✅ Cache with version
         self._gate_cache[cache_key] = (self._config_version, resolved)
@@ -927,10 +948,24 @@ class QueryOptimizedExtractor:
             scoring_thresholds=scoring_thresholds
         )
         
+        # ✅ LRU Limit
+        if len(self._pattern_cache) >= 1000:
+            oldest_key = next(iter(self._pattern_cache))
+            del self._pattern_cache[oldest_key]
+            
         self._pattern_cache[cache_key] = (self._config_version, context)
         self.logger.debug(f"Pattern cache MISS (v{self._config_version}): {cache_key}")
         
         return context
+
+    def get_gate_registry(self) -> Dict[str, Any]:
+        """
+        ✅ NEW: Unified gate registry access.
+        Exposes GATE_METRIC_REGISTRY via extractor.
+        """
+        # Read directly from master_config to maintain purity
+        from config.master_config import GATE_METRIC_REGISTRY
+        return GATE_METRIC_REGISTRY
 
     def get_setup_patterns(self, setup_name: str) -> Dict[str, List[str]]:
         """
@@ -1216,10 +1251,14 @@ class QueryOptimizedExtractor:
             ...         report[setup] = list(override.keys())
             >>> print(f"Setups with horizon overrides: {len(report)}")
         """
-        override = self.base_extractor.get(
-            f"setup_{setup_name}_override_{self.horizon}", {}
-        )
-        
+        # Use a safe lookup to avoid "Config section not found" debug noise
+        # Only query if we know the section exists in the configuration.
+        key = f"setup_{setup_name}_override_{self.horizon}"
+        if hasattr(self.base_extractor, "sections") and key in self.base_extractor.sections:
+            override = self.base_extractor.get(key, {})
+        else:
+            override = {}
+            
         if section:
             return override.get(section, {})
         
@@ -1790,7 +1829,7 @@ class QueryOptimizedExtractor:
                 # Extract scalar from nested dict
                 # Priority: value > raw > score > dict itself
                 namespace[key] = (
-                    value.get("value") if "value" in value else
+                    value.get("value") if "value" in value and not isinstance(value.get("value"), str) else
                     value.get("raw") if "raw" in value else
                     value.get("score") if "score" in value else
                     value  # Keep dict if no scalar found
@@ -1805,7 +1844,7 @@ class QueryOptimizedExtractor:
                 for k, v in nested.items():
                     if k not in namespace:  # don't override top-level intentionally passed values
                         namespace[k] = (
-                            v.get("value") if isinstance(v, dict) and "value" in v else
+                            v.get("value") if isinstance(v, dict) and "value" in v and not isinstance(v.get("value"), str) else
                             v.get("raw") if isinstance(v, dict) and "raw" in v else
                             v.get("score") if isinstance(v, dict) and "score" in v else
                             v
@@ -2129,10 +2168,16 @@ class QueryOptimizedExtractor:
             return {"min": None, "max": None}
         
         if isinstance(raw_threshold, dict):
-            return {
+            # ✅ CLEANER FIX: Preserve only relevant gate keys (avoiding dict pollution)
+            result = {
                 "min": raw_threshold.get("min"),
-                "max": raw_threshold.get("max")
+                "max": raw_threshold.get("max"),
             }
+            # Preserve cross-metric and equality clauses
+            for key in ("equals", "min_metric", "max_metric", "multiplier", "duration"):
+                if key in raw_threshold:
+                    result[key] = raw_threshold[key]
+            return result
         
         if isinstance(raw_threshold, (int, float)):
             return {"min": float(raw_threshold), "max": None}
@@ -2328,12 +2373,7 @@ class QueryOptimizedExtractor:
         return list(self.base_extractor.blocked_strategies)
 
 
+
 # ==============================================================================
-# BACKWARDS-COMPAT RE-EXPORT
+# DIAGNOSTIC: Validate extractor state
 # ==============================================================================
-# Code that previously did:
-#   from config.query_optimized_extractor import evaluate_gates
-# can migrate to:
-#   from config.gate_evaluator import evaluate_gates
-# The re-export below keeps old imports working during the transition.
-from config.gate_evaluator import evaluate_gates, evaluate_invalidation_gates  # noqa: F401

@@ -287,12 +287,29 @@ def get_rr_regime_multipliers(
         # Get multipliers
         rr_cfg = _get_rr_regime_config(extractor)
         regime_cfg = rr_cfg.get(regime, {})
-        
+
+        # ── P3b: Guard against missing regime config ───────────────────────
+        # If the regime key is absent from rr_cfg (e.g. horizon override
+        # omitted it), derive sensible defaults from ADX so we never
+        # silently return the weakest possible multipliers.
+        adx_val = trend.get('adx') or 0.0
+        if not regime_cfg:
+            if adx_val >= 35:
+                regime_cfg = {"t1_mult": 2.0, "t2_mult": 4.0}
+            elif adx_val >= 20:
+                regime_cfg = {"t1_mult": 1.5, "t2_mult": 3.0}
+            else:
+                regime_cfg = {"t1_mult": 1.2, "t2_mult": 2.5}
+            logger.warning(
+                f"RR regime '{regime}' not found in config — "
+                f"using ADX-derived fallback (ADX={adx_val:.1f})"
+            )
+        # ── End P3b ────────────────────────────────────────────────────────
+
         t1_mult = regime_cfg.get("t1_mult", 1.5)
         t2_mult = regime_cfg.get("t2_mult", 3.0)
 
-        adx_val = trend.get('adx')
-        adx_str = f"{adx_val:.1f}" if adx_val is not None else "N/A"
+        adx_str = f"{adx_val:.1f}" if adx_val else "N/A"
 
         logger.info(
             f"RR regime '{regime}': ADX={adx_str}, "

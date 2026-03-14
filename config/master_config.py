@@ -137,14 +137,14 @@ GATE_METRIC_REGISTRY = {
         "category": "trend",
         "validation_type": "threshold",
         "description": "Moving Average trend alignment signal (1=Strong Up, 0.5=Developing, -1=Down)",
-        "context_paths": [("indicators", "maTrendSignal")] # ✅ ADD THIS
+        "context_paths": [("indicators", "maTrendSignal")]
     },
     "trendStrength": {
         "type": "numeric",
         "category": "trend",
         "validation_type": "threshold",
         "description": "Composite trend strength (0-10)",
-        "context_paths": [("indicators", "trendStrength")]  # ✅ ADD THIS
+        "context_paths": [("indicators", "trendStrength")]
     },
     
     "adx": {
@@ -152,7 +152,7 @@ GATE_METRIC_REGISTRY = {
         "category": "trend",
         "validation_type": "threshold",
         "description": "ADX trend strength indicator",
-        "context_paths": [("indicators", "adx")]  # ✅ ADD THIS
+        "context_paths": [("indicators", "adx")]
     },
     
     # ===========================
