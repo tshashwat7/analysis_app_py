@@ -1,80 +1,73 @@
 # services/pattern_state_manager.py
 """
-Pattern State Manager - Duration Candle Tracking
-================================================
+Pattern State Manager - Duration Candle Tracking (Shared DB Edition)
+====================================================================
 
-Tracks pattern breakdown duration using SQLite.
-Required for multi-candle confirmation in pattern invalidation.
-
-Example:
-    - Pattern breaks support on Day 1 → State saved
-    - Pattern still broken on Day 2 → Count incremented
-    - If duration_candles=2 met → Invalidate
+Tracks pattern breakdown duration using SQLAlchemy.
+v5.0: Supports shared DB sessions for bulk scans.
 """
 
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
-from sqlalchemy import Column, String, Integer, DateTime, Float, JSON
+from contextlib import contextmanager
+
+from sqlalchemy.orm import Session
 from services.db import PatternBreakdownState, SessionLocal
 from config.config_utility.market_utils import get_current_utc
 
 logger = logging.getLogger(__name__)
 
-
-# ============================================================
-# STATE MANAGEMENT FUNCTIONS
-# ============================================================
+@contextmanager
+def get_db():
+    """Context manager for sharing a DB session across multiple pattern operations."""
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 def get_breakdown_state(
     symbol: str,
     pattern_name: str,
-    horizon: str
+    horizon: str,
+    db: Optional[Session] = None
 ) -> Optional[Dict[str, Any]]:
-    """
-    Retrieves active breakdown state for a pattern.
-    
-    Returns:
-        {
-            "candle_count": int,
-            "started_at": datetime,
-            "price_at_breakdown": float,
-            "threshold_level": float
-        }
-        or None if no active breakdown
-    """
-    try:
+    """Retrieves active breakdown state for a pattern."""
+    _own_session = db is None
+    if _own_session:
         db = SessionLocal()
-        # symbol_str = symbol.get('value') or ""
-        if isinstance(symbol, dict):
-            symbol_str = symbol.get('value') or ""
-        else:
-            symbol_str = symbol
-        
+    try:
+        symbol_str = symbol.get("value") or "" if isinstance(symbol, dict) else symbol
+
         state = db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.symbol == symbol_str,
+            PatternBreakdownState.symbol       == symbol_str,
             PatternBreakdownState.pattern_name == pattern_name,
-            PatternBreakdownState.horizon == horizon
+            PatternBreakdownState.horizon      == horizon,
         ).first()
-        
+
         if not state:
             return None
-        
+
         return {
-            "candle_count": state.candle_count,
-            "started_at": state.started_at,
+            "candle_count":       state.candle_count,
+            "started_at":         state.started_at,
             "price_at_breakdown": state.price_at_breakdown,
-            "threshold_level": state.threshold_level,
-            "condition": state.condition
+            "threshold_level":    state.threshold_level,
+            "condition":          state.condition,
         }
-    
+
     except Exception as e:
         logger.error(f"get_breakdown_state failed: {e}", exc_info=True)
         return None
-    
-    finally:
-        db.close()
 
+    finally:
+        if _own_session:
+            db.close()
 
 def save_breakdown_state(
     symbol: str,
@@ -82,32 +75,27 @@ def save_breakdown_state(
     horizon: str,
     price: float,
     threshold: float,
-    condition: str
+    condition: str,
+    db: Optional[Session] = None
 ) -> bool:
-    """
-    Saves initial breakdown state (Day 1).
-    """
-    try:
+    """Saves/Updates initial breakdown state (Day 1)."""
+    _own_session = db is None
+    if _own_session:
         db = SessionLocal()
+    try:
         now = get_current_utc()
-        # ✅ Normalize symbol
-        if isinstance(symbol, dict):
-            symbol_str = symbol.get('value') or ""
-        else:
-            symbol_str = symbol
-        # Upsert logic
+        symbol_str = symbol.get("value") or "" if isinstance(symbol, dict) else symbol
+
         state = db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.symbol == symbol_str,
+            PatternBreakdownState.symbol       == symbol_str,
             PatternBreakdownState.pattern_name == pattern_name,
-            PatternBreakdownState.horizon == horizon
+            PatternBreakdownState.horizon      == horizon,
         ).first()
-        
+
         if state:
-            # Already exists → increment count
             state.candle_count += 1
-            state.last_updated = now
+            state.last_updated  = now
         else:
-            # Create new
             state = PatternBreakdownState(
                 symbol=symbol_str,
                 pattern_name=pattern_name,
@@ -117,127 +105,114 @@ def save_breakdown_state(
                 candle_count=1,
                 price_at_breakdown=price,
                 threshold_level=threshold,
-                condition=condition
+                condition=condition,
             )
             db.add(state)
-        
-        db.commit()
+
+        if _own_session:
+            db.commit()
+
         logger.debug(f"Breakdown state saved: {pattern_name} on {symbol_str} (count={state.candle_count})")
         return True
-    
+
     except Exception as e:
         logger.error(f"save_breakdown_state failed: {e}", exc_info=True)
-        db.rollback()
+        if _own_session:
+            db.rollback()
         return False
-    
-    finally:
-        db.close()
 
+    finally:
+        if _own_session:
+            db.close()
 
 def update_breakdown_state(
     symbol: str,
     pattern_name: str,
-    horizon: str
+    horizon: str,
+    db: Optional[Session] = None
 ) -> Optional[int]:
-    """
-    Increments candle count for active breakdown.
-    
-    Returns:
-        Updated candle_count or None
-    """
-    try:
+    """Increments candle count for active breakdown."""
+    _own_session = db is None
+    if _own_session:
         db = SessionLocal()
-        now = get_current_utc()
-        
+    try:
+        now   = get_current_utc()
         state = db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.symbol == symbol,
+            PatternBreakdownState.symbol       == symbol,
             PatternBreakdownState.pattern_name == pattern_name,
-            PatternBreakdownState.horizon == horizon
+            PatternBreakdownState.horizon      == horizon,
         ).first()
-        
+
         if not state:
             return None
-        
+
         state.candle_count += 1
-        state.last_updated = now
-        db.commit()
-        
+        state.last_updated  = now
+
+        if _own_session:
+            db.commit()
+
         logger.debug(f"Breakdown state updated: {pattern_name} on {symbol} (count={state.candle_count})")
         return state.candle_count
-    
+
     except Exception as e:
         logger.error(f"update_breakdown_state failed: {e}", exc_info=True)
-        db.rollback()
+        if _own_session:
+            db.rollback()
         return None
-    
-    finally:
-        db.close()
 
+    finally:
+        if _own_session:
+            db.close()
 
 def delete_breakdown_state(
     symbol: str,
     pattern_name: str,
-    horizon: str
+    horizon: str,
+    db: Optional[Session] = None
 ) -> bool:
-    """
-    Deletes breakdown state (after invalidation confirmed or recovery).
-    """
-    try:
+    """Deletes breakdown state."""
+    _own_session = db is None
+    if _own_session:
         db = SessionLocal()
-        
+    try:
         db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.symbol == symbol,
+            PatternBreakdownState.symbol       == symbol,
             PatternBreakdownState.pattern_name == pattern_name,
-            PatternBreakdownState.horizon == horizon
+            PatternBreakdownState.horizon      == horizon,
         ).delete()
-        
-        db.commit()
+
+        if _own_session:
+            db.commit()
+
         logger.debug(f"Breakdown state deleted: {pattern_name} on {symbol}")
         return True
-    
+
     except Exception as e:
         logger.error(f"delete_breakdown_state failed: {e}", exc_info=True)
-        db.rollback()
+        if _own_session:
+            db.rollback()
         return False
-    
+
     finally:
-        db.close()
-
-
-# services/pattern_state_manager.py
-
-
+        if _own_session:
+            db.close()
 
 def cleanup_old_breakdown_states(days_old: int = 7) -> int:
-    """
-    Cleans up stale breakdown states older than N days.
-    
-    Returns:
-        Number of records deleted
-    """
+    """Background cleanup job."""
     try:
         db = SessionLocal()
-        
-        # ✅ Direct datetime comparison (cleaner)
         cutoff = get_current_utc() - timedelta(days=days_old)
-        
         count = db.query(PatternBreakdownState).filter(
             PatternBreakdownState.last_updated < cutoff
         ).delete()
-        
         db.commit()
-        
         if count > 0:
-            logger.info(f"✅ Cleaned up {count} old breakdown states (older than {days_old} days)")
-        else:
-            logger.debug(f"ℹ️  No breakdown states older than {days_old} days")
-        
+            logger.info(f"Cleaned up {count} old breakdown states (older than {days_old} days)")
         return count
-    
     except Exception as e:
-        logger.error(f"❌ cleanup_old_breakdown_states failed: {e}", exc_info=True)
+        logger.error(f"cleanup_old_breakdown_states failed: {e}", exc_info=True)
         db.rollback()
         return 0
-    
     finally:
         db.close()

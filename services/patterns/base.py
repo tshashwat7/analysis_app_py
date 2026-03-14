@@ -96,6 +96,18 @@ class BasePattern(ABC):
         if self.debug_mode:
             logger.debug(f"[{self.alias}] {message}", extra=extra)
 
+    def _guard(self, df, min_rows: int):
+        """
+        Structural guard: replaces the 3-line boilerplate at the top of
+        every detect() method.
+
+        Returns the empty result dict if df is invalid or too short,
+        otherwise returns None (meaning "proceed").
+        """
+        if df is None or len(df) < min_rows:
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+        return None
+
     def _get_val(self, data: Dict[str, Any], key: str) -> Optional[float]:
         """Robust extractor for indicator dictionaries."""
         if key not in data: return None

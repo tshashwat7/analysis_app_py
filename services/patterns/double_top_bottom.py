@@ -1,233 +1,319 @@
+"""
+services/patterns/double_top_bottom.py
+
+Downstream meta consumers
+─────────────────────────
+trade_enhancer (via raw.meta path):
+  • meta["age_candles"]         – check_pattern_expiration + extract_pattern_execution_metadata
+  • meta["formation_time"]      – real-time age recalculation
+
+setup_pattern_matrix PATTERN_METADATA invalidation namespace (bullish/bearishNecklinePattern):
+  • meta["neckline"]            – breakdown gates: {"max_metric": "neckline"} / {"min_metric": "neckline"}
+  • meta["peak_similarity"]     – entry gates: {"max": 0.02}
+  • meta["pattern_height_pct"]  – analytics field in metadata_keys
+
+config_resolver _calculate_pattern_targets (neckline block L3676):
+  • meta["target"]              – pre-calculated pattern target price
+  • meta["neckline"]            – SL anchored just above/below neckline
+  • meta["type"]                – "bullish" | "bearish" branch selector
+
+All three must be present or target calculation falls through to ATR fallback.
+
+Alias fixes applied
+───────────────────
+  BullishNecklinePattern → alias = "bullishNecklinePattern"  ✅
+  BearishNecklinePattern → alias = "bearishNecklinePattern"  ✅
+  Point 3: duplicate peak_similarity key removed — appears exactly once per class  ✅
+  Point 6: HORIZON_WINDOWS applied to lookback window and min_history guard        ✅
+  _guard() used                                                                     ✅
+  formation_time key used (matches trade_enhancer L374/946)                         ✅
+"""
+
 import numpy as np
 import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
 from services.patterns.utils import _build_formation_context
 
-class DoubleTopBottom(BasePattern):
+# Point 6 fix: horizon-aware lookback window sizes
+HORIZON_WINDOWS = {
+    "intraday":    {"window": 30,  "min_history": 35},
+    "short_term":  {"window": 60,  "min_history": 65},
+    "long_term":   {"window": 120, "min_history": 130},
+    "multibagger": {"window": 120, "min_history": 130},
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared peak / trough detectors (pure NumPy, no SciPy dependency)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _find_peaks_numpy(arr: np.ndarray, distance: int):
+    peaks = []
+    if len(arr) < distance * 2:
+        return peaks
+    for i in range(distance, len(arr) - distance):
+        window = arr[i - distance: i + distance + 1]
+        if np.argmax(window) == distance:
+            peaks.append(i)
+    return peaks
+
+
+def _find_troughs_numpy(arr: np.ndarray, distance: int):
+    troughs = []
+    if len(arr) < distance * 2:
+        return troughs
+    for i in range(distance, len(arr) - distance):
+        window = arr[i - distance: i + distance + 1]
+        if np.argmin(window) == distance:
+            troughs.append(i)
+    return troughs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BullishNecklinePattern  (Double Bottom → bullish breakout)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BullishNecklinePattern(BasePattern):
     """
-    Detects Double Tops and Bottoms using pure Numpy (No SciPy).
+    Detects Double Bottom (bullish) pattern using pure NumPy.
+    Alias: "bullishNecklinePattern" — matches SETUP_PATTERN_MATRIX key.
     """
+
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
-        self.alias = "doubleTopBottom"
-        self.peak_window = 5 # Look 5 bars left/right for local extrema
-
-    def _find_peaks_numpy(self, arr: np.array, distance: int):
-        """Simple peak detection without SciPy"""
-        peaks = []
-        if len(arr) < distance * 2: return peaks
-        
-        for i in range(distance, len(arr) - distance):
-            window = arr[i - distance : i + distance + 1]
-            if np.argmax(window) == distance: # Center is highest
-                peaks.append(i)
-        return peaks
-
-    def _find_troughs_numpy(self, arr: np.array, distance: int):
-        """Simple trough detection without SciPy"""
-        troughs = []
-        if len(arr) < distance * 2: return troughs
-        
-        for i in range(distance, len(arr) - distance):
-            window = arr[i - distance : i + distance + 1]
-            if np.argmin(window) == distance: # Center is lowest
-                troughs.append(i)
-        return troughs
+        self.alias       = "bullishNecklinePattern"
+        self.peak_window = 5
 
     def detect(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
-        result = {"found": False, "score": 0, "quality": 0, "meta": {}}
+        if not self._is_horizon_supported(horizon):
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+        # Point 6 fix: horizon-aware window
+        hw          = HORIZON_WINDOWS.get(horizon, HORIZON_WINDOWS["short_term"])
+        window_size = hw["window"]
+        min_history = hw["min_history"]
+
+        empty = self._guard(df, min_history)
+        if empty is not None:
+            return empty
+
+        if getattr(self, "coerce_numeric", False):
+            df = self.ensure_numeric_df(df)
+
+        window        = df.tail(window_size).copy()
+        highs         = window["High"].values
+        lows          = window["Low"].values
+        closes        = window["Close"].values
+        current_price = float(closes[-1])
+
+        troughs = _find_troughs_numpy(lows, self.peak_window)
+        if len(troughs) < 2:
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+
+        t2, t1 = troughs[-1], troughs[-2]
+        if t2 <= t1:
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+
+        price1 = float(lows[t1])
+        price2 = float(lows[t2])
+
+        # Both troughs at similar level (within 3 %)
+        if not (0.97 <= (price2 / price1) <= 1.03):
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+
+        # Neckline = peak between the two troughs
+        peak_rel = int(np.argmax(highs[t1:t2]))
+        neckline  = float(highs[t1 + peak_rel])
+
+        # Breakout: price closed above neckline
+        if current_price <= neckline:
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+
+        height = neckline - price1
+        target = neckline + height                      # resolver reads meta["target"]
+        first_point_index = t1
+        entry_conditions_met = current_price > neckline
+
+        # Point 3 fix: peak_similarity defined exactly once
+        peak_similarity = abs((price2 - price1) / price1)
+
+        # Horizon-specific invalidation (price closes back below neckline = pattern failed)
+        if horizon == "intraday":
+            invalidation_level = neckline * 0.998
+        elif horizon == "short_term":
+            invalidation_level = neckline * 0.995
+        else:
+            invalidation_level = neckline * 0.99
         
-        # Guard must match the tail window used below (60)
-        if df is None or len(df) < 60: return result
+        # Guard against index errors if first_point_index is somehow invalid
+        try:
+            formation_ts = window.index[first_point_index]
+        except (IndexError, KeyError):
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
 
-        # Use recent window (last 60 bars)
-        window = df.tail(60).copy()
-        highs = window["High"].values
-        lows = window["Low"].values
-        closes = window["Close"].values
-        current_price = closes[-1]
+        result = {
+            "found":   True,
+            "score":   self._normalize_score(80),
+            "quality": 8.5,
+            "desc":    "Double Bottom Breakout",
+            "meta": {
+                # ── Fields read by trade_enhancer ────────────────────────────
+                "age_candles":    window_size - first_point_index,
+                "formation_time": formation_ts.timestamp(),    # key read by enhancer L374/946
+                # ── Fields read by resolver _calculate_pattern_targets L3677 ─
+                "target":    round(target, 2),          # resolver: depth = abs(target - neckline)
+                "neckline":  round(neckline, 2),        # resolver: SL = neckline * 0.99
+                "type":      "bullish",                 # resolver: branch selector
+                # ── Fields in PATTERN_METADATA invalidation namespace ─────────
+                # Invalidation gates use "neckline" as max_metric/min_metric key
+                # Entry gates use "peak_similarity" as a max gate
+                # analytics: pattern_height_pct
+                "peak_similarity":   round(peak_similarity, 4),
+                "pattern_height_pct": round(((neckline - price1) / price1) * 100, 2),
+                # ── Structural / UI fields ─────────────────────────────────────
+                "bar_index":              len(df),
+                "peak_1":                 round(price1, 2),
+                "peak_2":                 round(price2, 2),
+                "pattern_quality":        "strong" if peak_similarity <= 0.02 else "moderate",
+                "formation_timestamp":    formation_ts.isoformat(),  # ISO for logging/UI
+                "pattern_duration_candles": abs(t2 - t1),
+                "invalidation_level":     round(invalidation_level, 2),
+                "entry_trigger_price":    round(neckline, 2),
+                "horizon":                horizon,
+                "pattern_strength":       "strong",
+                "current_price":          round(current_price, 2),
+                "velocity_tracking": {
+                    "can_track":            entry_conditions_met,
+                    "entry_conditions_met": entry_conditions_met,
+                    "quality_sufficient":   True,
+                    "breakout_confirmed":   True,
+                },
+                "formation_context": _build_formation_context(indicators),
+            },
+        }
+        return result
 
-        # 1. Double Top (Bearish)
-        peaks = self._find_peaks_numpy(highs, self.peak_window)
-        
-        if len(peaks) >= 2:
-            p2 = peaks[-1] # Most recent peak
-            p1 = peaks[-2] # Previous peak
-            
-            #Defensive check for empty slice
-            if p2 <= p1: return result 
-            
-            price1 = highs[p1]
-            price2 = highs[p2]
-            
-            # Check Level (within 3% tolerance)
-            if 0.97 <= (price2 / price1) <= 1.03:
-                # Find Trough (Neckline) between peaks
-                # Slice logic: relative to window start
-                trough_rel = np.argmin(lows[p1:p2])
-                neckline = lows[p1 + trough_rel]
-                
-                # Check Breakdown (Price closed below neckline)
-                if current_price < neckline:
-                    result["found"] = True
-                    result["score"] = self._normalize_score(80)
-                    result["quality"] = 8.5
-                    result["desc"] = "Double Top Breakdown"
-                    height = price1 - neckline
-                    target = neckline - height
-                    
-                    # ✅ FIX: Use p1 directly (it's a double top, so bearish)
-                    first_point_index = p1
-                    
-                    entry_conditions_met = current_price < neckline
 
-                    result["meta"] = {
-                        "type": "bearish",
-                        "neckline": round(neckline, 2),
-                        "target": round(target, 2),
-                        "age_candles": 60 - first_point_index,
-                        "formation_timestamp": window.index[first_point_index].isoformat(),
-                        "pattern_duration_candles": abs(p2 - p1),
-                        # 🆕 Pattern-Specific Velocity Tracking
-                        "velocity_tracking": {
-                            "can_track": result["quality"] >= 7.0 and entry_conditions_met,
-                            "entry_conditions_met": entry_conditions_met,
-                            "quality_sufficient": result["quality"] >= 7.0,
-                            "breakdown_confirmed": True  # Already checked in detection logic
-                        },
-                        # 🆕 Formation Context (Generic)
-                        "formation_context": _build_formation_context(indicators)
-                    }
-                    # Calculate peak similarity
-                    peak_similarity = abs((price2 - price1) / price1)
+# ─────────────────────────────────────────────────────────────────────────────
+# BearishNecklinePattern  (Double Top → bearish breakdown)
+# ─────────────────────────────────────────────────────────────────────────────
 
-                    # Invalidation level (varies by horizon)
-                    if horizon == "intraday":
-                        invalidation_level = neckline * 0.998
-                    elif horizon == "short_term":
-                        invalidation_level = neckline * 0.995
-                    else:
-                        invalidation_level = neckline * 0.99
+class BearishNecklinePattern(BasePattern):
+    """
+    Detects Double Top (bearish) pattern using pure NumPy.
+    Alias: "bearishNecklinePattern" — matches SETUP_PATTERN_MATRIX key.
 
-                    # Entry trigger is neckline
-                    entry_trigger_price = neckline
+    Note: system is currently long-only; _calculate_pattern_targets in
+    config_resolver returns None for the bearish branch (L3688).  This class
+    still detects the pattern so it appears in CONFLICTING lists and can
+    suppress bullish setups when a double-top breakdown is active.
+    """
 
-                    # Pattern strength
-                    pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate" if result["quality"] >= 6.5 else "weak"
+    def __init__(self, config: Dict[str, Any] = None):
+        super().__init__(config)
+        self.alias       = "bearishNecklinePattern"
+        self.peak_window = 5
 
-                    # ADD TO META (Double Top):
-                    result["meta"].update({
-                        # Pattern Quality Metrics
-                        "peak_similarity": round(peak_similarity, 4),
-                        "pattern_quality": "strong" if peak_similarity <= 0.02 else "moderate",
-                        # Raw Anchors
-                        "neckline": float(neckline),
-                        "peak_1": float(price1), # Useful for invalidation if price breaks above peaks (for Double Top)
-                        
-                        # Analytics
-                        "peak_similarity": round(peak_similarity, 4),
-                        "pattern_height_pct": round(((price2 - neckline) / neckline) * 100, 2),
-                        # Entry/Exit Levels
-                        "invalidation_level": round(invalidation_level, 2),
-                        "entry_trigger_price": round(entry_trigger_price, 2),
-                        
-                        # Universal Fields
-                        "horizon": horizon,
-                        "pattern_strength": pattern_strength,
-                        "current_price": round(current_price, 2)
-                    })
-                    return result
+    def detect(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
+        if not self._is_horizon_supported(horizon):
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+        # Point 6 fix: horizon-aware window
+        hw          = HORIZON_WINDOWS.get(horizon, HORIZON_WINDOWS["short_term"])
+        window_size = hw["window"]
+        min_history = hw["min_history"]
 
-        # 2. Double Bottom (Bullish)
-        troughs = self._find_troughs_numpy(lows, self.peak_window)
-        
-        if len(troughs) >= 2:
-            t2 = troughs[-1]
-            t1 = troughs[-2]
-            
-            # FIX 3: Defensive check for empty slice
-            if t2 <= t1: return result 
-            
-            price1 = lows[t1]
-            price2 = lows[t2]
-            
-            # Check Level
-            if 0.97 <= (price2 / price1) <= 1.03:
-                # Find Peak (Neckline) between troughs
-                peak_rel = np.argmax(highs[t1:t2])
-                neckline = highs[t1 + peak_rel]
-                
-                # Check Breakout (Price closed above neckline)
-                if current_price > neckline:
-                    result["found"] = True
-                    result["score"] = self._normalize_score(80)
-                    result["quality"] = 8.5
-                    result["desc"] = "Double Bottom Breakout"
-                    height = neckline - price1
-                    target = neckline + height
-                    
-                    # ✅ FIX: Use t1 directly (it's a double bottom, so bullish)
-                    first_point_index = t1
-                    
-                    entry_conditions_met = current_price > neckline
+        empty = self._guard(df, min_history)
+        if empty is not None:
+            return empty
 
-                    result["meta"] = {
-                        "type": "bullish",
-                        "neckline": round(neckline, 2),
-                        "target": round(target, 2),
-                        "age_candles": 60 - first_point_index,
-                        "formation_timestamp": window.index[first_point_index].isoformat(),
-                        "pattern_duration_candles": abs(t2 - t1),
-                        # 🆕 Pattern-Specific Velocity Tracking
-                        "velocity_tracking": {
-                            "can_track": result["quality"] >= 7.0 and entry_conditions_met,
-                            "entry_conditions_met": entry_conditions_met,
-                            "quality_sufficient": result["quality"] >= 7.0,
-                            "breakout_confirmed": True  # Already checked in detection logic
-                        },
-                        # 🆕 Formation Context (Generic)
-                        "formation_context": _build_formation_context(indicators)
-                    }
-                    # Calculate peak similarity
-                    peak_similarity = abs((price2 - price1) / price1)
+        if getattr(self, "coerce_numeric", False):
+            df = self.ensure_numeric_df(df)
 
-                    # Invalidation level (varies by horizon)
-                    if horizon == "intraday":
-                        invalidation_level = neckline * 0.998
-                    elif horizon == "short_term":
-                        invalidation_level = neckline * 0.995
-                    else:
-                        invalidation_level = neckline * 0.99
+        window        = df.tail(window_size).copy()
+        highs         = window["High"].values
+        lows          = window["Low"].values
+        closes        = window["Close"].values
+        current_price = float(closes[-1])
 
-                    # Entry trigger is neckline
-                    entry_trigger_price = neckline
+        peaks = _find_peaks_numpy(highs, self.peak_window)
+        if len(peaks) < 2:
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
 
-                    # Pattern strength
-                    pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate" if result["quality"] >= 6.5 else "weak"
+        p2, p1 = peaks[-1], peaks[-2]
+        if p2 <= p1:
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
 
-                    # ADD TO META (Double Top):
-                    result["meta"].update({
-                        "bar_index": len(df),
-                        # Pattern Quality Metrics
-                        "peak_similarity": round(peak_similarity, 4),
-                        "pattern_quality": "strong" if peak_similarity <= 0.02 else "moderate",
-                        "neckline": float(neckline),  # The valley is the neckline in a Double Top
-                        "peak_1": float(price1),        # Left Peak
-                        "peak_2": float(price2),        # Right Peak
-                        
-                        # ANALYTICS (Optional, for velocity tracking)
-                        "pattern_height_pct": round(((price2 - neckline) / neckline) * 100, 2),
-                        "peak_similarity": round(peak_similarity, 4),
-                        # Entry/Exit Levels
-                        "invalidation_level": round(invalidation_level, 2),
-                        "entry_trigger_price": round(entry_trigger_price, 2),
-                        
-                        # Universal Fields
-                        "horizon": horizon,
-                        "pattern_strength": pattern_strength,
-                        "current_price": round(current_price, 2)
-                    })
-                    return result
+        price1 = float(highs[p1])
+        price2 = float(highs[p2])
 
+        # Both peaks at similar level (within 3 %)
+        if not (0.97 <= (price2 / price1) <= 1.03):
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+
+        # Neckline = trough between the two peaks
+        trough_rel = int(np.argmin(lows[p1:p2]))
+        neckline   = float(lows[p1 + trough_rel])
+
+        # Breakdown: price closed below neckline
+        if current_price >= neckline:
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+
+        height = price1 - neckline
+        target = neckline - height                      # resolver reads meta["target"]
+        first_point_index = p1
+        entry_conditions_met = current_price < neckline
+
+        # Point 3 fix: peak_similarity defined exactly once
+        peak_similarity = abs((price2 - price1) / price1)
+
+        # Invalidation (price reclaims neckline from below = bearish pattern failed)
+        if horizon == "intraday":
+            invalidation_level = neckline * 1.002
+        elif horizon == "short_term":
+            invalidation_level = neckline * 1.005
+        else:
+            invalidation_level = neckline * 1.01
+
+        try:
+            formation_ts = window.index[first_point_index]
+        except (IndexError, KeyError):
+            return {"found": False, "score": 0, "quality": 0, "meta": {}}
+
+        result = {
+            "found":   True,
+            "score":   self._normalize_score(80),
+            "quality": 8.5,
+            "desc":    "Double Top Breakdown",
+            "meta": {
+                # ── Fields read by trade_enhancer ────────────────────────────
+                "age_candles":    window_size - first_point_index,
+                "formation_time": formation_ts.timestamp(),    # key read by enhancer L374/946
+                # ── Fields read by resolver _calculate_pattern_targets L3677 ─
+                "target":    round(target, 2),          # resolver reads this even for bearish
+                "neckline":  round(neckline, 2),        # resolver: returns None for bearish branch
+                "type":      "bearish",                 # resolver: branch selector → returns None
+                # ── Fields in PATTERN_METADATA invalidation namespace ─────────
+                "peak_similarity":    round(peak_similarity, 4),
+                "pattern_height_pct": round(((price1 - neckline) / neckline) * 100, 2),
+                # ── Structural / UI fields ─────────────────────────────────────
+                "bar_index":              len(df),
+                "peak_1":                 round(price1, 2),
+                "peak_2":                 round(price2, 2),
+                "pattern_quality":        "strong" if peak_similarity <= 0.02 else "moderate",
+                "formation_timestamp":    formation_ts.isoformat(),  # ISO for logging/UI
+                "pattern_duration_candles": abs(p2 - p1),
+                "invalidation_level":     round(invalidation_level, 2),
+                "entry_trigger_price":    round(neckline, 2),
+                "horizon":                horizon,
+                "pattern_strength":       "strong",
+                "current_price":          round(current_price, 2),
+                "velocity_tracking": {
+                    "can_track":            entry_conditions_met,
+                    "entry_conditions_met": entry_conditions_met,
+                    "quality_sufficient":   True,
+                    "breakdown_confirmed":  True,
+                },
+                "formation_context": _build_formation_context(indicators),
+            },
+        }
         return result

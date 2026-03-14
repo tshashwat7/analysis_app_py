@@ -1692,7 +1692,7 @@ generic_to_legacy = {
             'intraday': 'ema200',
             'short_term': 'ema200',
             'long_term': 'wma50',
-            'multibagger': 'mma12'
+            'multibagger': 'mma24'
         }
     },
     
