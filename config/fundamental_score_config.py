@@ -137,32 +137,6 @@ HORIZON_METRIC_INCLUSION = {
             "shortInterest",    # Market timing
             "days_to_earnings"  # Event timing
         ]
-    },
-    
-    "multibagger": {
-        "valuation": ["peRatio", "pegRatio", "peVsSector"],  # Growth at reasonable price
-        "profitability": ["roe", "roce", "roic", "netProfitMargin"],  # Sustained profitability
-        "growth": ["profitGrowth3y", "epsGrowth5y", "revenueGrowth5y", "fcfGrowth3y", "marketCapCagr"],  # ALL growth metrics
-        "financial_health": ["deRatio", "interestCoverage", "fcfYield", "ocfVsProfit"],  # Quality balance sheet
-        "quality": ["piotroskiF", "earningsStability", "RDIntensity"],  # High-quality business
-        "ownership": ["promoterHolding", "institutionalOwnership", "promoterpledge"],  # Skin in the game
-        "market": ["marketCap"],  # Size matters for liquidity
-        
-        "exclude": [
-            "pbRatio",          # Less relevant for growth stocks
-            "psRatio",          # Can be high for growth
-            "quarterlyGrowth",  # Noise over 5 years
-            "currentRatio",     # Short-term metric
-            "fcfMargin",        # Can be negative during growth phase
-            "ebitdaMargin",     # Focus on net profitability
-            "assetTurnover",    # Not critical for multibaggers
-            "dividendyield", "dividendPayout", "yieldVsAvg",  # Growth stocks rarely pay dividends
-            "beta",             # Volatility expected
-            "position52w",      # Long-term focus
-            "shortInterest",    # Market timing
-            "analystRating",    # Often wrong for multibaggers
-            "days_to_earnings"  # Irrelevant
-        ]
     }
 }
 
@@ -179,16 +153,6 @@ HORIZON_FUNDAMENTAL_WEIGHTS = {
     },
     
     "long_term": {"valuation": 0.15,"profitability": 0.25,"growth": 0.20,"financial_health": 0.20,"quality": 0.10,"ownership": 0.05,"dividend": 0.03,"market": 0.02
-    },
-    
-    "multibagger": {
-        "growth": 0.35,           # Growth is KING
-        "profitability": 0.25,    # Must be profitable
-        "quality": 0.15,          # High-quality business
-        "financial_health": 0.10, # Sustainable growth
-        "ownership": 0.08,        # Promoter conviction
-        "valuation": 0.05,        # Can pay premium for growth
-        "market": 0.02            # Size for exit liquidity
     }
 }
 
@@ -293,48 +257,7 @@ METRIC_WEIGHTS = {
         # MARKET (2%)
         "marketCap": 1.0
     },
-    
-    # ==========================================================================
-    # MULTIBAGGER: Growth above all, with quality gates
-    # ==========================================================================
-    "multibagger": {
-        # GROWTH (35%) - SUPREME PRIORITY
-        "profitGrowth3y": 0.20,
-        "epsGrowth5y": 0.25,
-        "revenueGrowth5y": 0.20,
-        "fcfGrowth3y": 0.15,
-        "marketCapCagr": 0.20,
-        
-        # PROFITABILITY (25%) - Must be profitable
-        "roe": 0.35,
-        "roce": 0.30,
-        "roic": 0.25,
-        "netProfitMargin": 0.10,
-        
-        # QUALITY (15%) - High-quality business
-        "piotroskiF": 0.50,
-        "earningsStability": 0.30,
-        "RDIntensity": 0.20,
-        
-        # FINANCIAL HEALTH (10%) - Sustainable growth
-        "deRatio": 0.40,
-        "interestCoverage": 0.30,
-        "fcfYield": 0.20,
-        "ocfVsProfit": 0.10,
-        
-        # OWNERSHIP (8%) - Promoter conviction
-        "promoterHolding": 0.50,
-        "institutionalOwnership": 0.30,
-        "promoterpledge": 0.20,
-        
-        # VALUATION (5%) - Can pay premium
-        "peRatio": 0.40,
-        "pegRatio": 0.40,
-        "peVsSector": 0.20,
-        
-        # MARKET (2%)
-        "marketCap": 1.0
-    }
+
 }
 
 # ==============================================================================
@@ -394,37 +317,6 @@ FUNDAMENTAL_PENALTIES = {
             "threshold": 10,
             "penalty": 0.20,
             "reason": "Below-average ROE"
-        }
-    ],
-    
-    "multibagger": [
-        {
-            "metric": "promoterHolding",
-            "operator": "<",
-            "threshold": 25,
-            "penalty": 0.30,
-            "reason": "Low promoter conviction"
-        },
-        {
-            "metric": "epsGrowth5y",
-            "operator": "<",
-            "threshold": 10,
-            "penalty": 0.35,
-            "reason": "Insufficient growth track record"
-        },
-        {
-            "metric": "deRatio",
-            "operator": ">",
-            "threshold": 1.0,
-            "penalty": 0.20,
-            "reason": "Debt constrains growth"
-        },
-        {
-            "metric": "piotroskiF",
-            "operator": "<",
-            "threshold": 5,
-            "penalty": 0.25,
-            "reason": "Poor fundamental quality"
         }
     ]
 }
@@ -653,7 +545,7 @@ def compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
     
     Args:
         fundamentals: Dict from fundamentals.py compute_fundamentals()
-        horizon: Trading horizon (intraday/short_term/long_term/multibagger)
+        horizon: Trading horizon (intraday/short_term/long_term)
     
     Returns:
         Rich, explainable score structure

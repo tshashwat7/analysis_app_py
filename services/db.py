@@ -227,9 +227,11 @@ def enforce_timezone_on_paper_trade(target, context):
     if target.updated_at and target.updated_at.tzinfo is None:
         target.updated_at = target.updated_at.replace(tzinfo=timezone.utc)
 
+
 # 4. Create Tables
 def init_db():
-    # [FIX] Use Base.metadata directly. No invalid import.
+    # Lazy import — avoids circular import (mb_db_model imports Base from db.py)
+    from services.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
     Base.metadata.create_all(bind=engine)
     migrate_add_selected_horizon()
 

@@ -579,10 +579,3 @@ def get_strategy_from_context(eval_ctx: Dict) -> Dict[str, Any]:
         "description": strategy_info.get("description", ""),
         "horizon_multiplier": strategy_info.get("horizon_multiplier", 1.0)
     }
-
-
-# ==============================================================================
-# 7. ✅ NEW: Strategy Analysis Helper (Using Extractor)
-# ==============================================================================
-  
-

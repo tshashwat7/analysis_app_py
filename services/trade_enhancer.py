@@ -63,8 +63,7 @@ logger = logging.getLogger(__name__)
 MIN_EXECUTION_RR_GATE = {
     'intraday': 1.5,
     'short_term': 1.5,
-    'long_term': 2.0,
-    'multibagger': 2.5
+    'long_term': 2.0
 }
 
 VOLATILITY_BUFFER_FACTORS = {
@@ -77,8 +76,7 @@ VOLATILITY_BUFFER_FACTORS = {
 MIN_SL_ATR_MULTIPLES = {
     'intraday': 2.0,
     'short_term': 2.0,
-    'long_term': 2.5,
-    'multibagger': 3.0
+    'long_term': 2.5
 }
 
 TARGET_ADJUSTMENT_FACTORS = {
@@ -91,8 +89,7 @@ TARGET_ADJUSTMENT_FACTORS = {
 BASE_SPREAD_PCT = {
     'intraday': 0.0015,
     'short_term': 0.001,
-    'long_term': 0.0008,
-    'multibagger': 0.0005
+    'long_term': 0.0008
 }
 
 def adjust_targets_for_market_conditions(
@@ -356,8 +353,7 @@ def check_pattern_expiration(
     HORIZON_SECONDS = {
         "intraday": 900,
         "short_term": 86400,
-        "long_term": 604800,
-        "multibagger": 2592000
+        "long_term": 604800
     }
     candle_sec = HORIZON_SECONDS.get(horizon, 86400)
     
@@ -836,8 +832,7 @@ def calculate_adaptive_spread_cost(
     horizon_factors = {
         "intraday": 1.0,      # Full spread for quick trades
         "short_term": 0.8,    # Slightly better for swing
-        "long_term": 0.6,     # Much better for position
-        "multibagger": 0.5    # Best for long holds
+        "long_term": 0.6      # Much better for position
     }
     horizon_factor = horizon_factors.get(horizon, 1.0)
     
@@ -1002,8 +997,7 @@ def calculate_pattern_timeline(
         bars_per_unit = {
             "intraday": 26,      # 26 bars = 1 hour (15min candles)
             "short_term": 1,     # 1 bar = 1 day
-            "long_term": 1,      # 1 bar = 1 week  (was 0.2 → 5× inflation)
-            "multibagger": 1     # 1 bar = 1 month (was 0.05 → 20× inflation)
+            "long_term": 1       # 1 bar = 1 week  (was 0.2 → 5× inflation)
         }.get(horizon, 1)
         
         # 🆕 MODIFY: Adjust duration multiplier with historical data
@@ -1014,14 +1008,13 @@ def calculate_pattern_timeline(
                 # ✅ FIX: Estimate what config physics would predict in DAYS,
                 # not in bars, using the correct horizon conversion factor.
                 # Old code: config_duration_mult * 5 hardcoded "5 days/unit" for all
-                # horizons — wildly wrong for intraday (unit=hours) or multibagger
+                # horizons — wildly wrong for intraday (unit=hours) or long-term/multibagger
                 # (unit=months).  Use the actual bars_per_unit to convert:
                 #   bars/unit → units → calendar days (approximate)
                 horizon_to_days = {
                     "intraday": 1/26,      # 1 bar = 15min; 26 bars ≈ 1 trading hour ≈ 0.04 days
                     "short_term": 1.0,     # 1 bar = 1 day
-                    "long_term": 5.0,      # 1 bar ≈ 1 week (5 trading days)
-                    "multibagger": 20.0    # 1 bar ≈ 1 month (20 trading days)
+                    "long_term": 5.0      # 1 bar ≈ 1 week (5 trading days)
                 }
                 days_per_bar = horizon_to_days.get(horizon, 1.0)
                 # A "unit" is bars_per_unit bars, so 1 unit = bars_per_unit * days_per_bar days
@@ -1061,8 +1054,7 @@ def calculate_pattern_timeline(
         unit_name = {
             "intraday": "days",    # ✅ Correction: 26 bars = 1 day in Indian market context (Issue 5)
             "short_term": "days",
-            "long_term": "weeks",
-            "multibagger": "months"
+            "long_term": "weeks"
         }.get(horizon, "days")
         
         # ===================================================================

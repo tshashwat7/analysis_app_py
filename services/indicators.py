@@ -1324,10 +1324,10 @@ INDICATOR_METRIC_MAP = {
 
 def compute_indicators(
     symbol: str,
+    horizon: str = "short_term",
+    benchmark_symbol: str = "^NSEI",
     df_hash: str = None, 
     benchmark_hash: str = None,
-    horizon: str = "short_term",
-    benchmark_symbol: str = "^NSEI"
 ) -> Dict[str, Dict[str, Any]]:
 
     profile = HORIZON_PROFILE_MAP.get(horizon, {})

@@ -133,18 +133,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 }
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": None},
-                        "volatilityQuality": {"min": None},
-                        "rvol": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Darvas box breakout with volume confirmation"
     },
@@ -208,20 +196,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     }
                 }
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.5}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": 3.5},
-                        "volatilityQuality": {"min": None}
-                    }
-                }
-            }
         },
         "description": "Minervini-style volatility contraction pattern"
     },
@@ -311,21 +285,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": 2.5},
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Cup and handle breakout pattern"
     },
@@ -418,18 +377,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": None},
-                        "volatilityQuality": {"min": None},
-                        "rvol": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Flag/pennant continuation breakout"
     },
@@ -519,21 +466,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "volatilityQuality": {"min": None},
-                        "rvol": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Three-line strike reversal pattern"
     },
@@ -627,21 +559,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 8.0}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": 2.0},
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Long-term moving average golden cross"
     },
@@ -713,17 +630,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": None},  # ⬇️ Don't care about momentum
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "validation_modifiers": {
             "penalties": {
@@ -838,17 +744,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": None},
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Bearish breakdown for short/avoid"
     },
@@ -949,21 +844,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": 3.0},   # Very relaxed
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Dip-buying in established uptrend"
     },
@@ -1056,17 +936,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": 2.5},
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Deeper retracement in strong trend"
     },
@@ -1130,20 +999,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    },
-                    "technical": {
-                        "adx": {"min": 15},
-                        "trendStrength": {"min": 4.0}
-                    }
-                },
-
-            }
         },
         "validation_modifiers": {
             "penalties": {
@@ -1251,16 +1106,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "adx": {"min": None},            # Not applicable
-                        "trendStrength": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Short/sell setup following an established downtrend"
     },
@@ -1344,16 +1189,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "dividendyield": {"min": 1.0},
-                        "fundamentalScore": {"min": 8.0}
-                    }
-                },
-
-            }
         },       
         "validation_modifiers": {
             "penalties": {
@@ -1459,16 +1294,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "dividendyield": {"min": 1.5},
-                        "fundamentalScore": {"min": 8.0}
-                    }
-                },
-
-            }
         },
         "validation_modifiers": {
             "penalties": {
@@ -1581,16 +1406,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 8.0}
-                    }
-                },
-
-            }
         },
         "validation_modifiers": {
             "penalties": {
@@ -1676,16 +1491,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "adx": {"min": None},
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "validation_modifiers": {
             "penalties": {
@@ -1804,20 +1609,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Early reversal via MACD momentum shift"
     },
@@ -1910,20 +1701,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "RSI oversold bounce reversal"
     },
@@ -1989,20 +1766,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "fundamentalScore": {"min": 7.0}
-                    },
-                    "technical": {
-                        "adx": {"min": None},
-                        "trendStrength": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Supertrend reversal confirmation"
     },
@@ -2098,19 +1861,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "fundamental": {
-                        "required": True,
-                        "roe": {"min": 22},      # Higher bar for multibagger
-                        "roce": {"min": 28},
-                        "deRatio": {"max": 0.4},
-                        "fundamentalScore": {"min": 8.0}
-                    }
-                },
-
-            }
         },
         "description": "Accumulation during downtrend/sideways in quality stocks"
     },
@@ -2173,15 +1923,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Range-bound exit at resistance"
     },
@@ -2244,15 +1985,6 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 },
 
             },
-            
-            "multibagger": {
-                "context_requirements": {
-                    "technical": {
-                        "volatilityQuality": {"min": None}
-                    }
-                },
-
-            }
         },
         "description": "Partial profit in range-bound consolidation"
     },
@@ -2613,6 +2345,223 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "long_term": "EXIT_ON_CLOSE"
             }
         }
+    }
+}
+
+
+# ============================================================
+# PATTERN METADATA (Complete Pattern Properties)
+# ============================================================
+
+PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
+    "bollingerSqueeze": {
+        "type": "continuation",
+        "timeframe_agnostic": True,
+        "direction": "neutral",
+        "typical_duration": {"min": 5, "max": 20},
+        "failure_rate": 0.25,
+        "best_horizons": ["intraday", "short_term"],
+        "physics": {
+            "target_ratio": 1.0,
+            "duration_multiplier": 0.5,
+            "max_stop_pct": 4.0,
+            "horizons_supported": ["intraday", "short_term"]
+        },
+        "entry_rules": {
+            "intraday": {
+                "order_type": "stop_market",
+                "trigger": "upper_band",
+                "gates": {
+                    "rsi": {"min": 50.0},
+                    "macdhistogram": {"min": 0.0},
+                    "rvol": {"min": 1.5},
+                    "squeeze_duration": {"min": 5.0}
+                }
+            },
+            "short_term": {
+                "order_type": "limit",
+                "trigger": "close_above_band",
+                "gates": {
+                    "rsi": {"min": 50.0},
+                    "macdhistogram": {"min": 0.0},
+                    "rvol": {"min": 1.2},
+                    "squeeze_duration": {"min": 3.0}
+                }
+            },
+            "long_term": {
+                "order_type": "limit",
+                "trigger": "close_above_band",
+                "gates": {
+                    "rsi": {"min": 45.0},
+                    "macdhistogram": {"min": -0.2},
+                    "rvol": {"min": 1.0},
+                    "squeeze_duration": {"min": 4.0}
+                }
+            }
+        },
+        "invalidation": {
+            "breakdown_threshold": {
+                "metadata_keys": {
+                    "analytics": ["squeeze_duration", "squeeze_strength"]
+                },
+                "intraday": {
+                    "gates": {
+                        "price": {"max_metric": "bbLow", "duration": 2},
+                        "bbWidth": {"min": 10.0}
+                    },
+                    "_logic": "OR",
+                },
+                "short_term": {
+                    "gates": {
+                        "price": {"max_metric": "bbLow", "multiplier": 0.99},
+                        "bbWidth": {"min": 12.0}
+                    },
+                    "_logic": "OR",
+                },
+                "long_term": {
+                    "gates": {
+                        "price": {"max_metric": "bbLow", "duration": 2},
+                        "bbWidth": {"min": 15.0}
+                    },
+                    "_logic": "OR",
+                }
+            },
+            "action": {
+                "intraday": "EXIT_IMMEDIATELY",
+                "short_term": "EXIT_ON_CLOSE",
+                "long_term": "TIGHTEN_STOP"
+            }
+        }
+    },
+
+    "cupHandle": {
+        "type": "continuation",
+        "timeframe_agnostic": False,
+        "direction": "bullish",
+        "typical_duration": {"min": 20, "max": 60},
+        "failure_rate": 0.20,
+        "best_horizons": ["short_term", "long_term"],
+        "physics": {
+            "target_ratio": 0.618,
+            "duration_multiplier": 1.2,
+            "max_stop_pct": 8.0,
+            "min_cup_len": 20,
+            "max_cup_depth": 0.50,
+            "handle_len": 5,
+            "require_volume": False,
+            "horizons_supported": ["short_term", "long_term"]
+        },
+        "entry_rules": {
+            "short_term": {
+                "order_type": "stop_market",
+                "trigger": "rim_level",
+                "gates": {
+                    "price": {"min_metric": "rim_level", "multiplier": 0.995},
+                    "rvol": {"min": 1.2}
+                }
+            },
+            "long_term": {
+                "order_type": "limit",
+                "trigger": "rim_level",
+                "gates": {
+                    "price": {"min_metric": "rim_level", "multiplier": 0.99},
+                    "rvol": {"min": 1.1}
+                }
+            }
+        },
+        "invalidation": {
+            "metadata_keys": {
+                "analytics": ["cup_depth_pct", "handle_depth_pct"]
+            },
+            "breakdown_threshold": {
+                "short_term": {
+                    "gates": {
+                        "price": {"max_metric": "handle_low", "multiplier": 0.97, "duration": 2},
+                        "rvol": {"max": 0.8}
+                    },
+                    "_logic": "OR",
+                },
+                "long_term": {
+                    "gates": {
+                        "price": {"max_metric": "handle_low", "multiplier": 0.95, "duration": 3},
+                        "rvol": {"max": 0.7}
+                    },
+                    "_logic": "OR",
+                }
+            },
+            "action": {
+                "short_term": "EXIT_ON_CLOSE",
+                "long_term": "TIGHTEN_STOP"
+            },
+            "handle_failure": {
+                "max_handle_depth": 0.15,
+                "action": "INVALIDATE_PATTERN"
+            }
+        }
+    },
+
+    "darvasBox": {
+        "type": "breakout",
+        "timeframe_agnostic": True,
+        "direction": "bullish",
+        "typical_duration": {"min": 8, "max": 30},
+        "failure_rate": 0.30,
+        "best_horizons": ["intraday", "short_term"],
+        "physics": {
+            "target_ratio": 2.0,
+            "duration_multiplier": 1.3,
+            "max_stop_pct": 5.0,
+            "lookback": 50,
+            "box_length": 5,
+            "horizons_supported": ["intraday", "short_term"]
+        },
+        "entry_rules": {
+            "intraday": {
+                "order_type": "stop_market",
+                "trigger": "box_high",
+                "gates": {
+                    "price": {"min_metric": "box_high", "multiplier": 1.002},
+                    "rvol": {"min": 1.5},
+                    "box_age_candles": {"max": 50.0}
+                }
+            },
+            "short_term": {
+                "order_type": "stop_market",
+                "trigger": "box_high",
+                "gates": {
+                    "price": {"min_metric": "box_high", "multiplier": 1.005},
+                    "rvol": {"min": 1.3},
+                    "box_age_candles": {"max": 30.0}
+                }
+            }
+        },
+        "invalidation": {
+            "metadata_keys": {
+                "analytics": ["box_height_pct", "box_age_candles"] 
+            },
+            "breakdown_threshold": {
+                "intraday": {
+                    "gates": {
+                        "price": {"max_metric": "box_low", "multiplier": 0.998}
+                    }
+                },
+                "short_term": {
+                    "gates": {
+                        "price": {"max_metric": "box_low", "multiplier": 0.995}
+                    }
+                },
+                "long_term": {
+                    "gates": {
+                        "price": {"max_metric": "box_low", "multiplier": 0.99, "duration": 2}
+                    }
+                }
+            },
+            "action": {
+                "intraday": "EXIT_IMMEDIATELY",
+                "short_term": "EXIT_IMMEDIATELY",
+                "long_term": "EXIT_ON_CLOSE"
+            }
+        }
     },
 
     "minerviniStage2": {
@@ -2621,27 +2570,23 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         "direction": "bullish",
         "typical_duration": {"min": 10, "max": 40},
         "failure_rate": 0.15,
-        "best_horizons": ["short_term", "long_term", "multibagger"],
+        "best_horizons": ["short_term", "long_term"],
         "physics": {
             "target_ratio": 1.0,
             "duration_multiplier": 1.8,
             "max_stop_pct": 7.0,
             "min_contraction_pct": 1.5,
-            "horizons_supported": ["short_term", "long_term", "multibagger"]
+            "horizons_supported": ["short_term", "long_term"]
         },
         "entry_rules": {
             "short_term": {
-                "order_type": "limit",       # Minervini buys on specific pivots
+                "order_type": "limit",
                 "trigger": "pivot_point",
                 "gates": {
                     "volatilityQuality": {"max": 1.5},
                     "price": {"min_metric": "pivot_point", "multiplier": 1.01},
                     "position52w": {"min": 80.0}
                 }
-
-
-
-
             },
             "long_term": {
                 "order_type": "limit",
@@ -2651,23 +2596,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "price": {"min_metric": "pivot_point", "multiplier": 1.005},
                     "position52w": {"min": 70.0}
                 }
-
-
-
-
-            },
-            "multibagger": {
-                "order_type": "limit",
-                "trigger": "pivot_point",
-                "gates": {
-                    "volatilityQuality": {"max": 2.5},
-                    "price": {"min_metric": "pivot_point", "multiplier": 1.005},
-                    "position52w": {"min": 65.0}
-                }
-
-
-
-
             }
         },
         "invalidation": {
@@ -2675,58 +2603,23 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "analytics": ["contraction_pct", "volatility_quality"]
             },
             "breakdown_threshold": {
-                # ❌ REMOVED intraday (accumulation pattern, not for day trading)
                 "short_term": {
                     "gates": {
-                        "price": {"max_metric": "maFast", "multiplier": 0.95, "duration": 2},  # ✅ Use 10-day MA instead of pivot
-                        "volatilityQuality": {"max": 4.0}  # ✅ VCP breaking down
+                        "price": {"max_metric": "maFast", "multiplier": 0.95, "duration": 2},
+                        "volatilityQuality": {"max": 4.0}
                     },
-
-
-
-
-                    "_logic": "OR",
-
-                },
-                "long_term": {
-                    "gates": {
-                        "price": {"max_metric": "maFast", "multiplier": 0.92, "duration": 3},
-                        "position52w": {"max": 70.0}  # ✅ Fell from highs
-                    },
-
-
-
-
-                    "_logic": "OR",
-
-                },
-                "multibagger": {
-                    "gates": {
-                        "price": {"max_metric": "maFast", "multiplier": 0.90, "duration": 3},
-                        "position52w": {"max": 65.0}
-                    },
-
-
-
-
-                    "_logic": "OR",
-
+                    "_logic": "OR"
                 }
             },
             "action": {
                 "short_term": "EXIT_ON_CLOSE",
-                "long_term": "TIGHTEN_STOP",
-                "multibagger": "TIGHTEN_STOP"
+                "long_term": "TIGHTEN_STOP"
             },
             "stage_reversion": {
                 "gates": {
                     "price": {"max_metric": "maFast", "duration": 5},
-                    "rvol": {"max": 0.8, "duration": 5}  # ✅ Volume declining
+                    "rvol": {"max": 0.8, "duration": 5}
                 },
-
-
-
-
                 "_logic": "AND",
                 "action": "EXIT_ON_CLOSE"
             }
@@ -2751,31 +2644,19 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "order_type": "stop_market",
                 "trigger": "flag_high",
                 "gates": {
-                    "pole_length": {"min": 8.0},  # ✅ RESTORED - validates pole strength
-                    "flag_tightness": {"max": 0.03},  # ✅ RESTORED - ensures tight consolidation
-                    "price": {"min_metric": "flag_high", "multiplier": 1.005},  # ✅ Breakout clearance
-                    "trendStrength": {"min": 5.5}
+                    "pole_length": {"min": 8.0},
+                    "flag_tightness": {"max": 0.03},
+                    "price": {"min_metric": "flag_high", "multiplier": 1.005}
                 }
-
-
-
-
-
             },
             "short_term": {
                 "order_type": "stop_market",
                 "trigger": "flag_high",
                 "gates": {
-                    "pole_length": {"min": 5.0},  # ✅ RESTORED - lower for short_term
-                    "flag_tightness": {"max": 0.05},  # ✅ RESTORED - slightly looser
-                    "price": {"min_metric": "flag_high", "multiplier": 1.01},
-                    "trendStrength": {"min": 5.0}
+                    "pole_length": {"min": 5.0},
+                    "flag_tightness": {"max": 0.05},
+                    "price": {"min_metric": "flag_high", "multiplier": 1.01}
                 }
-
-
-
-
-
             }
         },
         "invalidation": {
@@ -2786,38 +2667,23 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "intraday": {
                     "gates": {
                         "price": {"max_metric": "flag_low", "multiplier": 0.998},
-                        "trendStrength": {"max": 4.0}  # ✅ Trend weakening
+                        "trendStrength": {"max": 4.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "short_term": {
                     "gates": {
                         "price": {"max_metric": "flag_low", "multiplier": 0.995},
                         "adx": {"max": 15.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "long_term": {
                     "gates": {
                         "price": {"max_metric": "flag_low", "multiplier": 0.99},
                         "adx": {"max": 12.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 }
             },
             "action": {
@@ -2826,11 +2692,11 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "long_term": "EXIT_ON_CLOSE"
             },
             "expiration": {
-                "enabled": True,  # ✅ FIX: check_pattern_expiration() gates on this key
+                "enabled": True,
                 "max_duration_candles": {
                     "intraday": 20,
-                    "short_term": 15,  # ⬆️ Relaxed from 10
-                    "long_term": 12  # ⬆️ Relaxed from 8
+                    "short_term": 15,
+                    "long_term": 12
                 },
                 "action_on_expire": "DOWNGRADE_TO_CONSOLIDATION"
             }
@@ -2850,15 +2716,12 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "entry_rules": {
             "intraday": {
-                "order_type": "market",      # Reversals often require instant entry
+                "order_type": "market",
                 "trigger": "candle_close",
                 "gates": {
                     "strike_candle_body": {"min": 0.6},
                     "rvol": {"min": 1.3}
                 }
-
-
-
             },
             "short_term": {
                 "order_type": "limit",
@@ -2867,48 +2730,30 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "strike_candle_body": {"min": 0.7},
                     "rvol": {"min": 1.2}
                 }
-
-
-
             }
         },
         "invalidation": {
             "breakdown_threshold": {
                 "intraday": {
                     "gates": {
-                        "price": {"max_metric": "strike_low", "multiplier": 0.995, "duration": 2},  # ✅ Use strike candle low
-                        "rsi": {"max": 45.0}  # ✅ Reversal failing
+                        "price": {"max_metric": "strike_low", "multiplier": 0.995, "duration": 2},
+                        "rsi": {"max": 45.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "short_term": {
                     "gates": {
                         "price": {"max_metric": "strike_low", "multiplier": 0.99, "duration": 3},
                         "rsi": {"max": 40.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "long_term": {
                     "gates": {
                         "price": {"max_metric": "strike_low", "multiplier": 0.98, "duration": 3},
                         "macdhistogram": {"max": 0.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 }
             },
             "action": {
@@ -2917,11 +2762,11 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "long_term": "TIGHTEN_STOP"
             },
             "expiration": {
-                "enabled": True,  # ✅ FIX: required by check_pattern_expiration()
-                "max_duration_candles": {  # ✅ FIX: was "max_hold_candles" — key mismatch with enhancer
-                    "intraday": 15,  # ⬆️ Relaxed from 10
-                    "short_term": 12,  # ⬆️ Relaxed from 8
-                    "long_term": 10  # ⬆️ Relaxed from 6
+                "enabled": True,
+                "max_duration_candles": {
+                    "intraday": 15,
+                    "short_term": 12,
+                    "long_term": 10
                 },
                 "action": "EXIT_ON_CLOSE"
             }
@@ -2934,10 +2779,10 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         "direction": "variable",
         "typical_duration": {"min": 5, "max": 100},
         "failure_rate": 0.30,
-        "best_horizons": ["short_term", "long_term", "multibagger"],
+        "best_horizons": ["short_term", "long_term"],
         "physics": {
             **DEFAULT_PHYSICS,
-            "horizons_supported": ["short_term", "long_term", "multibagger"]
+            "horizons_supported": ["short_term", "long_term"]
         },
         "entry_rules": {
             "short_term": {
@@ -2948,10 +2793,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "tenkan_kijun_spread": {"min": 0.005},
                     "price": {"min_metric": "ichiSpanA"}
                 }
-
-
-
-
             },
             "long_term": {
                 "order_type": "limit",
@@ -2961,48 +2802,30 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "tenkan_kijun_spread": {"min": 0.01},
                     "price": {"min_metric": "ichiSpanA"}
                 }
-
-
-
-
             }
         },
         "invalidation": {
             "breakdown_threshold": {
                 "intraday": {
                     "gates": {
-                        "price": {"max_metric": "ichiSpanA", "multiplier": 0.998, "duration": 2},  # ✅ Cloud bottom (Senkou A)
-                        "ichiTenkan": {"max_metric": "ichiKijun"}  # ✅ Fast line crosses below
+                        "price": {"max_metric": "ichiSpanA", "multiplier": 0.998, "duration": 2},
+                        "ichiTenkan": {"max_metric": "ichiKijun"}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "short_term": {
                     "gates": {
                         "price": {"max_metric": "ichiSpanA", "multiplier": 0.995, "duration": 2},
-                        "chikouSpan": {"max_metric": "price"}  # ✅ Lagging span below price
+                        "chikouSpan": {"max_metric": "price"}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "long_term": {
                     "gates": {
                         "price": {"max_metric": "ichiSpanA", "duration": 3},
                         "ichiTenkan": {"max_metric": "ichiKijun", "duration": 3}
                     },
-
-
-
-
-                    "_logic": "AND"  # ✅ Both must occur for long-term
+                    "_logic": "AND"
                 }
             },
             "action": {
@@ -3024,14 +2847,12 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         "direction": "bullish",
         "typical_duration": {"min": 30, "max": 200},
         "failure_rate": 0.20,
-        "best_horizons": ["short_term", "long_term", "multibagger"],
+        "best_horizons": ["short_term", "long_term"],
         "physics": {
-            # FIX: was None - dict.get(key, default) returns None when key exists with None value.
-            # Use 0 (falsy sentinel) so callers guard with: target_ratio or 1.0
             "target_ratio": 0,
             "duration_multiplier": 2.0,
             "max_stop_pct": None,
-            "horizons_supported": ["short_term", "long_term", "multibagger"]
+            "horizons_supported": ["short_term", "long_term"]
         },
         "entry_rules": {
             "short_term": {
@@ -3041,9 +2862,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "maMid": {"min_metric": "maSlow", "multiplier": 1.002},
                     "rvol": {"min": 1.1}
                 }
-
-
-
             },
             "long_term": {
                 "order_type": "limit", 
@@ -3052,48 +2870,23 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "maMid": {"min_metric": "maSlow", "multiplier": 1.005},
                     "rvol": {"min": 1.0}
                 }
-
-
-
-            },
-            "multibagger": {
-                "order_type": "limit", 
-                "trigger": "ma_cross",
-                "gates": {
-                    "maMid": {"min_metric": "maSlow", "multiplier": 1.01},
-                    "rvol": {"min": 0.8}
-                }
-
-
-
             }
         },
         "invalidation": {
             "breakdown_threshold": {
-                # "intraday (long-term signal, not for day trading)
                 "short_term": {
                     "gates": {
                         "maMid": {"max_metric": "maSlow", "duration": 5},
-                        "price": {"max_metric": "maMid", "multiplier": 0.95}  # ✅ Significant breakdown
+                        "price": {"max_metric": "maMid", "multiplier": 0.95}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "long_term": {
                     "gates": {
                         "maMid": {"max_metric": "maSlow", "duration": 10},
-                        "adx": {"max": 15.0}  # ✅ Trend dying
+                        "adx": {"max": 15.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 }
             },
             "action": {
@@ -3109,13 +2902,12 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         "direction": "bearish",
         "typical_duration": {"min": 30, "max": 200},
         "failure_rate": 0.20,
-        "best_horizons": ["long_term", "multibagger"],
+        "best_horizons": ["long_term"],
         "physics": {
-            # FIX: was None - same issue as goldenCross. Use 0 as falsy sentinel.
             "target_ratio": 0,
             "duration_multiplier": 2.0,
             "max_stop_pct": None,
-            "horizons_supported": ["short_term", "long_term", "multibagger"]
+            "horizons_supported": ["short_term", "long_term"]
         },
         "entry_rules": {
             "short_term": {
@@ -3125,9 +2917,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "maMid": {"max_metric": "maSlow", "multiplier": 0.998},
                     "rvol": {"min": 1.1}
                 }
-
-
-
             },
             "long_term": {
                 "order_type": "limit", 
@@ -3136,37 +2925,23 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "maMid": {"max_metric": "maSlow", "multiplier": 0.995},
                     "rvol": {"min": 1.0}
                 }
-
-
-
             }
         },
         "invalidation": {
             "breakdown_threshold": {
-                # ❌ REMOVED intraday
                 "short_term": {
                     "gates": {
                         "maMid": {"min_metric": "maSlow", "duration": 5},
                         "rsi": {"min": 60.0}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "long_term": {
                     "gates": {
                         "maMid": {"min_metric": "maSlow", "duration": 10},
                         "price": {"min_metric": "maMid", "multiplier": 1.05}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 }
             },
             "action": {
@@ -3237,19 +3012,11 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "intraday": "EXIT_IMMEDIATELY",
                 "short_term": "EXIT_ON_CLOSE",
                 "long_term": "TIGHTEN_STOP"
-            },
-            "target_failure": {
-                "condition": "price fails to reach target within max_duration",
-                "max_duration_candles": {
-                    "intraday": 20,
-                    "short_term": 15,
-                    "long_term": 20
-                },
-                "action": "MONITOR"
             }
         }
     },
-"bullishNecklinePattern": {
+
+    "bullishNecklinePattern": {
         "type": "reversal",
         "timeframe_agnostic": False,
         "direction": "bullish",
@@ -3310,15 +3077,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "intraday": "EXIT_IMMEDIATELY",
                 "short_term": "EXIT_ON_CLOSE",
                 "long_term": "TIGHTEN_STOP"
-            },
-            "target_failure": {
-                "condition": "price fails to reach target within max_duration",
-                "max_duration_candles": {
-                    "intraday": 20,
-                    "short_term": 15,
-                    "long_term": 20
-                },
-                "action": "MONITOR"
             }
         }
     }
@@ -3333,62 +3091,52 @@ PATTERN_INDICATOR_MAPPINGS = {
     "bollingerSqueeze": {
         "intraday": "bollingerSqueezeIntraday",
         "short_term": "bollingerSqueezeShortTerm",
-        "long_term": "bollingerSqueezeLongTerm",
-        "multibagger": "bollingerSqueezeMultibagger"
+        "long_term": "bollingerSqueezeLongTerm"
     },
     "minerviniStage2": {
         "intraday": "minerviniStage2Intraday",
         "short_term": "minerviniStage2ShortTerm",
-        "long_term": "minerviniStage2LongTerm",
-        "multibagger": "minerviniStage2Multibagger"
+        "long_term": "minerviniStage2LongTerm"
     },
     "ichimokuSignals": {
         "intraday": "ichimokuSignalsIntraday",
         "short_term": "ichimokuSignalsShortTerm",
-        "long_term": "ichimokuSignalsLongTerm",
-        "multibagger": "ichimokuSignalsMultibagger"
+        "long_term": "ichimokuSignalsLongTerm"
     },
     "goldenCross": {
         "intraday": "goldenCrossIntraday",
         "short_term": "goldenCrossShortTerm",
-        "long_term": "goldenCrossLongTerm",
-        "multibagger": "goldenCrossMultibagger"
+        "long_term": "goldenCrossLongTerm"
     },
     "bullishNecklinePattern": {
         "intraday": "bullishNecklineIntraday",
         "short_term": "bullishNecklineShortTerm",
-        "long_term": "bullishNecklineLongTerm",
-        "multibagger": "bullishNecklineMultibagger"
+        "long_term": "bullishNecklineLongTerm"
     },
     "bearishNecklinePattern": {
         "intraday": "bearishNecklineIntraday",
         "short_term": "bearishNecklineShortTerm",
-        "long_term": "bearishNecklineLongTerm",
-        "multibagger": "bearishNecklineMultibagger"
+        "long_term": "bearishNecklineLongTerm"
     },
     "cupHandle": {
         "intraday": "cupHandleIntraday",
         "short_term": "cupHandleShortTerm",
-        "long_term": "cupHandleLongTerm",
-        "multibagger": "cupHandleMultibagger"
+        "long_term": "cupHandleLongTerm"
     },
     "flagPennant": {
         "intraday": "flagPennantIntraday",
         "short_term": "flagPennantShortTerm",
-        "long_term": "flagPennantLongTerm",
-        "multibagger": "flagPennantMultibagger"
+        "long_term": "flagPennantLongTerm"
     },
     "darvasBox": {
         "intraday": "darvasBoxIntraday",
         "short_term": "darvasBoxShortTerm",
-        "long_term": "darvasBoxLongTerm",
-        "multibagger": "darvasBoxMultibagger"
+        "long_term": "darvasBoxLongTerm"
     },
     "threeLineStrike": {
         "intraday": "threeLineStrikeIntraday",
         "short_term": "threeLineStrikeShortTerm",
-        "long_term": "threeLineStrikeLongTerm",
-        "multibagger": "threeLineStrikeMultibagger"
+        "long_term": "threeLineStrikeLongTerm"
     }
 }
 

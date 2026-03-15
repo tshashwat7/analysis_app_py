@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, List, Union
 from sqlalchemy.orm import Session
 from config.fundamental_score_config import compute_fundamental_score
 from services.db import SessionLocal, FundamentalCache
+from config.config_utility.market_utils import get_current_utc, ensure_utc
 import json
 import datetime
 from services.data_fetch import (
@@ -1092,40 +1093,47 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
     """
     DB-Cached wrapper. Uses SQLite (trade.db) instead of JSON files.
     TTL: 24 Hours.
+
+    Cache is shared between the main multi-horizon pipeline and the MB module —
+    both call this function directly, so a stock fetched by the main flow at 9am
+    will already be cached when the MB weekly cycle runs that night.
+
+    Uses get_current_utc() and ensure_utc() from market_utils so all timestamp
+    comparisons are timezone-aware and consistent with FundamentalCache.updated_at,
+    which is stored as UTC-aware datetime via the db.py utc_now() default.
     """
     symbol = symbol.strip().upper()
+    now_utc = get_current_utc()
     db: Session = SessionLocal()
     try:
-        # 1. READ CACHE FROM DB
+        # 1. READ CACHE
         entry = db.query(FundamentalCache).filter(FundamentalCache.symbol == symbol).first()
         if entry:
-            age = (datetime.datetime.now() - entry.updated_at).total_seconds()
+            age = (now_utc - ensure_utc(entry.updated_at)).total_seconds()
             if age < (24 * 3600):
-                # Valid Cache Hit
-                # SQLAlchemy automatically converts the JSON column back to a Dict
+                logger.debug(f"[{symbol}] Fundamental cache HIT (age {age/3600:.1f}h)")
                 return entry.data
 
-        # 2. FETCH FRESH (If cache missing or stale)
+        # 2. FETCH FRESH (cache missing or stale)
+        logger.debug(f"[{symbol}] Fundamental cache MISS — fetching from yfinance")
         data = _compute_fundamentals_core(symbol, apply_market_penalty)
         if data and len(data) > 5:
             if entry:
-                # Update existing
                 entry.data = data
-                entry.updated_at = datetime.datetime.now()
+                entry.updated_at = now_utc
             else:
-                # Insert new
                 entry = FundamentalCache(
                     symbol=symbol,
                     data=data,
-                    updated_at=datetime.datetime.now()
+                    updated_at=now_utc,
                 )
                 db.add(entry)
             db.commit()
+            logger.debug(f"[{symbol}] Fundamental cache written")
         return data
     except Exception as e:
-        logger.error(f"DB Cache Error for {symbol}: {e}")
+        logger.error(f"[{symbol}] Fundamental cache error: {e}")
         db.rollback()
-        # Fallback: Just calculate and return without saving if DB fails
         return _compute_fundamentals_core(symbol, apply_market_penalty)
     finally:
         db.close()

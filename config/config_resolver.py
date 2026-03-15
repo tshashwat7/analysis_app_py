@@ -85,7 +85,7 @@ class ConfigResolver:
 
         Args:
             master_config: Complete MASTER_CONFIG dictionary
-            horizon: Target horizon (intraday, short_term, long_term, multibagger)
+            horizon: Target horizon (intraday, short_term, long_term)
         """
         import logging
         from config.query_optimized_extractor import QueryOptimizedExtractor
@@ -694,16 +694,6 @@ class ConfigResolver:
     
 
     
-    def _check_ma_alignment(self, price: Dict, ind: Dict) -> bool:
-        """Check if MAs are in bullish alignment."""
-        p = price.get("price", 0)
-        fast = _get_val(ind, "maFast")
-        mid = _get_val(ind, "maMid")
-        slow = _get_val(ind, "maSlow")
-        
-        if all([p, fast, mid, slow]):
-            return p > fast > mid > slow
-        return False
     
     def _classify_setup(self, ctx: Dict) -> Dict[str, Any]:
         """
@@ -1383,20 +1373,6 @@ class ConfigResolver:
                 "error": str(e)
             }
 
-    def _get_enabled_strategies_via_extractor(self) -> List[str]:
-        """✅ Get enabled strategies using extractor."""
-        # ✅ REFACTORED: Use query extractor methods
-        all_strategies = self.extractor.get_all_strategy_names()
-        
-        enabled = []
-        for strategy_name in all_strategies:
-            # Check if globally enabled
-            if self.extractor.get_strategy_enabled_status(strategy_name):
-                # Check if not blocked by horizon
-                if not self.extractor.is_strategy_blocked_for_horizon(strategy_name):
-                    enabled.append(strategy_name)
-        
-        return enabled
     
     def _calculate_strategy_fit_via_extractor(
         self,
@@ -1652,60 +1628,6 @@ class ConfigResolver:
 
         return final_score
     
-    def _validate_strategy_market_cap_via_extractor(
-        self,
-        strategy_name: str,
-        fundamentals: Dict,
-        price_data: Dict
-    ) -> Tuple[bool, str]:
-        """✅ Validate market cap requirements via extractor."""
-        # Get market cap requirements via extractor
-        market_cap_reqs = self.extractor.get_strategy_market_cap_requirements(strategy_name)
-        
-        if not market_cap_reqs:
-            return True, "No market cap requirements"
-        
-        stock_market_cap = _get_val(fundamentals, "marketCap")
-        
-        # Determine bracket
-        bracket = None
-        for bracket_name, bracket_config in market_cap_reqs.items():
-            min_cap = bracket_config.get("min_market_cap", 0)
-            max_cap = bracket_config.get("max_market_cap", float('inf'))
-            
-            if min_cap <= stock_market_cap < max_cap:
-                bracket = bracket_name
-                break
-        
-        bracket_reqs = market_cap_reqs.get(bracket, {})
-        if not bracket_reqs:
-            return True, f"No requirements for {bracket}"
-        
-        # Check institutional ownership
-        min_inst_ownership = bracket_reqs.get("min_institutional_ownership_pct")
-        if min_inst_ownership is not None:
-            actual_inst = price_data.get("institutional_ownership") or \
-                        price_data.get("institutionalOwnership", 0)
-            
-            if actual_inst < min_inst_ownership:
-                return False, (
-                    f"{bracket.replace('_', ' ').title()}: "
-                    f"Institutional ownership {actual_inst:.1f}% < required {min_inst_ownership}%"
-                )
-        
-        # Check delivery percentage
-        min_delivery = bracket_reqs.get("min_delivery_pct")
-        if min_delivery is not None:
-            actual_delivery = price_data.get("delivery_pct") or \
-                            price_data.get("deliveryPct", 0)
-            
-            if actual_delivery < min_delivery:
-                return False, (
-                    f"{bracket.replace('_', ' ').title()}: "
-                    f"Delivery {actual_delivery:.1f}% < required {min_delivery}%"
-                )
-        
-        return True, f"Passes {bracket} requirements"
     
     def _fallback_strategy_classification(self) -> Dict[str, Any]:
         """Fallback when no strategy qualifies."""
@@ -2844,24 +2766,6 @@ class ConfigResolver:
             "execution_risk_score": execution.get("summary", {}).get("execution_risk_score"),
         }
 
-    def _build_opportunity_context(self, ctx: Dict) -> Dict[str, Any]:
-        """
-        Build a flat, decision-ready context for opportunity gates.
-
-        ✅ No calculations
-        ✅ No config logic
-        ✅ No thresholds
-        """
-
-        return {
-            "metrics": ctx.get("opportunity_metrics", {}),
-            "gates": ctx.get("opportunity_gates", {}),
-            "passed": ctx["opportunity_gates"]["overall"]["passed"],
-            "failed_gates": ctx["opportunity_gates"]["overall"]["failed_gates"],
-            "confidence": ctx["confidence"]["clamped"],
-            "setup": ctx["setup"]["type"],
-            "strategy": ctx["strategy"]["primary"],
-        }
 
     def _resolve_opportunity_gate_value(
         self,
@@ -3781,7 +3685,7 @@ class ConfigResolver:
             # SL logic:
             #   - short_term: slAtrDynamic (tight, horizon-matched)
             #   - long_term:  below Tenkan (structural fast line)
-            #   - multibagger: below Kijun (structural baseline)
+            #   - baseline:  below Kijun (structural baseline)
             # Target logic: Tenkan-to-entry distance as measured move (structural depth)
             #   price has already travelled from Kijun to Tenkan to current price.
             #   The projected continuation = (entry - Tenkan) added to entry.
@@ -3792,13 +3696,7 @@ class ConfigResolver:
                 span_a = _safe_float(ind.get("ichiSpanA")  or price_data.get("ichiSpanA"))
 
                 # SL by horizon — progressively wider as horizon lengthens
-                if horizon == "multibagger":
-                    if kijun and kijun < entry:
-                        sl = round(kijun * 0.99, 2)
-                        sl_src = "kijun"
-                    else:
-                        sl, sl_src = _sl_from_atr(2.5)
-                elif horizon == "long_term":
+                if horizon == "long_term":
                     if tenkan and tenkan < entry:
                         sl = round(tenkan * 0.995, 2)
                         sl_src = "tenkan"
@@ -4110,23 +4008,6 @@ class ConfigResolver:
     # PUBLIC API METHODS (for external callers)
     # ========================================================================
 
-    def get_setup_priority(self, setup_name: str) -> float:
-        """
-        Get resolved priority for setup (public API).
-        
-        Delegates to extractor which handles hierarchy:
-        Horizon override > Setup default > Fallback to 0
-        """
-        return self.extractor.get_setup_priority(setup_name)
-
-    def get_setup_confidence_floor(self, setup_name: str) -> float:
-        """
-        Get confidence floor for setup (public API).
-        
-        Delegates to extractor which handles hierarchy:
-        Horizon override > Global baseline > Default (40)
-        """
-        return self.extractor.get_setup_confidence_floor(setup_name)
 
 
 def create_resolver(master_config: Dict, horizon: str) -> ConfigResolver:

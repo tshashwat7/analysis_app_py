@@ -220,7 +220,7 @@ class ConfigValidator:
                     message="Horizons must be a dictionary"
                 ))
             else:
-                expected = {"intraday", "short_term", "long_term", "multibagger"}
+                expected = {"intraday", "short_term", "long_term"}
                 actual = set(horizons.keys())
                 missing = expected - actual
                 if missing:

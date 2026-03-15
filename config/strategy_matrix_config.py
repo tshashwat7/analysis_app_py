@@ -70,8 +70,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.7,        # Not ideal for swing
             "short_term": 1.2,      # Best fit
-            "long_term": 1.1,       # Good fit
-            "multibagger": 0.5      # Poor fit
+            "long_term": 1.1        # Good fit
         },
         
         # Max positive bonus points (sum of all positive scoring_rules points)
@@ -127,8 +126,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 1.3,        # Perfect fit
             "short_term": 0.8,
-            "long_term": 0.4,
-            "multibagger": 0.0      # Incompatible
+            "long_term": 0.4
         },
         
         "scoring_rules_max_bonus": 80,  # 25+15+40
@@ -184,8 +182,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.7,
             "short_term": 1.1,
-            "long_term": 1.0,
-            "multibagger": 0.8
+            "long_term": 1.0
         },
         
         "scoring_rules_max_bonus": 100,  # 30+20+25+25
@@ -228,8 +225,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 1.2,
             "short_term": 1.15,
-            "long_term": 0.7,
-            "multibagger": 0.5
+            "long_term": 0.7
         },
         
         "scoring_rules_max_bonus": 100,  # 40+30+30
@@ -310,8 +306,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.5,
             "short_term": 1.1,
-            "long_term": 1.1,
-            "multibagger": 1.35
+            "long_term": 1.1
         },
         
         "scoring_rules_max_bonus": 110,  # 50+20+20+20 (excludes -20 penalty)
@@ -365,8 +360,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.4,
             "short_term": 1.05,
-            "long_term": 1.05,
-            "multibagger": 1.25
+            "long_term": 1.05
         },
         
         "scoring_rules_max_bonus": 130,  # 30+25+30+25+20
@@ -432,8 +426,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.0,        # Blocked
             "short_term": 0.85,
-            "long_term": 1.3,
-            "multibagger": 1.45
+            "long_term": 1.3
         },
         
         "scoring_rules_max_bonus": 110,  # 35+25+20+20+10
@@ -476,8 +469,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.0,
             "short_term": 0.7,
-            "long_term": 1.2,
-            "multibagger": 1.1
+            "long_term": 1.2
         },
         
         "scoring_rules_max_bonus": 100,  # 40+30+30
@@ -526,8 +518,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.0,
             "short_term": 0.8,
-            "long_term": 1.25,
-            "multibagger": 1.2
+            "long_term": 1.25
         },
         
         "scoring_rules_max_bonus": 100,  # 50+25+25
@@ -581,16 +572,6 @@ STRATEGY_MATRIX = {
                 "gates": {"earningsStability": {"min": 7.0}},
                 "points": 15,
                 "reason": "Stable, predictable earnings"
-            },
-            "overheated_penalty": {
-                "gates": {"_logic": "OR", "trendStrength": {"min": 9.0}, "rsi": {"min": 80}},
-                "points": -10,
-                "reason": "Extremely overextended - wait for pullback"
-            },
-            "multibagger_zone": {
-                "gates": {"roe": {"min": 22}, "epsGrowth5y": {"min": 20}, "pegRatio": {"max": 1.5}, "peRatio": {"max": 30}},
-                "points": 20,
-                "reason": "In multibagger zone (HDFC/Asian Paints profile)"
             }
         },
         
@@ -600,8 +581,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.0,
             "short_term": 1.1,
-            "long_term": 1.35,
-            "multibagger": 1.5
+            "long_term": 1.35
         },
         
         "scoring_rules_max_bonus": 135,  # 35+35+20+10+20+15 (excludes -10 penalty)
@@ -666,8 +646,7 @@ STRATEGY_MATRIX = {
         "horizon_fit_multipliers": {
             "intraday": 0.0,
             "short_term": 1.1,
-            "long_term": 1.2,
-            "multibagger": 1.05
+            "long_term": 1.2
         },
         
         "scoring_rules_max_bonus": 135,  # 40+25+30+20+20 (excludes -25 -20 penalties)
@@ -784,7 +763,7 @@ def validate_strategy_matrix() -> Dict[str, Any]:
         # Check horizon multipliers
         if "horizon_fit_multipliers" in config:
             multipliers = config["horizon_fit_multipliers"]
-            for horizon in ["intraday", "short_term", "long_term", "multibagger"]:
+            for horizon in ["intraday", "short_term", "long_term"]:
                 if horizon not in multipliers:
                     warnings.append(f"{strategy_name}: Missing multiplier for '{horizon}'")
 

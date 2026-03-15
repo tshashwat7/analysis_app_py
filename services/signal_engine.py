@@ -609,11 +609,23 @@ def compute_all_profiles(
         # --------------------------------------------------
         # 6️⃣ BEST HORIZON SELECTION
         # --------------------------------------------------
+        TRADING_HORIZONS = {"intraday", "short_term", "long_term"}
+
         successful_profiles = {
             h: p for h, p in profiles.items() if p.get("status") == "SUCCESS"
         }
+        trading_profiles = {
+            h: p for h, p in successful_profiles.items() if h in TRADING_HORIZONS
+        }
 
-        if successful_profiles:
+        if trading_profiles:
+            best_horizon = max(
+                trading_profiles,
+                key=lambda h: trading_profiles[h]["final_decision_score"],
+            )
+            best_score = trading_profiles[best_horizon]["final_decision_score"]
+        elif successful_profiles:
+            # Fallback: single-mode call with horizon="multibagger" via manual UI override
             best_horizon = max(
                 successful_profiles,
                 key=lambda h: successful_profiles[h]["final_decision_score"],

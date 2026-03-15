@@ -2085,7 +2085,7 @@
   {% set sig_ctx = tr.signal_context | default({}) %}
   {% set conflict = (prof_cat in ('STRONG', 'MODERATE') and trade_sig in ('WATCH', 'HOLD', 'BLOCKED')) %}
   {% set ns = namespace(alt_horizon='', alt_score=0) %}
-  {% for h in ['short_term', 'intraday', 'long_term', 'multibagger'] %}
+  {% for h in ['short_term', 'intraday', 'long_term'] %}
   {% if h != selected_horizon %}
   {% set hp = full_report.profiles.get(h, {}) if full_report.profiles is defined else {} %}
   {% if hp.get('profile_signal', hp.get('category')) in ('STRONG', 'MODERATE', 'BUY') and hp.get('can_trade') %}

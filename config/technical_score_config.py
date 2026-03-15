@@ -533,23 +533,6 @@ HORIZON_METRIC_INCLUSION = {
             "wickRejection", # Intraday pattern
             "gapPercent"     # Short-term event
         ]
-    },
-    
-    "multibagger": {
-        "trend": ["trendStrength", "maTrendSignal", "priceVsPrimaryTrendPct", "relStrengthNifty"],
-        "momentum": ["relStrengthNifty"],  # ← ONLY benchmark outperformance matters
-        "volatility": [],  # ← Volatility is NOISE for 5-year holds
-        "volume": ["rvol"],  # ← Only for accumulation detection
-        "structure": ["position52w"],
-        
-        "exclude": [
-            "volatilityQuality",  # Irrelevant for multi-year
-            "momentumStrength",   # Short-term oscillations
-            "rsi", "rsislope", "stochK", "macd",  # All noise
-            "vwapBias", "wickRejection", "gapPercent",  # Intraday noise
-            "volSpikeRatio", "volSpikeSignal",  # Short-term
-            "ttmSqueeze", "bbWidth", "atrPct"  # Volatility noise
-        ]
     }
 }
 
@@ -578,13 +561,6 @@ HORIZON_TECHNICAL_WEIGHTS = {
         "volume": 0.15,
         "structure": 0.10,
         "volatility": 0.05  # ← Very low weight
-    },
-    "multibagger": {
-        "trend": 0.50,
-        "momentum": 0.30,  # ← Just relStrengthNifty
-        "structure": 0.15,
-        "volume": 0.05,
-        "volatility": 0.00  # ← ZERO weight
     }
 }
 
@@ -699,28 +675,6 @@ METRIC_WEIGHTS = {
         "structure": {
             "position52w": 0.60,          # Multi-year breakout level
             "priceAction": 0.40,          # Weekly candle patterns
-        }
-    },
-    
-    # ==========================================================================
-    # MULTIBAGGER: Pure trend + benchmark outperformance, zero noise
-    # ==========================================================================
-    "multibagger": {
-        "trend": {
-            "trendStrength": 0.45,        # Multi-year trend (supreme priority)
-            "maTrendSignal": 0.30,      # Long-term MA alignment
-            "priceVsPrimaryTrendPct": 0.15,  # Entry timing
-            "relStrengthNifty": 0.10,     # Must outperform market
-        },
-        "momentum": {
-            "relStrengthNifty": 1.00,     # ONLY benchmark outperformance matters
-        },
-        "volatility": {},
-        "volume": {
-            "rvol": 1.00,                 # Accumulation detection only
-        },
-        "structure": {
-            "position52w": 1.00,          # Multi-year breakout context
         }
     }
 }
@@ -891,30 +845,6 @@ TECHNICAL_PENALTIES = {
             "penalty": 0.30,
             "reason": "Below long-term trend support"
         }
-    ],
-    
-    "multibagger": [
-        {
-            "metric": "trendStrength",
-            "operator": "<",
-            "threshold": 5.0,
-            "penalty": 0.30,
-            "reason": "Multi-year trend too weak"
-        },
-        {
-            "metric": "relStrengthNifty",
-            "operator": "<",
-            "threshold": 10,
-            "penalty": 0.25,
-            "reason": "Insufficient outperformance"
-        },
-        {
-            "metric": "position52w",
-            "operator": ">",
-            "threshold": 90,
-            "penalty": 0.15,
-            "reason": "Overextended"
-        }
     ]
 }
 
@@ -1006,12 +936,6 @@ LIQUIDITY_PENALTY_RULES = {
         "min_avg_volume": 25000,
         "penalty_multiplier": 0.15,
         "reason": "Poor long-term liquidity"
-    },
-    
-    "multibagger": {
-        "min_avg_volume": 10000,
-        "penalty_multiplier": 0.10,
-        "reason": "Small-cap liquidity risk"
     }
 }
 
@@ -1214,34 +1138,6 @@ COMPOSITE_SCORING_CONFIG = {
                 }
             }
         }
-    },
-
-    "multibagger": {
-        "trendStrength": {
-            "metrics": {
-                "maTrendSignal": {
-                    "weight": 0.50, # Must be in a clear structural uptrend
-                    "mapping": {1: 10, 1.0: 10, 0.5: 4, 0: 0, 0.0: 0, -0.5: 0, -1: 0, -1.0: 0}
-                },
-                "maSlowSlope": {  # Velocity of the 12-month MA
-                    "weight": 0.30,
-                    "thresholds": [{"min": 5, "score": 10}, {"min": 2, "score": 7}, {"default": 0}]
-                },
-                "diSpread": {
-                    "weight": 0.20,
-                    "thresholds": [{"min": 25, "score": 10}, {"min": 15, "score": 6}, {"default": 0}]
-                }
-            }
-        },
-        "momentumStrength": {
-            "metrics": {
-                "relStrengthNifty": { # The only momentum metric that matters for multi-year holds
-                    "weight": 1.0,
-                    "thresholds": [{"min": 20, "score": 10}, {"min": 10, "score": 7}, {"min": 0, "score": 4}, {"default": 0}]
-                }
-            }
-        }
-        # Volatility is noise for Multibagger (5+ year holds)
     }
 }
 
@@ -1316,7 +1212,7 @@ def compute_single_composite(
     Args:
         composite_name: "trendStrength", "momentumStrength", or "volatilityQuality"
         indicators: Full indicators dict
-        horizon: "intraday", "short_term", "long_term", "multibagger"
+        horizon: "intraday", "short_term", "long_term"
     
     Returns:
         {
@@ -1404,7 +1300,7 @@ def compute_all_composites(indicators: dict, horizon: str) -> dict:
         {
             "trendStrength": {...},
             "momentumStrength": {...},
-            "volatilityQuality": {...}  # May be missing for multibagger
+            "volatilityQuality": {...}  # May be missing for some horizons
         }
     """
     composites = {}
@@ -1428,7 +1324,7 @@ def get_composite_config(horizon: str) -> dict:
     Get composite scoring config for a horizon.
     
     Args:
-        horizon: "intraday", "short_term", "long_term", "multibagger"
+        horizon: "intraday", "short_term", "long_term"
     
     Returns:
         Composite config dict or empty dict if not found

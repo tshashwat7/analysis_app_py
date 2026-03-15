@@ -43,7 +43,9 @@ from services.corporate_actions import (
 from services.world_bank_provider import get_macro_metrics
 from services.summaries import build_all_summaries
 from sqlalchemy.orm import Session
-from services.db import SessionLocal, SignalCache, init_db, PaperTrade
+from services.db import SessionLocal, SignalCache, init_db, PaperTrade, FundamentalCache
+from services.multibagger.mb_routes import mb_router
+from services.multibagger.mb_scheduler import start_mb_scheduler
 
 class PaperTradeRequest(BaseModel):
     symbol: str
@@ -345,6 +347,7 @@ async def lifespan(app: FastAPI):
                 logger.warning("[STARTUP] Corp actions cache build failed: %s", e)
         
         threading.Thread(target=_warm_corp_actions_cache, daemon=True, name="CorpActionsWarmer").start()
+        start_mb_scheduler()
         yield
     finally:
         # 2. Robust Shutdown
@@ -415,6 +418,7 @@ async def lifespan(app: FastAPI):
         logger.info("Shutdown complete.")
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(mb_router)
 templates = Jinja2Templates(directory="templates")
 
 def enrich_json_sync(index_name: str, symbol: str, name: str):
@@ -709,11 +713,13 @@ def run_analysis(
         if mode == "single":
             if not requested_horizon:
                 raise ValueError("requested_horizon required for mode='single'")
+            # ✅ FIX 15: Always compute long_term for meta-scores (Value, Growth, Quality)
+            # and short_term as a baseline if needed.
             horizons_to_compute = [requested_horizon]
-            logger.info(f"[{symbol}] 🎯 SINGLE-HORIZON MODE | Horizon: {requested_horizon}")
-        else:
-            horizons_to_compute = ["intraday", "short_term", "long_term", "multibagger"]
-            logger.info(f"[{symbol}] 🔄 FULL-HORIZON MODE | Computing all 4")
+            if "long_term" not in horizons_to_compute:
+                horizons_to_compute.append("long_term")
+            
+            logger.info(f"[{symbol}] 🎯 SINGLE-HORIZON MODE | Horizons: {horizons_to_compute}")
         
         # =====================================================================
         # STEP 1: CORE DATA STRUCTURE
@@ -784,7 +790,7 @@ def run_analysis(
         # ✅ FIX OBSERVATION 3: Try short_term first, then fallback to any available
         try:
             macro_inds = None
-            for fallback_horizon in ["short_term", "intraday", "long_term", "multibagger"]:
+            for fallback_horizon in ["short_term", "intraday", "long_term"]:
                 if fallback_horizon in analysis_data["raw_indicators_by_horizon"]:
                     macro_inds = analysis_data["raw_indicators_by_horizon"][fallback_horizon]
                     logger.debug(f"[{symbol}] Using {fallback_horizon} for macro trend")
@@ -843,32 +849,25 @@ def run_analysis(
         # =====================================================================
         # ✅ FIX OBSERVATION 4: Use appropriate horizons for each meta score type
         try:
-            # Get indicators from any available horizon for momentum
-            momentum_horizon = requested_horizon if mode == "single" else "short_term"
+            # Momentum baseline for meta-block should be long-term for consistency
+            # with Value/Growth/Quality, giving a high-level fundamental-growth-trend overview.
             momentum_inds = analysis_data["raw_indicators_by_horizon"].get(
-                momentum_horizon,
-                analysis_data["raw_indicators_by_horizon"].get("intraday", {})
+                "long_term",
+                analysis_data["raw_indicators_by_horizon"].get(
+                    requested_horizon if mode == "single" else "short_term", {}
+                )
             )
             
             analysis_data["meta_scores"] = {
                 # Value, Growth, Quality are ALWAYS long-term metrics
-                "value": score_value_profile(
-                    analysis_data["fundamentals"], 
-                    horizon="multibagger"  # ✅ FIXED: Always use long-term
-                ),
-                "growth": score_growth_profile(
-                    analysis_data["fundamentals"], 
-                    horizon="long_term"    # ✅ FIXED: Always use long-term
-                ),
-                "quality": score_quality_profile(
-                    analysis_data["fundamentals"], 
-                    horizon="long_term"    # ✅ FIXED: Always use long-term
-                ),
-                # Momentum adapts to context
+                "value": score_value_profile(analysis_data["fundamentals"], horizon="long_term"),
+                "growth": score_growth_profile(analysis_data["fundamentals"], horizon="long_term"),
+                "quality": score_quality_profile(analysis_data["fundamentals"], horizon="long_term"),
+                # Momentum baseline for the summary block
                 "momentum": score_momentum_profile(
                     analysis_data["fundamentals"],
                     momentum_inds,
-                    horizon=momentum_horizon  # ✅ Use appropriate horizon
+                    horizon="long_term"
                 ),
             }
         except Exception as e:
@@ -1012,11 +1011,17 @@ def _save_analysis_to_db(
         final_score = selected_profile.get("final_score", 0)
         
         # Build horizon scores JSON
+        existing_entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
+        existing_multi = (
+            (existing_entry.horizon_scores or {}).get("multi_score")
+            if existing_entry else None
+        )
+        
         horizon_data = {
             "intra_score": profiles.get("intraday", {}).get("final_score"),
             "short_score": profiles.get("short_term", {}).get("final_score"),
             "long_score": profiles.get("long_term", {}).get("final_score"),
-            "multi_score": profiles.get("multibagger", {}).get("final_score"),
+            "multi_score": profiles.get("multibagger", {}).get("final_score") or existing_multi,
             "macro_index_name": index_name.upper(),
             "error_details": "; ".join(data.get("error_details", [])),
             "best_fit_score": best_fit_score,  # ✅ NEW: For comparison
@@ -1093,135 +1098,139 @@ async def quick_scores(payload: QuickScoresRequest):
 
     if not to_fetch: return results
 
-    loop = asyncio.get_running_loop()
-    calc_tasks = [loop.run_in_executor(get_compute_executor(), run_full_analysis, s, index_name) for s in to_fetch]
-    analyzed_data_list = await asyncio.gather(*calc_tasks)
+    # Bug 2 Fix: Open session before loop and ensure closure
+    from services.multibagger.mb_db_model import MultibaggerCandidate
+    mb_db = SessionLocal()
+    try:
+        loop = asyncio.get_running_loop()
+        calc_tasks = [loop.run_in_executor(get_compute_executor(), run_full_analysis, s, index_name) for s in to_fetch]
+        analyzed_data_list = await asyncio.gather(*calc_tasks)
 
-    for analysis_data in analyzed_data_list:
-        sym = analysis_data.get("symbol")
-        if not sym: continue
-        # Extract & Strip Enrichment Data
-        enrich_payload = analysis_data.pop("_enrichment", None)
-        
-        # Fire & Forget Background Task
-        if enrich_payload:
-            idx, s, n = enrich_payload
-            # Runs sync function in thread pool. No await needed.
-            loop.run_in_executor(get_background_executor(), enrich_json_sync, idx, s, n)
-        try:
-            full_rep = analysis_data.get("full_report", {})
-            profiles = full_rep.get("profiles", {})
-            best_profile = profiles.get(full_rep.get("best_fit", "short_term"), {})
-            trade_plan = analysis_data.get("trade_recommendation", {})
-            indicators = analysis_data.get("indicators", {})
-            final_score = best_profile.get("final_score", 0)
-            confidence = trade_plan.get("final_confidence", 0)
-            signal_str = trade_plan.get("signal", "N/A")
-            error_status = analysis_data.get("error_details", [])
+        for analysis_data in analyzed_data_list:
+            sym = analysis_data.get("symbol")
+            if not sym: continue
+            # Extract & Strip Enrichment Data
+            enrich_payload = analysis_data.pop("_enrichment", None)
             
-            bull_score = 0
-            if "SQUEEZE" in signal_str: bull_score = 95
-            elif "TREND" in signal_str: bull_score = 85
-            elif "DIP" in signal_str: bull_score = 75
-            elif "HOLD" in signal_str: bull_score = 50
-            else: bull_score = 20
+            # Fire & Forget Background Task
+            if enrich_payload:
+                idx, s, n = enrich_payload
+                # Runs sync function in thread pool. No await needed.
+                loop.run_in_executor(get_background_executor(), enrich_json_sync, idx, s, n)
+            try:
+                full_rep = analysis_data.get("full_report", {})
+                profiles = full_rep.get("profiles", {})
+                best_profile = profiles.get(full_rep.get("best_fit", "short_term"), {})
+                trade_plan = analysis_data.get("trade_recommendation", {})
+                indicators = analysis_data.get("indicators", {})
+                final_score = best_profile.get("final_score", 0)
+                confidence = trade_plan.get("final_confidence", 0)
+                signal_str = trade_plan.get("signal", "N/A")
+                error_status = analysis_data.get("error_details", [])
+                
+                bull_score = 0
+                if "SQUEEZE" in signal_str: bull_score = 95
+                elif "TREND" in signal_str: bull_score = 85
+                elif "DIP" in signal_str: bull_score = 75
+                elif "HOLD" in signal_str: bull_score = 50
+                else: bull_score = 20
 
-            rr = trade_plan.get("rr_ratio")
-            entry_val = trade_plan.get("entry")
-            sl_val = trade_plan.get("stop_loss")
-            current_price = indicators.get("price", {}).get("value") or entry_val
-            sl_dist_str = "-"
-            if current_price and sl_val and current_price > 0:
-                dist = abs(current_price - sl_val) / current_price * 100
-                sl_dist_str = f"{dist:.1f}%"
+                rr = trade_plan.get("rr_ratio")
+                entry_val = trade_plan.get("entry")
+                sl_val = trade_plan.get("stop_loss")
+                current_price = indicators.get("price", {}).get("value") or entry_val
+                sl_dist_str = "-"
+                if current_price and sl_val and current_price > 0:
+                    dist = abs(current_price - sl_val) / current_price * 100
+                    sl_dist_str = f"{dist:.1f}%"
 
-            # ✅ FIX: strategy_report = profile_report.strategy
-            # Structure: { "best": {strategy, weighted_score,...}, "primary": str,
-            #              "ranked": [{name, weighted_score, fit_threshold,...},...],
-            #              "summary": {total, qualified, best_strategy, rejected} }
-            strat_data = analysis_data.get("strategy_report", {})
-            strat_summ = strat_data.get("summary", {})
-            best_strat = (
-                strat_summ.get("best_strategy")
-                or (strat_data.get("best") or {}).get("strategy")
-                or strat_data.get("primary")
-                or "N/A"
-            )
-            # ✅ FIX: "all_fits" key never existed in summary — read from ranked list
-            ranked = strat_data.get("ranked", [])
-            all_fits = ", ".join(
-                c["name"] for c in ranked
-                if c.get("weighted_score", 0) >= c.get("fit_threshold", 50)
-            )
+                # ✅ FIX: strategy_report = profile_report.strategy
+                strat_data = analysis_data.get("strategy_report", {})
+                strat_summ = strat_data.get("summary", {})
+                best_strat = (
+                    strat_summ.get("best_strategy")
+                    or (strat_data.get("best") or {}).get("strategy")
+                    or strat_data.get("primary")
+                    or "N/A"
+                )
+                ranked = strat_data.get("ranked", [])
+                all_fits = ", ".join(
+                    c["name"] for c in ranked
+                    if c.get("weighted_score", 0) >= c.get("fit_threshold", 50)
+                )
 
-            pattern_keys = ["goldenCross", "doubleTopBottom", "cupHandle", "darvasBox", 
-                            "flagPennant", "minerviniStage2", "bollingerSqueeze", "threeLineStrike", "ichimokuSignals"]
-            top_pattern_name = ""
-            top_pattern_score = 0
-            for pk in pattern_keys:
-                p_obj = indicators.get(pk)
-                if p_obj and isinstance(p_obj, dict) and p_obj.get("found"):
-                    s = p_obj.get("score", 0)
-                    if s > top_pattern_score:
-                        top_pattern_score = s
-                        top_pattern_name = pk.replace("_", " ").title()
+                pattern_keys = ["goldenCross", "doubleTopBottom", "cupHandle", "darvasBox", 
+                                "flagPennant", "minerviniStage2", "bollingerSqueeze", "threeLineStrike", "ichimokuSignals"]
+                top_pattern_name = ""
+                top_pattern_score = 0
+                for pk in pattern_keys:
+                    p_obj = indicators.get(pk)
+                    if p_obj and isinstance(p_obj, dict) and p_obj.get("found"):
+                        s = p_obj.get("score", 0)
+                        if s > top_pattern_score:
+                            top_pattern_score = s
+                            top_pattern_name = pk.replace("_", " ").title()
 
-            name_map = {"Bollinger Squeeze": "Squeeze", "Minervini Stage2": "VCP", "Three Line Strike": "3-Strike", 
-                        "Golden Cross": "Gold Cross", "Double Top Bottom": "Double T/B", "Cup Handle": "Cup", 
-                        "Darvas Box": "Darvas", "Flag Pennant": "Flag", "Ichimoku Signals": "Ichimoku"}
-            top_pattern_name = name_map.get(top_pattern_name, top_pattern_name)
+                name_map = {"Bollinger Squeeze": "Squeeze", "Minervini Stage2": "VCP", "Three Line Strike": "3-Strike", 
+                            "Golden Cross": "Gold Cross", "Double Top Bottom": "Double T/B", "Cup Handle": "Cup", 
+                            "Darvas Box": "Darvas", "Flag Pennant": "Flag", "Ichimoku Signals": "Ichimoku"}
+                top_pattern_name = name_map.get(top_pattern_name, top_pattern_name)
 
-            # ✅ FIX: derive clean BUY/SELL/HOLD from trade_signal (not the raw setup string)
-            # trade_plan["trade_signal"] = "BUY"/"SELL"/"HOLD"
-            # trade_plan["signal"]       = "BOLLINGER_SQUEEZE_BUY" (full setup label)
-            trade_signal_clean = trade_plan.get("trade_signal") or (
-                "BUY"  if any(k in signal_str for k in ("BUY", "SQUEEZE", "TREND", "DIP"))
-                else "SELL" if any(k in signal_str for k in ("SELL", "SHORT"))
-                else "HOLD"
-            )
+                trade_signal_clean = trade_plan.get("trade_signal") or (
+                    "BUY"  if any(k in signal_str for k in ("BUY", "SQUEEZE", "TREND", "DIP"))
+                    else "SELL" if any(k in signal_str for k in ("SELL", "SHORT"))
+                    else "HOLD"
+                )
 
-            # ✅ NEW: profit to T1 = (t1 - entry) / entry * 100
-            t1_val = (trade_plan.get("targets") or {}).get("t1")
-            t2_val = (trade_plan.get("targets") or {}).get("t2")
-            profit_pct = None
-            if entry_val and t1_val and entry_val > 0:
-                profit_pct = round((t1_val - entry_val) / entry_val * 100, 2)
+                t1_val = (trade_plan.get("targets") or {}).get("t1")
+                t2_val = (trade_plan.get("targets") or {}).get("t2")
+                profit_pct = None
+                if entry_val and t1_val and entry_val > 0:
+                    profit_pct = round((t1_val - entry_val) / entry_val * 100, 2)
 
-            def safe_val(v):
-                if v is None: return None
-                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return None
-                return v
+                def safe_val(v):
+                    if v is None: return None
+                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return None
+                    return v
 
-            flat_output = {
-                "symbol": sym,
-                "score": int(final_score * 10) if final_score else 0,
-                "confidence": confidence,
-                "recommendation": (best_profile.get("profile_signal", best_profile.get("category", "HOLD")) + "--" + full_rep.get("best_fit", "")),
-                "bull_score": bull_score,
-                "bull_signal": trade_signal_clean,
-                "profile_category": best_profile.get("profile_signal", best_profile.get("category", "HOLD")),
-                "setup_signal": signal_str.replace("_", " "), # ✅ NEW: full label e.g. "BOLLINGER SQUEEZE BUY"
-                "rr_ratio": rr if rr else 0,
-                "entry_trigger": entry_val if entry_val else 0,
-                "t1": safe_val(t1_val),                       # ✅ NEW
-                "t2": safe_val(t2_val),                       # ✅ NEW
-                "profit_pct": safe_val(profit_pct),           # ✅ NEW: (T1-entry)/entry*100
-                "sl_dist": sl_dist_str,
-                "best_strategy": best_strat,
-                "fitting_strategies": all_fits,
-                "best_fit_horizon": full_rep.get("best_fit", ""),  # ✅ NEW
-                "intra_score": safe_val(profiles.get("intraday", {}).get("final_score")),
-                "short_score": safe_val(profiles.get("short_term", {}).get("final_score")),
-                "long_score": safe_val(profiles.get("long_term", {}).get("final_score")),
-                "multi_score": safe_val(profiles.get("multibagger", {}).get("final_score")),
-                "macro_index_name": index_name.upper(),
-                "top_pattern": top_pattern_name,
-                "error_details": "; ".join(error_status) if error_status else "",
-            }
-            results[sym] = flat_output
-        except Exception as e:
-            logger.error(f"[{sym}] Error flattening: {e}")
-            results[sym] = {"symbol": sym, "recommendation": "Error"}
+                flat_output = {
+                    "symbol": sym,
+                    "score": int(final_score * 10) if final_score else 0,
+                    "confidence": confidence,
+                    "recommendation": (best_profile.get("profile_signal", best_profile.get("category", "HOLD")) + "--" + full_rep.get("best_fit", "")),
+                    "bull_score": bull_score,
+                    "bull_signal": trade_signal_clean,
+                    "profile_category": best_profile.get("profile_signal", best_profile.get("category", "HOLD")),
+                    "setup_signal": signal_str.replace("_", " "), 
+                    "rr_ratio": rr if rr else 0,
+                    "entry_trigger": entry_val if entry_val else 0,
+                    "t1": safe_val(t1_val),
+                    "t2": safe_val(t2_val),
+                    "profit_pct": safe_val(profit_pct),
+                    "sl_dist": sl_dist_str,
+                    "best_strategy": best_strat,
+                    "fitting_strategies": all_fits,
+                    "best_fit_horizon": full_rep.get("best_fit", ""),
+                    "intra_score": safe_val(profiles.get("intraday", {}).get("final_score")),
+                    "short_score": safe_val(profiles.get("short_term", {}).get("final_score")),
+                    "long_score": safe_val(profiles.get("long_term", {}).get("final_score")),
+                    "multi_score": safe_val(
+                        profiles.get("multibagger", {}).get("final_score") or (
+                            mb_db.query(MultibaggerCandidate.final_score)
+                              .filter(MultibaggerCandidate.symbol == sym, MultibaggerCandidate.gatekeeper_passed == True)
+                              .scalar()
+                        )
+                    ),
+                    "macro_index_name": index_name.upper(),
+                    "top_pattern": top_pattern_name,
+                    "error_details": "; ".join(error_status) if error_status else "",
+                }
+                results[sym] = flat_output
+            except Exception as e:
+                logger.error(f"[{sym}] Error flattening: {e}")
+                results[sym] = {"symbol": sym, "recommendation": "Error"}
+    finally:
+        mb_db.close()
     return results
 
 @app.get("/load_index/{index_name}")
@@ -1246,6 +1255,84 @@ async def load_index_endpoint(index_name: str):
         "corp_actions_ready": corp_ready,
     }
 
+async def analyze_multibagger(request: Request, symbol: str, index: str = "nifty50"):
+    """
+    Specialized route for Multibagger Thesis.
+    Uses the MB-specific evaluator and renders the dedicated dashboard.
+    """
+    _ensure_stocks_loaded()
+    try:
+        # Issue A FIX: Offload blocking data fetch to executor
+        def _fetch_mb_data(symbol):
+            from services.indicator_cache import compute_indicators_cached
+            from services.fundamentals import compute_fundamentals
+            indicators_local, patterns_local = compute_indicators_cached(symbol, horizon="multibagger")
+            fundamentals_local = compute_fundamentals(symbol)
+            return indicators_local, patterns_local, fundamentals_local
+
+        indicators, patterns, fundamentals = await loop.run_in_executor(
+            get_compute_executor(), _fetch_mb_data, symbol
+        )
+        
+        # 2. Run MB Evaluator (Phase 2 scoring)
+        # This uses the isolated MB extractor/config stack
+        from services.multibagger.multibagger_evaluator import run_mb_resolver
+        result = await loop.run_in_executor(
+            get_compute_executor(),
+            run_mb_resolver,
+            symbol,
+            fundamentals,
+            indicators,
+            patterns
+        )
+        
+        if not result:
+            raise ValueError(f"MB Evaluator returned no result for {symbol}")
+
+        # 3. Get conviction tier (same logic as scheduler)
+        from services.multibagger.mb_scheduler import _determine_conviction_tier
+        conviction_tier = _determine_conviction_tier(result)
+        
+        # 4. Prepare context for mb_result.html
+        context = {
+            "request": request,
+            "symbol": symbol,
+            "final_decision_score": result.get("final_decision_score"),
+            "confidence": result.get("confidence"),
+            "conviction_tier": conviction_tier,
+            "primary_setup": result.get("setup"),
+            "primary_strategy": result.get("strategy"),
+            "fundamental_score": result.get("fundamental_score"),
+            "technical_score": result.get("technical_score"),
+            "opportunity": result.get("opportunity", {}),
+            "eval_ctx": result.get("eval_ctx", {}),
+            "rejection_reason": result.get("rejection_reason"),
+            "last_evaluated": "Live Evaluation",
+            "re_evaluate_date": "N/A"
+        }
+        
+        return templates.TemplateResponse("mb_result.html", context)
+        
+    except Exception as e:
+        logger.exception(f"Error in analyze_multibagger for {symbol}: {e}")
+        return templates.TemplateResponse("result.html", {
+            "request": request,
+            "symbol": symbol,
+            "current_index": index,
+            "error": f"Multibagger Analysis Error: {str(e)}",
+            "full_report": {"profiles": {}},
+            "profile_report": {},
+            "indicators": {},
+            "fundamentals": {},
+            "summaries": {},
+            "trade_recommendation": {},
+            "selected_horizon": "multibagger",
+            "confidence": 0,
+            "meta_scores": {},
+            "strategy_report": {},
+            "all_horizon_scores": {},
+        })
+
 @app.get("/analyze", response_class=HTMLResponse)
 async def analyze_common(
     request: Request,
@@ -1266,7 +1353,10 @@ async def analyze_common(
         loop = asyncio.get_running_loop()
         
         # ✅ SMART ROUTING: Choose mode based on horizon parameter
-        if horizon and horizon in ["intraday", "short_term", "long_term", "multibagger"]:
+        if horizon == "multibagger":
+            return await analyze_multibagger(request, symbol.strip().upper(), index)
+
+        if horizon and horizon in ["intraday", "short_term", "long_term"]:
             logger.info(f"[{symbol}] Single-horizon mode: {horizon}")
             
             analysis_data = await loop.run_in_executor(
@@ -1525,87 +1615,15 @@ async def analyze_common(
             "strategy_report": {},
             "all_horizon_scores": {},
         })
-    
-async def analyze_common_old(request: Request, symbol: str, index: str = "nifty50", horizon: str = None):
-    # Lazy Load
-    _ensure_stocks_loaded()
-    try:
-        loop = asyncio.get_running_loop()
-        analysis_data = await loop.run_in_executor(get_compute_executor(), run_full_analysis, symbol, index)
-        full_report = analysis_data.get("full_report", {})
-        selected_profile_name = horizon if (horizon and horizon in full_report.get("profiles", {})) else full_report.get("best_fit", "short_term")
-        profile_report = full_report.get("profiles", {}).get(selected_profile_name, {})
-        analysis_data["profile_report"] = profile_report
-        analysis_data["strategy_report"] = profile_report.get("strategy", {})  # ✅ NEW: For summaries.py logic
-        
-        current_horizon_inds = analysis_data.get("raw_indicators_by_horizon", {}).get(selected_profile_name)
-        if not current_horizon_inds: current_horizon_inds = analysis_data.get("indicators", {})
-
-        # ... (Prepare standard summaries/scores variables) ...
-        best_fit = full_report.get("best_fit", "short_term")
-
-        if selected_profile_name != best_fit:
-            trade_plan = generate_trade_plan(
-                symbol,
-                profile_report,
-                current_horizon_inds,
-                analysis_data.get("fundamentals", {}),
-                selected_profile_name,
-                analysis_data.get("macro_trend_status", "N/A"),
-                )
-        else:
-            trade_plan = analysis_data.get("trade_recommendation", {})
-
-        final_score = profile_report.get("final_score", 0)
-        meta_scores = analysis_data.get("meta_scores", {})
-        
-        # ✅ ENHANCED: Get narratives from trade_plan (generated in generate_trade_plan)
-        narratives = trade_plan.get("narratives", {})
-
-        # Build legacy summaries for backward compatibility
-        summary_context = {
-            "indicators": analysis_data.get("indicators", {}),
-            "trade_recommendation": trade_plan,
-            "profile_report": profile_report,
-            "meta_scores": analysis_data.get("meta_scores", {}),
-            "macro_trend_status": analysis_data.get("macro_trend_status", "N/A")
-        }
-        legacy_summaries = build_all_summaries(summary_context)
-
-        # Merge: narratives + legacy summaries
-        summaries = {**legacy_summaries, **narratives}
-
-        if narratives:
-            logger.info(f"[{symbol}] Enhanced narratives available: {list(narratives.keys())}")
-        else:
-            logger.warning(f"[{symbol}] No enhanced narratives in trade_plan")
-
-        context = {
-            "request": request, "symbol": symbol, "current_index": index, "selected_horizon": selected_profile_name,
-            "error": None, "full_report": full_report, "profile_report": profile_report,
-            "fundamentals": analysis_data.get("fundamentals", {}), "indicators": analysis_data.get("indicators", {}),
-            "meta_scores": {"value": meta_scores.get("value", 0) or 0, "growth": meta_scores.get("growth", 0) or 0,
-                            "quality": meta_scores.get("quality", 0) or 0, "momentum": meta_scores.get("momentum", 0) or 0},
-            "trade_recommendation": trade_plan, "summaries": summaries,
-            "final_signal": profile_report.get("category", "HOLD"), "bull_signal": trade_plan.get("signal", "N/A"),
-            "total_score": final_score * 10, "confidence": trade_plan.get("final_confidence", 0), "macro_index_name": index.upper(),
-            "macro_trend_status": analysis_data.get("macro_trend_status", "N/A"), "macro_close": analysis_data.get("macro_close"),
-            "reasons": [trade_plan.get("reason", "")], "strategy_report": analysis_data.get("strategy_report", {}),
-        }
-        logger.debug(f" context passed to result.html for {symbol} is {context}")#//////////////////////////////////////////////////////////////////////////////////
-        return templates.TemplateResponse("result.html", context)
-    except Exception as e:
-        logger.exception(f"Error in analyze_common for {symbol}: {e}")
-        return templates.TemplateResponse("result.html", {
-            "request": request, "symbol": symbol, "current_index": index, "error": str(e),
-            "full_report": {"profiles": {}}, "profile_report": {}, "indicators": {}, "fundamentals": {},
-            "summaries": {}, "trade_recommendation": {}, "selected_horizon": "short_term", "confidence": 0,
-            "meta_scores": {}, "strategy_report": {},
-        })
 
 @app.post("/analyze", response_class=HTMLResponse)
 async def analyze_post(request: Request, symbol: str = Form(...), index: str = Form("nifty50")):
     return await analyze_common(request, symbol.strip().upper(), index)
+
+@app.get("/multibagger_dashboard", response_class=HTMLResponse)
+async def multibagger_dashboard(request: Request):
+    """Render the Multibagger Picks dashboard."""
+    return templates.TemplateResponse("mb_picks.html", {"request": request})
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
