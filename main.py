@@ -44,8 +44,8 @@ from services.world_bank_provider import get_macro_metrics
 from services.summaries import build_all_summaries
 from sqlalchemy.orm import Session
 from services.db import SessionLocal, SignalCache, init_db, PaperTrade, FundamentalCache
-from services.multibagger.mb_routes import mb_router
-from services.multibagger.mb_scheduler import start_mb_scheduler
+from config.multibagger.mb_routes import mb_router
+from config.multibagger.mb_scheduler import start_mb_scheduler
 
 class PaperTradeRequest(BaseModel):
     symbol: str
@@ -604,73 +604,52 @@ def get_cached(symbol: str):
     finally:
         db.close()
 
+
 def set_cached(symbol: str, value: Dict[str, Any]):
     """
-    Saves analysis to SQLite (Persistent).
-    Maps the 'flat' grid dictionary into the structured DB columns.
+    Update analysis cache in SQLite.
+    Preserves existing multibagger score if not provided in 'value'.
     """
     db: Session = SessionLocal()
     try:
-        with CACHE_LOCK:  # Keep Lock to prevent SQLite race conditions
-            # Check if exists
+        with CACHE_LOCK:
             entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
-            
+            if not entry:
+                entry = SignalCache(symbol=symbol)
+                db.add(entry)
+
+            # Preserve multi_score written by mb_scheduler
+            existing_multi = (entry.horizon_scores or {}).get("multi_score") if entry else None
+
             horizon_data = {
-                "intra_score": value.get("intra_score"),
-                "short_score": value.get("short_score"),
-                "long_score": value.get("long_score"),
-                "multi_score": value.get("multi_score"),
-                "sl_dist": value.get("sl_dist"),
-                "macro_index_name": value.get("macro_index_name"),
-                "error_details": value.get("error_details"),
-                # ✅ NEW: persist so get_cached returns them on cache hit
-                "t1": value.get("t1"),
-                "t2": value.get("t2"),
-                "profit_pct": value.get("profit_pct"),
-                "setup_signal": value.get("setup_signal"),
-                "best_fit_horizon": value.get("best_fit_horizon"),
-                "best_strategy": value.get("best_strategy"),
-                "fitting_strategies": value.get("fitting_strategies"),
-                "top_pattern": value.get("top_pattern"),
-                "bull_score": value.get("bull_score"),
-                "profile_category": value.get("profile_category"),
+                "intra_score":  value.get("intra_score"),
+                "short_score":  value.get("short_score"),
+                "long_score":   value.get("long_score"),
+                "multi_score":  value.get("multi_score") or existing_multi,
+                "best_fit_score": value.get("best_fit_score"),
+                "sl_dist":      value.get("sl_dist"),
+                "direction":    value.get("direction", "bullish"),
             }
 
-            # Helper to safely get float
-            def _f(k): return value.get(k) if isinstance(value.get(k), (int, float)) else 0.0
+            entry.best_horizon = value.get("best_horizon")
+            entry.selected_horizon = value.get("selected_horizon")
+            entry.score = value.get("score", 0)
+            entry.recommendation = value.get("recommendation", "N/A")
+            entry.signal_text = value.get("bull_signal", "HOLD")
+            entry.conf_score = value.get("confidence", 0)
+            entry.rr_ratio = value.get("rr_ratio")
+            entry.entry_price = value.get("entry_trigger")
+            entry.stop_loss = value.get("stop_loss")
+            entry.horizon_scores = horizon_data
+            entry.updated_at = get_current_utc()
 
-            if not entry:
-                entry = SignalCache(
-                    symbol=symbol,
-                    score=_f("score"),
-                    recommendation=str(value.get("recommendation", "HOLD")),
-                    best_horizon=str(value.get("recommendation", "")).split("--")[-1],
-                    signal_text=str(value.get("bull_signal", "")),
-                    conf_score=int(_f("confidence")),
-                    rr_ratio=_f("rr_ratio"),
-                    entry_price=_f("entry_trigger"),
-                    stop_loss=_f("stop_loss"),
-                    horizon_scores=horizon_data,
-                    # Auto-updated by DB default, but explicit doesn't hurt
-                    updated_at=get_current_utc(),
-                )
-                db.add(entry)
-            else:
-                # Update existing
-                entry.score = _f("score")
-                entry.recommendation = str(value.get("recommendation", "HOLD"))
-                entry.signal_text = str(value.get("bull_signal", ""))
-                entry.conf_score = int(_f("confidence"))
-                entry.rr_ratio = _f("rr_ratio")
-                entry.entry_price = _f("entry_trigger")
-                entry.horizon_scores = horizon_data
-                entry.updated_at = get_current_utc()
             db.commit()
     except Exception as e:
         logger.error(f"DB Write Error {symbol}: {e}")
         db.rollback()
     finally:
         db.close()
+
 
 # --- WORKER ---
 def run_analysis(
@@ -720,6 +699,10 @@ def run_analysis(
                 horizons_to_compute.append("long_term")
             
             logger.info(f"[{symbol}] 🎯 SINGLE-HORIZON MODE | Horizons: {horizons_to_compute}")
+        else:
+            # ✅ OPTIMIZED: Exclude multibagger from full scan (it's now a specialized weekly flow)
+            horizons_to_compute = ["intraday", "short_term", "long_term"]
+            logger.info(f"[{symbol}] 🔄 FULL-HORIZON MODE | Horizons: {horizons_to_compute}")
         
         # =====================================================================
         # STEP 1: CORE DATA STRUCTURE
@@ -1025,6 +1008,7 @@ def _save_analysis_to_db(
             "macro_index_name": index_name.upper(),
             "error_details": "; ".join(data.get("error_details", [])),
             "best_fit_score": best_fit_score,  # ✅ NEW: For comparison
+            "direction": trade_plan.get("metadata", {}).get("direction", "bullish"),
         }
         
         # Calculate SL distance
@@ -1099,7 +1083,7 @@ async def quick_scores(payload: QuickScoresRequest):
     if not to_fetch: return results
 
     # Bug 2 Fix: Open session before loop and ensure closure
-    from services.multibagger.mb_db_model import MultibaggerCandidate
+    from config.multibagger.mb_db_model import MultibaggerCandidate
     mb_db = SessionLocal()
     try:
         loop = asyncio.get_running_loop()
@@ -1128,12 +1112,19 @@ async def quick_scores(payload: QuickScoresRequest):
                 signal_str = trade_plan.get("signal", "N/A")
                 error_status = analysis_data.get("error_details", [])
                 
+                # trade_signal_clean is computed later, so we determine it here locally or use the existing logic if already computed
+                trade_signal_local = trade_plan.get("trade_signal", "HOLD")
+                
                 bull_score = 0
-                if "SQUEEZE" in signal_str: bull_score = 95
-                elif "TREND" in signal_str: bull_score = 85
-                elif "DIP" in signal_str: bull_score = 75
-                elif "HOLD" in signal_str: bull_score = 50
-                else: bull_score = 20
+                if trade_signal_local == "SELL":
+                    bull_score = 5   # confirmed short — lowest possible
+                elif "BREAKDOWN" in signal_str or "BEAR" in signal_str:
+                    bull_score = 10
+                elif "SQUEEZE" in signal_str:  bull_score = 95
+                elif "TREND" in signal_str:    bull_score = 85
+                elif "DIP" in signal_str:      bull_score = 75
+                elif "HOLD" in signal_str:     bull_score = 50
+                else:                           bull_score = 20
 
                 rr = trade_plan.get("rr_ratio")
                 entry_val = trade_plan.get("entry")
@@ -1177,8 +1168,8 @@ async def quick_scores(payload: QuickScoresRequest):
                 top_pattern_name = name_map.get(top_pattern_name, top_pattern_name)
 
                 trade_signal_clean = trade_plan.get("trade_signal") or (
-                    "BUY"  if any(k in signal_str for k in ("BUY", "SQUEEZE", "TREND", "DIP"))
-                    else "SELL" if any(k in signal_str for k in ("SELL", "SHORT"))
+                    "SELL" if any(k in signal_str for k in ("SELL", "SHORT", "BREAKDOWN", "BEAR"))
+                    else "BUY"  if any(k in signal_str for k in ("BUY", "SQUEEZE", "TREND", "DIP"))
                     else "HOLD"
                 )
 
@@ -1186,7 +1177,10 @@ async def quick_scores(payload: QuickScoresRequest):
                 t2_val = (trade_plan.get("targets") or {}).get("t2")
                 profit_pct = None
                 if entry_val and t1_val and entry_val > 0:
-                    profit_pct = round((t1_val - entry_val) / entry_val * 100, 2)
+                    if trade_signal_clean == "SELL":
+                        profit_pct = round((entry_val - t1_val) / entry_val * 100, 2)
+                    else:
+                        profit_pct = round((t1_val - entry_val) / entry_val * 100, 2)
 
                 def safe_val(v):
                     if v is None: return None
@@ -1199,6 +1193,7 @@ async def quick_scores(payload: QuickScoresRequest):
                     "confidence": confidence,
                     "recommendation": (best_profile.get("profile_signal", best_profile.get("category", "HOLD")) + "--" + full_rep.get("best_fit", "")),
                     "bull_score": bull_score,
+                    "direction": trade_plan.get("metadata", {}).get("direction", "bullish"),
                     "bull_signal": trade_signal_clean,
                     "profile_category": best_profile.get("profile_signal", best_profile.get("category", "HOLD")),
                     "setup_signal": signal_str.replace("_", " "), 
@@ -1270,13 +1265,14 @@ async def analyze_multibagger(request: Request, symbol: str, index: str = "nifty
             fundamentals_local = compute_fundamentals(symbol)
             return indicators_local, patterns_local, fundamentals_local
 
+        loop = asyncio.get_running_loop()
         indicators, patterns, fundamentals = await loop.run_in_executor(
             get_compute_executor(), _fetch_mb_data, symbol
         )
         
         # 2. Run MB Evaluator (Phase 2 scoring)
         # This uses the isolated MB extractor/config stack
-        from services.multibagger.multibagger_evaluator import run_mb_resolver
+        from config.multibagger.multibagger_evaluator import run_mb_resolver
         result = await loop.run_in_executor(
             get_compute_executor(),
             run_mb_resolver,
@@ -1290,7 +1286,7 @@ async def analyze_multibagger(request: Request, symbol: str, index: str = "nifty
             raise ValueError(f"MB Evaluator returned no result for {symbol}")
 
         # 3. Get conviction tier (same logic as scheduler)
-        from services.multibagger.mb_scheduler import _determine_conviction_tier
+        from config.multibagger.mb_scheduler import _determine_conviction_tier
         conviction_tier = _determine_conviction_tier(result)
         
         # 4. Prepare context for mb_result.html
@@ -1393,13 +1389,25 @@ async def analyze_common(
             full_report = analysis_data.get("full_report", {})
             selected_profile_name = full_report.get("best_fit", "short_term")
             
-            # ✅ Cache ALL 4 horizon scores from the full analysis
+            # ✅ Cache ALL horizon scores from the full analysis
             profiles = full_report.get("profiles", {})
             FULL_HORIZON_SCORES[symbol] = {
                 h: profiles[h].get("final_score", 0)
-                for h in ["intraday", "short_term", "long_term", "multibagger"]
-                if h in profiles
+                for h in ["intraday", "short_term", "long_term"]
             }
+            
+            # ✅ ADDITION: Also fetch Multibagger score from DB for dash "confluence dots"
+            try:
+                from config.multibagger.mb_db_model import MultibaggerCandidate
+                _mb_db = SessionLocal()
+                try:
+                    mb_cand = _mb_db.query(MultibaggerCandidate).filter_by(symbol=symbol).first()
+                    FULL_HORIZON_SCORES[symbol]["multibagger"] = mb_cand.final_score or 0 if mb_cand else 0
+                finally:
+                    _mb_db.close()
+            except Exception as e:
+                logger.warning(f"[{symbol}] Failed to fetch MB score for cache: {e}")
+                FULL_HORIZON_SCORES[symbol]["multibagger"] = 0
         
         # ✅ Extract data for template
         full_report = analysis_data.get("full_report", {})
@@ -1592,6 +1600,7 @@ async def analyze_common(
             "reasons": [trade_plan.get("reason", "")],
             "strategy_report": analysis_data.get("strategy_report", {}),
             "all_horizon_scores": FULL_HORIZON_SCORES.get(symbol, {}),  # ✅ Global scores for toggle buttons
+            "trade_direction": trade_plan.get("metadata", {}).get("direction", "bullish"),
         }
         logger.debug(f"analysis data for {symbol}: {analysis_data}")
         return templates.TemplateResponse("result.html", context)
@@ -1614,6 +1623,7 @@ async def analyze_common(
             "meta_scores": {},
             "strategy_report": {},
             "all_horizon_scores": {},
+            "trade_direction": "bullish",
         })
 
 @app.post("/analyze", response_class=HTMLResponse)

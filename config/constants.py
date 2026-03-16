@@ -12,7 +12,7 @@ ENABLE_CACHE = False
 ENABLE_CACHE_WARMER = os.getenv("ENABLE_CACHE_WARMER", "false").lower() == "true"
 ENABLE_JSON_ENRICHMENT = os.getenv("ENABLE_JSON_ENRICHMENT", "true").lower() == "true"
 ENABLE_VOLATILITY_QUALITY = True
-NSE_UNIVERSE_CSV = "data/NSEStock.csv"
+NSE_UNIVERSE_CSV = "data/nifty500.csv"
 
 
 # ==========================OLD==================================

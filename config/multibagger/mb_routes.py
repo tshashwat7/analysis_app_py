@@ -1,4 +1,4 @@
-# services/multibagger/mb_routes.py
+# config/multibagger/mb_routes.py
 """
 Multibagger API Routes
 ========================
@@ -6,7 +6,7 @@ FastAPI router for the MB module. Reads exclusively from
 MultibaggerCandidate table — never touches signal_cache.
 
 INTEGRATION in main.py:
-    from services.multibagger.mb_routes import mb_router
+    from config.multibagger.mb_routes import mb_router
     app.include_router(mb_router)
 
 ENDPOINTS:
@@ -24,10 +24,10 @@ from sqlalchemy.orm import Session
 
 from config.config_utility.market_utils import get_current_utc
 from services.db import get_db
-from services.multibagger.mb_db_model import MultibaggerCandidate
+from config.multibagger.mb_db_model import MultibaggerCandidate
 # cycle_status is owned by mb_scheduler (the authoritative writer).
 # Imported here so /status reads live values without a circular import.
-from services.multibagger.mb_scheduler import cycle_status
+from config.multibagger.mb_scheduler import cycle_status
 
 logger    = logging.getLogger(__name__)
 mb_router = APIRouter(prefix="/multibagger", tags=["Multibagger"])
@@ -55,6 +55,7 @@ def _row_to_dict(row: MultibaggerCandidate) -> dict:
         "last_evaluated":       row.last_evaluated.isoformat() if row.last_evaluated else None,
         "re_evaluate_date":     row.re_evaluate_date.isoformat() if row.re_evaluate_date else None,
         "prev_conviction_tier": row.prev_conviction_tier,
+        "entry_trigger":        row.entry_trigger,
         "tier_changed_at":      row.tier_changed_at.isoformat() if row.tier_changed_at else None,
     }
 
@@ -103,7 +104,7 @@ def get_candidate(symbol: str, db: Session = Depends(get_db)):
 @mb_router.get("/status", response_model=dict)
 def get_status():
     """Return last cycle metadata and next scheduled run time."""
-    from services.multibagger.mb_scheduler import _next_sunday_ist, _now_ist
+    from config.multibagger.mb_scheduler import _next_sunday_ist, _now_ist
     return {
         **cycle_status,
         "next_scheduled_run": _next_sunday_ist().isoformat(),
@@ -118,7 +119,7 @@ def trigger_manual_run():
     Intended for admin/testing use only — not to be called during market hours.
     """
     import threading
-    from services.multibagger.mb_scheduler import run_mb_cycle
+    from config.multibagger.mb_scheduler import run_mb_cycle
 
     def _background():
         try:

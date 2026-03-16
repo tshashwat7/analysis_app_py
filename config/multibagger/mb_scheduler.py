@@ -1,4 +1,4 @@
-# services/multibagger/mb_scheduler.py
+# config/multibagger/mb_scheduler.py
 """
 Multibagger Scheduler — Weekly Orchestrator
 =============================================
@@ -15,7 +15,7 @@ THREAD SAFETY:
 
 INTEGRATION:
     In main.py lifespan startup:
-        from services.multibagger.mb_scheduler import start_mb_scheduler
+        from config.multibagger.mb_scheduler import start_mb_scheduler
         start_mb_scheduler()
 
 UNIVERSE:
@@ -65,12 +65,11 @@ def _next_sunday_ist() -> datetime:
     Return the next Sunday midnight IST.
 
     If called on a Sunday (weekday == 6), returns today at midnight IST
-    (days_ahead = 0 → scheduled for today, not next week).
-    Fix: use `< 0` not `<= 0` so Sunday runs today.
+    (days_ahead = 0 → scheduled for today, not next week)
     """
     now        = _now_ist()
     days_ahead = 6 - now.weekday()   # Monday=0 … Sunday=6
-    if days_ahead < 0:              # Any negative (already past) — push to next week
+    if days_ahead <= 0:              # Already Sunday (today) or past — push to next week
         days_ahead += 7
 
     # Replace to midnight of target day
@@ -95,7 +94,7 @@ def _load_universe() -> List[str]:
         with open(NSE_UNIVERSE_CSV, newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                sym = row.get("SYMBOL") or row.get("Symbol") or row.get("ticker")
+                sym = row.get("SYMBOL") or row.get("Symbol") or row.get("symbol") or row.get("ticker")
                 if sym:
                     symbols.append(sym.strip())
         logger.info(f"[MB Scheduler] Loaded {len(symbols)} symbols from {NSE_UNIVERSE_CSV}")
@@ -109,19 +108,19 @@ def _load_universe() -> List[str]:
 # MAIN PIPELINE FUNCTIONS
 # =============================================================================
 
-# Logic moved to services.multibagger.multibagger_screener.worker_eval_single
+# Logic moved to config.multibagger.multibagger_screener.worker_eval_single
 # for thread safety and reuse.
 
 
 def _run_phase2(symbol: str, fundamentals: dict, indicators: dict, patterns: dict) -> Optional[Dict]:
     """Run Phase 2 resolver and return result dict."""
-    from services.multibagger.multibagger_evaluator import run_mb_resolver
+    from config.multibagger.multibagger_evaluator import run_mb_resolver
     return run_mb_resolver(symbol, fundamentals, indicators, patterns)
 
 
 def _determine_conviction_tier(result: dict) -> Optional[str]:
     """Map final_decision_score + confidence to conviction tier."""
-    from services.multibagger.multibagger_config import MULTIBAGGER_CONFIG
+    from config.multibagger.multibagger_config import MULTIBAGGER_CONFIG
     tiers = MULTIBAGGER_CONFIG["output_schema"]["conviction_tier"]
 
     score = result.get("final_decision_score", 0)
@@ -136,7 +135,7 @@ def _determine_conviction_tier(result: dict) -> Optional[str]:
 def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str]):
     """Write or update a MultibaggerCandidate row."""
     from services.db import SessionLocal
-    from services.multibagger.mb_db_model import MultibaggerCandidate
+    from config.multibagger.mb_db_model import MultibaggerCandidate
 
     db = SessionLocal()
     try:
@@ -161,6 +160,9 @@ def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str])
         row.gatekeeper_passed_at = now
         row.rejection_reason     = None
         row.last_evaluated       = now
+        # Populate entry_trigger and hold duration from resolver result
+        row.entry_trigger         = result.get("entry_trigger", "TECHNICAL_SETUP")
+        row.estimated_hold_months = result.get("estimated_hold_months")
 
         # Build thesis dict
         opp = result.get("opportunity", {})
@@ -176,7 +178,6 @@ def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str])
             row.tier_changed_at      = now
 
         # Estimate re-evaluation date (4 weeks)
-        from datetime import timedelta
         row.re_evaluate_date = now + timedelta(weeks=4)
 
         db.commit()
@@ -191,7 +192,7 @@ def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str])
 def _reject_candidate(symbol: str, reason: str):
     """Write Phase 1 rejection to DB (preserves historical record)."""
     from services.db import SessionLocal
-    from services.multibagger.mb_db_model import MultibaggerCandidate
+    from config.multibagger.mb_db_model import MultibaggerCandidate
 
     db = SessionLocal()
     try:
@@ -228,7 +229,7 @@ def run_mb_cycle():
     Execute one full MB pipeline cycle over the entire universe.
     Phase 1 (Bulk) → filter → Phase 2 (Sequential/Hybrid) → upsert.
     """
-    from services.multibagger.multibagger_screener import run_bulk_screener
+    from config.multibagger.multibagger_screener import run_bulk_screener
     from services.db import SessionLocal, StockMeta
 
     logger.info("[MB Scheduler] ▶ Starting weekly MB cycle")

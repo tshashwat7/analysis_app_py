@@ -12,7 +12,7 @@ Nothing here is imported at runtime.
 # =============================================================================
 # Add this import near the other model imports, BEFORE init_db() is defined:
 #
-#   from services.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
+#   from config.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
 #
 # SQLAlchemy's Base.metadata.create_all() will auto-create the
 # multibagger_candidates table the next time init_db() runs on startup.
@@ -143,8 +143,8 @@ Nothing here is imported at runtime.
 # =============================================================================
 # Add these imports near the top of main.py:
 #
-#   from services.multibagger.mb_routes import mb_router
-#   from services.multibagger.mb_scheduler import start_mb_scheduler
+#   from config.multibagger.mb_routes import mb_router
+#   from config.multibagger.mb_scheduler import start_mb_scheduler
 #
 # Register the router (alongside existing routers):
 #   app.include_router(mb_router)

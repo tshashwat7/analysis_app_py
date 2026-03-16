@@ -1,8 +1,11 @@
 # 📈 Pro Stock Analyzer & Trading Engine
 
-An institutional-grade **Algorithmic Trading System** built with a **Hybrid Data Architecture** for the Indian Market (NSE). A modular, end-to-end **Stock Analysis + Trade Decision System** built using FastAPI, AG Grid, pandas, yfinance, and custom scoring logic. This fully modular engine combines high-frequency technical analysis, fundamental screening, and a **Pattern-Aware Trade Intelligence Layer** to generate actionable trade plans.
+An institutional-grade **Algorithmic Trading System** built with a **Hybrid Data Architecture** for the Indian Market (NSE). A modular, end-to-end **Stock Analysis + Trade Decision System** built using FastAPI, AG Grid, pandas, yfinance, and custom scoring logic. The system processes a stock from **Raw OHLCV → Actionable Trade Plan** using a multi-layer decision pipeline typically found on proprietary trading desks.
 
-The system processes a stock from **Raw OHLCV → Actionable Trade Plan** using a multi-layer decision pipeline typically found on proprietary trading desks.
+## 🚀 Key Differentiators
+- **Multi-Factor Score Synergy**: Combines Technical (price/volume), Fundamental (ratios/growth), and Hybrid (proprietary) pillars into a unified confidence score.
+- **Specialized Multibagger Pipeline**: Dedicated weekly cycle with multithreaded bulk screening (NSE_500 in < 2 mins) and deep evaluation for high-conviction long-term plays.
+- **Smart Decision Matrix**: 8-Phase resolver pipeline that filters noise and ensures setups meet structural and market-cap requirements before issuing signals.
 
 > **Core Philosophy:** Most scanners only look at indicators. This engine understands **Market Structure**. Price does not move randomly—it follows geometry (Cup depth, Flag poles, Box ranges). This engine quantifies that geometry.
 
@@ -38,9 +41,15 @@ It overrides generic ATR targets with **Pattern Geometry**:
 * **Dynamic Stops:** Stops are auto-tuned based on Volatility Personality.
 * **Pattern-Aware Time:** Uses "Pattern Physics" to estimate holding time.
 
+#### Phase 1: Bulk Screener
+Processes the entire universe in parallel using worker threads, applying "Hard Gates" (listing age, price caps, sector exclusions).
+
+#### Phase 2: Detailed Evaluator
+isolated specialized brain scoring 4 Pillars (Growth, Profitability, Solvency, Technicals) using MB-specific config bypass for performance.
+
 ---
 
-## 🏗️ High-Level Architecture
+### 🏛️ System Architecture
 
 ```mermaid
 graph TD
@@ -234,7 +243,7 @@ Implemented in `data_fetch.py` to ensure sub-millisecond response times:
 
 ---
 
-## � Detailed File Responsibilities
+## 🗄️ Detailed File Responsibilities
 
 ### 1. The Core Engine (The Brain)
 | File | Responsibility |
@@ -259,6 +268,9 @@ Implemented in `data_fetch.py` to ensure sub-millisecond response times:
 | `config/strategy_matrix_config.py` | Evaluates stock DNA to categorize it into styles: CANSLIM, Swing, Long-term, Scalp. |
 | `config/technical_score_config.py` | Registry of 40+ TA indicators with custom dynamic scoring weights per horizon. |
 | `config/fundamental_score_config.py` | Defines exactly which financial metrics matter and how to parse them. |
+| [main.py](file:///d:/stockviedeo/stock-analyzer-app/main.py) | **The Web Controller.** Entry Point / FastAPI app + Analysis worker. |
+| [services/multibagger/](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/) | **MB Full Module.** Multithreaded bulk screening + MB Brain evaluator. |
+| [config/](file:///d:/stockviedeo/stock-analyzer-app/config/) | **Central Config.** 6 Pillar Configs + MB Specific Scoring Configs. |
 | `config/constants.py` | Contains system constants, magic numbers, string enums, and default paths. |
 | `config/market_utils.py` | Centralizes timezone parsing, enforcing uniform IST (Indian Standard Time) datetimes system-wide. |
 

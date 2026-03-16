@@ -1,4 +1,4 @@
-# services/multibagger/multibagger_evaluator.py
+# config/multibagger/multibagger_evaluator.py
 """
 Multibagger Evaluator — Phase 2
 =================================
@@ -56,13 +56,13 @@ from services.signal_engine import (
     compute_opportunity_score,
 )
 
-from services.multibagger.multibagger_master_config import (
+from config.multibagger.multibagger_master_config import (
     MB_MASTER_CONFIG,
     MB_HORIZON_PILLAR_WEIGHTS,
     MB_HYBRID_PILLAR_COMPOSITION,
 )
-from services.multibagger.multibagger_confidence_config import MB_CONFIDENCE_CONFIG
-from services.multibagger.multibagger_config import MULTIBAGGER_CONFIG
+from config.multibagger.multibagger_confidence_config import MB_CONFIDENCE_CONFIG
+from config.multibagger.multibagger_config import MULTIBAGGER_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def mb_compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
     Returns the same dict shape so ConfigResolver's scoring pipeline
     consumes it identically.
     """
-    from services.multibagger.multibagger_fundamental_score_config import (
+    from config.multibagger.multibagger_fundamental_score_config import (
         MB_HORIZON_METRIC_INCLUSION,
         MB_HORIZON_FUNDAMENTAL_WEIGHTS,
         MB_METRIC_WEIGHTS,
@@ -206,7 +206,7 @@ def mb_compute_technical_score(indicators: dict, horizon: str) -> dict:
         # Dual-category routing: metrics in both trend+momentum use "_momentum" suffix
         # for their momentum weight key — see multibagger_technical_score_config.py header.
     """
-    from services.multibagger.multibagger_technical_score_config import (
+    from config.multibagger.multibagger_technical_score_config import (
         MB_TECH_HORIZON_METRIC_INCLUSION,
         MB_HORIZON_TECHNICAL_WEIGHTS,
         MB_TECH_METRIC_WEIGHTS,
@@ -543,9 +543,21 @@ def run_mb_resolver(
         tech_score   = scoring.get("technical",    {}).get("score", 0.0)
         fund_score   = scoring.get("fundamental",  {}).get("score", 0.0)
         hybrid_score = scoring.get("hybrid",       {}).get("score", 0.0)
-        confidence   = eval_ctx.get("confidence",  {}).get("clamped", 0)
+        conf_info    = eval_ctx.get("confidence",  {})
+        confidence   = conf_info.get("clamped", 0)
         setup        = eval_ctx.get("setup",       {}).get("type", "GENERIC")
-        strategy     = eval_ctx.get("strategy",    {}).get("name")
+        strategy     = eval_ctx.get("strategy",    {}).get("primary_strategy")
+        
+        # Extract estimated_hold_months from strategy config
+        _strategy_cfg         = MB_MASTER_CONFIG.get("strategy_matrix", {}).get(strategy or "", {})
+        estimated_hold_months = _strategy_cfg.get("estimated_hold_months")
+
+        # ✅ FIX: Extract entry_trigger from risk_candidates dict
+        risk_info = eval_ctx.get("risk_candidates", {})
+        if risk_info.get("rr_source") == "pattern":
+            entry_trigger = risk_info.get("primary_pattern") or "PATTERN_MATCH"
+        else:
+            entry_trigger = "TECHNICAL_SETUP"
 
         eligibility = calculate_structural_eligibility(
             tech_score, fund_score, hybrid_score,
@@ -575,18 +587,20 @@ def run_mb_resolver(
         )
 
         return {
-            "status":               "SUCCESS",
-            "symbol":               symbol,
-            "final_score":          eligibility,
-            "final_decision_score": final_decision_score,
-            "technical_score":      tech_score,
-            "fundamental_score":    fund_score,
-            "hybrid_score":         hybrid_score,
-            "confidence":           confidence,
-            "setup":                setup,
-            "strategy":             strategy,
-            "eval_ctx":             eval_ctx,
-            "opportunity":          opportunity,
+            "status":                 "SUCCESS",
+            "symbol":                 symbol,
+            "final_score":            eligibility,
+            "final_decision_score":   final_decision_score,
+            "technical_score":        tech_score,
+            "fundamental_score":      fund_score,
+            "hybrid_score":           hybrid_score,
+            "confidence":             confidence,
+            "setup":                  setup,
+            "strategy":               strategy,
+            "entry_trigger":          entry_trigger,
+            "estimated_hold_months":  estimated_hold_months,
+            "eval_ctx":               eval_ctx,
+            "opportunity":            opportunity,
         }
 
     except RuntimeError as e:

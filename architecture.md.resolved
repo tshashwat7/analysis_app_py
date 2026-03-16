@@ -6,34 +6,47 @@
 graph TD
     subgraph "Entry Point"
         A["main.py<br>run_analysis()"]
+        A_MB["main.py<br>analyze_multibagger()"]
     end
     
     subgraph "Data Layer"
         B["data_fetch.py<br>fundamentals.py<br>indicators.py"]
     end
     
-    subgraph "Config Layer — 6 Horizon-Agnostic Files"
-        C1["setup_pattern_matrix_config.py<br>120KB · 3345 lines"]
-        C2["strategy_matrix_config.py<br>30KB · 806 lines"]
-        C3["confidence_config.py<br>47KB · 993 lines"]
-        C4["technical_score_config.py<br>66KB · 1921 lines"]
-        C5["fundamental_score_config.py<br>34KB · 940 lines"]
-        C6["master_config.py<br>62KB · 1585 lines"]
+    subgraph "Config Layer — Horizon-Agnostic"
+        C1["setup_pattern_matrix_config.py"]
+        C2["strategy_matrix_config.py"]
+        C3["confidence_config.py"]
+        C4["technical_score_config.py"]
+        C5["fundamental_score_config.py"]
+        C6["master_config.py"]
+        C_MB["multibagger_master_config.py<br>mb_tech/fund_score_configs"]
     end
     
     subgraph "Extraction Layer"
-        D1["ConfigExtractor<br>56KB · 1255 lines"]
-        D2["QueryOptimizedExtractor<br>97KB · 2487 lines · 85 methods"]
+        D1["ConfigExtractor"]
+        D2["QueryOptimizedExtractor"]
+        D_MB["MBQueryOptimizedExtractor<br>(Bypass super().__init__)"]
     end
     
     subgraph "Brain Layer"
-        E["ConfigResolver<br>177KB · 4188 lines · 74 methods"]
-        F["signal_engine.py<br>52KB · 1341 lines"]
+        E["ConfigResolver"]
+        F["signal_engine.py"]
+        MB_E["multibagger_evaluator.py<br>(Isolated Brain)"]
+    end
+    
+    subgraph "MB Module (Weekly Cycle)"
+        MB_S["mb_scheduler.py<br>(Phase 1 Search)"]
+        MB_D["mb_routes.py<br>(Dashboard)"]
     end
     
     subgraph "Execution Layer"
-        G["trade_enhancer.py<br>49KB · 1203 lines"]
+        G["trade_enhancer.py"]
         H["generate_trade_plan()"]
+    end
+
+    subgraph "Persistence"
+        DB[("SQLite Cache / DB<br>SignalCache / MBCandidate")]
     end
     
     A --> B
@@ -45,6 +58,18 @@ graph TD
     E --> G
     G --> H
     H --> A
+
+    A_MB --> B
+    B --> MB_E
+    C_MB --> D_MB
+    D_MB --> MB_E
+    MB_E --> A_MB
+    
+    MB_S --> B
+    MB_S --> MB_E
+    MB_E --> DB
+    DB --> A
+    DB --> A_MB
 ```
 
 ---
@@ -176,6 +201,20 @@ _build_execution_context():
     └── _can_execute()                # Final go/no-go
 ```
 
+### Multibagger Module (Liquid Hybrid Pipeline)
+
+The Multibagger module operates as a parallel, specialized pipeline for high-conviction, long-term plays.
+
+#### Phase 1: Bulk Screener ([multibagger_screener.py](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/multibagger_screener.py))
+- **Multithreaded Bulk Scan**: Processes the entire `NSE_500` or custom universe in parallel (default 10 worker threads).
+- **Hard Gatekeeper**: Filters based on Listing Age (min 5 years), Price Caps, Sector Exclusions, and "Distance from High" (max 25% from 52-week high).
+- **Efficiency**: Only symbols passing Phase 1 proceed to the resource-heavy Phase 2.
+
+#### Phase 2: Detailed Evaluator ([multibagger_evaluator.py](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/multibagger_evaluator.py))
+- **Isolated Brain**: Uses a custom `MBQueryOptimizedExtractor` that bypasses the main pipeline's global state to avoid circular dependencies.
+- **Deep Scoring**: Evaluates 4 Pillars (Growth, Profitability, Solvency, Technicals) using specialized MB scoring logic.
+- **Persistence**: Results are upserted into the `MultibaggerCandidate` table (SQLite).
+
 ### Signal Engine ([signal_engine.py](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py))
 
 Orchestrator that **triggers** the resolver:
@@ -272,6 +311,7 @@ sequenceDiagram
 | [config_helpers.py](file:///d:/stockviedeo/stock-analyzer-app/config/config_helpers.py) | config/ | 580 | 21KB | Resolver factory + context builders |
 | [signal_engine.py](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py) | services/ | 1341 | 52KB | Profiling + trade plan orchestrator |
 | [trade_enhancer.py](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py) | services/ | 1203 | 49KB | Execution enhancement |
-| [main.py](file:///d:/stockviedeo/stock-analyzer-app/main.py) | root | 1573 | 71KB | FastAPI app + run_analysis |
+| [main.py](file:///d:/stockviedeo/stock-analyzer-app/main.py) | root | ~1850 | 83KB | FastAPI app + run_analysis |
+| [multibagger/](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/) | services/ | ~2200 | 110KB | MB Full Module (15 files) |
 
-**Total core codebase: ~22,217 lines across 13 files**
+**Total core codebase: ~24,500 lines across 28 files**

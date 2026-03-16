@@ -231,7 +231,7 @@ def enforce_timezone_on_paper_trade(target, context):
 # 4. Create Tables
 def init_db():
     # Lazy import — avoids circular import (mb_db_model imports Base from db.py)
-    from services.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
+    from config.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
     Base.metadata.create_all(bind=engine)
     migrate_add_selected_horizon()
 

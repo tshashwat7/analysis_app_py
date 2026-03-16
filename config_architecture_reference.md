@@ -150,8 +150,20 @@ graph TD
 ---
 
 ### 6. [fundamental_score_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/fundamental_score_config.py) — **The Fundamental Scorer**
+### Layer 2 Optimization: MB Bypassing
 
-**Owns:** Which fundamental metrics apply per horizon, category weights, per-metric weights, and scoring computation.
+The `MBQueryOptimizedExtractor` implements a critical optimization for the weekly bulk screening cycle:
+
+-   **super().__init__ Bypass**: Unlike the standard extractor, it **does not** call its parent constructor.
+-   **Why?**: The standard `ConfigExtractor` builds heavy internal mapping objects for all 4 horizons. Since the MB cycle only cares about one specific scoring logic and runs for hundreds of stocks, this bypass prevents ~500ms of wasted object construction per stock.
+-   **Circular Import Safety**: By isolating the MB config extraction, we prevent `main.py` dependencies from leaking into the background scheduler.
+
+### Shared Cache: FundamentalCache (SQLite)
+
+Both the main analysis flow and the Multibagger screener share the same `FundamentalCache` table.
+
+-   **Sync Behavior**: If the main dashboard fetches fundamentals for "RELIANCE", the weekly MB screener will pick up that cached data if it's within the freshness window (default 24h).
+-   **Update Behavior**: The weekly MB run performs a bulk refresh of fundamentals for the entire `NSE_500` every weekend, pre-warming the cache for the main dashboard for Monday morning.
 
 | Export | Purpose |
 |---|---|
@@ -160,6 +172,33 @@ graph TD
 | `HORIZON_FUNDAMENTAL_WEIGHTS` | Per-horizon category weights (valuation, profitability, growth, etc.) |
 | `METRIC_WEIGHTS` | Per-metric weight within each category per horizon |
 | `compute_fundamental_score()` | Function: computes the aggregated fundamental score |
+
+---
+
+### 7. [multibagger_master_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/multibagger_master_config.py) — **The Multibagger Screener's Rulebook**
+
+**Owns:** Specific gate thresholds, scoring adjustments, and execution parameters tailored for the weekly multibagger screening process.
+**Does NOT own:** General trade execution, risk management, or indicator settings used by the main application.
+
+| Section | Scope | Purpose |
+|---|---|---|
+| `MB_GATES` | Global | Specific entry/exit gates for multibagger candidates (e.g., min market cap, max debt-to-equity) |
+| `MB_SCORING_ADJUSTMENTS` | Global | Adjustments to fundamental/technical scores for MB context |
+| `MB_EXECUTION_PARAMS` | Global | Parameters for MB-specific actions (e.g., watchlist addition criteria) |
+
+---
+
+### 8. [mb_fundamental_score_config.py](file:///d:/stockviedeo/stock-analyzer-app/config/mb_fundamental_score_config.py) — **The Multibagger Fundamental Scorer**
+
+**Owns:** Which fundamental metrics apply for multibagger screening, category weights, per-metric weights, and scoring computation.
+
+| Export | Purpose |
+|---|---|
+| `MB_METRIC_REGISTRY` | Fundamental metric metadata specific to MB screening |
+| `MB_HORIZON_METRIC_PARTICIPATION` | Which metrics are included/excluded for MB screening |
+| `MB_HORIZON_FUNDAMENTAL_WEIGHTS` | Per-horizon category weights for MB (valuation, profitability, growth, etc.) |
+| `MB_METRIC_WEIGHTS` | Per-metric weight within each category for MB |
+| `compute_mb_fundamental_score()` | Function: computes the aggregated fundamental score for MB |
 
 ---
 
@@ -177,6 +216,13 @@ graph TD
 | [extract_gate_sections()](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#626-691) | [master_config](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#291-373) global + horizon entry_gates | `structural_gates`, `execution_rules`, `opportunity_gates`, `horizon_structural_gates`, `horizon_opportunity_gates`, `horizon_execution_rules` |
 | [extract_matrix_sections()](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#692-878) | `setup_pattern_matrix_config` + `strategy_matrix_config` | `setup_pattern_matrix`, `pattern_metadata`, `pattern_scoring_thresholds`, `pattern_indicator_mappings`, `default_physics`, `setup_{name}`, `setup_validation_{name}`, `pattern_{name}`, `pattern_physics_{name}`, `pattern_entry_{name}`, `pattern_invalidation_{name}`, `setup_context_{name}`, `setup_horizon_overrides_{name}`, [strategy_matrix](file:///d:/stockviedeo/stock-analyzer-app/config/strategy_matrix_config.py#770-797), `strategy_{name}`, `strategy_scoring_{name}` |
 | [extract_confidence_sections()](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#138-290) | `confidence_config` | [confidence_range](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#104-121), `adx_normalization`, [volume_modifiers](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#178-197), [universal_adjustments](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#198-220), `setup_baseline_floors`, [divergence_physics](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#274-284), `horizon_confidence_clamp`, `min_tradeable_confidence`, `high_confidence_override`, `horizon_confidence_philosophy`, `horizon_base_confidence_adjustment`, `horizon_setup_floor_overrides`, `horizon_conditional_adjustments`, `horizon_adx_confidence_bands`, `horizon_adx_confidence_penalties` |
+
+### [MBQueryOptimizedExtractor](file:///d:/stockviedeo/stock-analyzer-app/config/mb_query_optimized_extractor.py) — Multibagger Specific Extraction
+
+| Component | Source | Type | Purpose |
+|---|---|---|---|
+| 1. CONFIG | `multibagger_master_config.py`, `mb_fundamental_score_config.py` | Python Dicts | Raw requirements & weights |
+| 2. EXTRACTION | `mb_query_optimized_extractor.py` | Class-based | Logic to retrieve specific values from raw dicts |
 
 ---
 

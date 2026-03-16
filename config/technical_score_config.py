@@ -1253,7 +1253,7 @@ def compute_single_composite(
         # Extract raw or value
         raw_value = None
         if isinstance(metric_data, dict):
-            raw_value = metric_data.get("raw") or metric_data.get("value")
+            raw_value = metric_data.get("raw") if metric_data.get("raw") is not None else metric_data.get("value")
         else:
             raw_value = metric_data
         
@@ -1407,7 +1407,8 @@ def calculate_dynamic_score(metric_name: str, raw_value: Any, indicators: Dict =
             if "max" in entry and raw_float <= entry["max"]:
                 return float(entry["score"])
 
-        return float(params.get("default", 0))
+        default_entry = next((e for e in params.get("thresholds", []) if "default" in e), None)
+        return float(default_entry["default"] if default_entry else params.get("default", 0))
 
     # ================================
     # 3. MAPPING (Text values)

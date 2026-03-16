@@ -450,10 +450,9 @@ def check_pattern_invalidation(
         "pattern": None
     }
     
-    if position_type != "LONG":
-        # SHORT invalidation not implemented — only LONG positions are monitored.
-        # If SHORT trading support is added, add SHORT-specific conditions here.
+    if position_type not in ["LONG", "SHORT"]:
         return result
+
     
     if extractor is None:
         resolver = get_resolver(horizon)

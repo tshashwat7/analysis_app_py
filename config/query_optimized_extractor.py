@@ -640,6 +640,7 @@ class QueryOptimizedExtractor:
                         result = modifiers[severity]
                         if not div_applied and result["applies"] and result["adjustment"] is not None:
                             multipliers.append(result["adjustment"])
+                            self.logger.info(f"[CONF_DIAG] Applied divergence.{severity}: ×{result['adjustment']}")
                             breakdown.append(
                                 f"divergence.{severity}: ×{result['adjustment']} ({result['reason']})"
                             )
@@ -653,6 +654,7 @@ class QueryOptimizedExtractor:
                 for penalty_name, result in modifiers.get("penalties", {}).items():
                     if result["applies"] and result["adjustment"] is not None:
                         total_additive += result["adjustment"]
+                        self.logger.info(f"[CONF_DIAG] Added penalty.{penalty_name}: {result['adjustment']}, total_additive now: {total_additive}")
                         breakdown.append(
                             f"penalty.{penalty_name}: {result['adjustment']:+.1f} ({result['reason']})"
                         )
@@ -660,6 +662,7 @@ class QueryOptimizedExtractor:
                 for bonus_name, result in modifiers.get("bonuses", {}).items():
                     if result["applies"] and result["adjustment"] is not None:
                         total_additive += result["adjustment"]
+                        self.logger.info(f"[CONF_DIAG] Added bonus.{bonus_name}: {result['adjustment']}, total_additive now: {total_additive}")
                         breakdown.append(
                             f"bonus.{bonus_name}: {result['adjustment']:+.1f} ({result['reason']})"
                         )
@@ -1501,24 +1504,6 @@ class QueryOptimizedExtractor:
             "combined": combined
         }
 
-    def get_position_sizing_multiplier(self, setup_name: str) -> float:
-        """
-        Get combined position sizing multiplier for a setup.
-        
-        ⚠️ DEPRECATED: Use get_combined_position_sizing_multipliers() instead
-                    for transparent breakdown of all multiplier layers.
-        
-        This method is kept for backward compatibility but now uses the
-        new get_combined_position_sizing_multipliers() under the hood.
-        
-        Args:
-            setup_name: Setup name
-        
-        Returns:
-            Combined multiplier (global × horizon_setup × horizon_base)
-        """
-        mults = self.get_combined_position_sizing_multipliers(setup_name)
-        return mults["combined"]
     
     # ========================================================================
     # ✅ CATEGORY 1: SETUP QUERIES (ADD THESE)
@@ -1957,55 +1942,6 @@ class QueryOptimizedExtractor:
         # Use universal evaluator
         return self.evaluate_threshold(actual_value, threshold, metric_name)
     
-    def evaluate_multiple_thresholds(
-        self,
-        data: Dict[str, float],
-        requirements: Dict[str, Dict[str, Any]],
-        evaluation_type: str = "gate"
-    ) -> Tuple[bool, List[str]]:
-        """
-        ✅ NEW: Evaluate multiple metrics against thresholds.
-        
-        Convenience method for validating many metrics at once.
-        
-        Args:
-            data: Dict of {metric_name: actual_value}
-            requirements: Dict of {metric_name: threshold_config}
-            evaluation_type: "gate" or "fit_indicator"
-        
-        Returns:
-            Tuple of (all_passed: bool, failures: List[str])
-        
-        Example:
-            >>> data = {"adx": 25, "rsi": 60}
-            >>> reqs = {
-            ...     "adx": {"min": 20},
-            ...     "rsi": {"min": 50, "max": 70}
-            ... }
-            >>> passed, failures = extractor.evaluate_multiple_thresholds(data, reqs)
-            >>> print(passed)
-            True
-        """
-        failures = []
-        
-        for metric_name, threshold_config in requirements.items():
-            actual_value = data.get(metric_name)
-            
-            if actual_value is None:
-                failures.append(f"{metric_name}: missing from data")
-                continue
-            
-            passed, reason = self.check_metric_threshold(
-                metric_name,
-                actual_value,
-                threshold_config,
-                evaluation_type
-            )
-            
-            if not passed:
-                failures.append(reason)
-        
-        return len(failures) == 0, failures
     
 
     def get_trend_thresholds(self) -> Dict[str, Any]:
@@ -2357,20 +2293,6 @@ class QueryOptimizedExtractor:
         """
         return getattr(self.base_extractor, 'has_confidence_config', False)
     
-    @property
-    def current_horizon(self) -> str:
-        """Get current horizon name."""
-        return self.horizon
-    
-    @property
-    def blocked_setups_list(self) -> List[str]:
-        """Get list of setups blocked for this horizon."""
-        return list(self.base_extractor.blocked_setups)
-    
-    @property
-    def blocked_strategies_list(self) -> List[str]:
-        """Get list of strategies blocked for this horizon."""
-        return list(self.base_extractor.blocked_strategies)
 
 
 

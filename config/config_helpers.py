@@ -491,10 +491,10 @@ def get_confidence_from_context(eval_ctx: Dict) -> Tuple[int, Dict]:
     breakdown_parts.append(f"Final: {confidence_info.get('clamped', 50)}%")
     
     metadata = {
-        "base": confidence_info.get("base", 50),
+        "base": confidence_info.get("base", 0),
         "adjustments": adjustments,
-        "final": confidence_info.get("final", 50),
-        "clamped": confidence_info.get("clamped", 50),
+        "final": confidence_info.get("final", 0),
+        "clamped": confidence_info.get("clamped", 0),
         "breakdown": " → ".join(breakdown_parts)
     }
     
@@ -561,6 +561,8 @@ def check_gates_from_context(eval_ctx: Dict, confidence: float) -> Dict[str, Any
     if result["passed"]:
         result["summary"] = "All gates passed"
     else:
+        # Note: We only show the first 3 failures in the summary string to keep it concise,
+        # but the full list is available in failed_gates for diagnostics.
         result["summary"] = f"Failed: {', '.join(result['failed_gates'][:3])}"
     
     return result

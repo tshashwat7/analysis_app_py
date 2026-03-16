@@ -1,4 +1,4 @@
-# services/multibagger/mb_db_model.py
+# config/multibagger/mb_db_model.py
 """
 MultibaggerCandidate DB Model
 ==============================
@@ -6,7 +6,7 @@ Isolated SQLAlchemy table for MB screener and evaluator results.
 
 INTEGRATION:
     In services/db.py, add before init_db():
-        from services.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
+        from config.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
     SQLAlchemy's metadata.create_all() will auto-create the table on startup.
 
 DESIGN:
@@ -43,7 +43,7 @@ class MultibaggerCandidate(Base):
     # --- Setup / Strategy -----------------------------------------------
     primary_setup       = Column(String,  nullable=True)   # e.g. "QUALITY_ACCUMULATION"
     primary_strategy    = Column(String,  nullable=True)   # e.g. "quality_compounder"
-    entry_trigger       = Column(Float,   nullable=True)   # Suggested entry price
+    entry_trigger       = Column(String,  nullable=True)   # Triggering pattern name
 
     # --- Hold Context ---------------------------------------------------
     estimated_hold_months = Column(Float, nullable=True)   # From strategy config

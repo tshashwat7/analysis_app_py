@@ -2060,6 +2060,11 @@
       {% if fs >= 7 %}{% set _sc_cls = 'score-green' %}{% elif fs <= 4 %}{% set _sc_cls='score-red' %}{% else %}{% set
         _sc_cls='score-amber' %}{% endif %} <div class="header-actions">
         <span class="signal-badge signal-{{ _cat_cls }}">{{ cat }}</span>
+        {% if trade_direction %}
+        <span class="signal-badge signal-{{ 'buy' if trade_direction == 'bullish' else 'sell' }}">
+          {{ 'LONG' if trade_direction == 'bullish' else 'SHORT' }}
+        </span>
+        {% endif %}
         <div class="score-display">
           <div class="score-value {{ _sc_cls }}">{{ fs | round(1) }}</div>
           <div class="score-label">/ 10</div>
@@ -2628,8 +2633,8 @@
                 tr.get("targets",{}).get("t1") else '-' }}</div>
               {% if tr.entry and tr.get("targets",{}).get("t1") and tr.entry > 0 %}
               {% set pct1 = (tr.get("targets",{}).get("t1") - tr.entry) / tr.entry * 100 %}
-              {% if pct1 > 0 %}{% set _p1c_cls = 'exec-pct clr-green' %}{% else %}{% set _p1c_cls = 'exec-pct clr-red'
-              %}{% endif %}
+              {% set pct1_profit = pct1 if trade_direction == 'bullish' else -pct1 %}
+              {% if pct1_profit > 0 %}{% set _p1c_cls = 'exec-pct clr-green' %}{% else %}{% set _p1c_cls = 'exec-pct clr-red' %}{% endif %}
               <div class="{{ _p1c_cls }}">{{ "%.1f" | format(pct1) }}%</div>
               {% endif %}
             </div>
@@ -2639,8 +2644,8 @@
                 tr.get("targets",{}).get("t2") else '-' }}</div>
               {% if tr.entry and tr.get("targets",{}).get("t2") and tr.entry > 0 %}
               {% set pct2 = (tr.get("targets",{}).get("t2") - tr.entry) / tr.entry * 100 %}
-              {% if pct2 > 0 %}{% set _p2c_cls = 'exec-pct clr-green' %}{% else %}{% set _p2c_cls = 'exec-pct clr-red'
-              %}{% endif %}
+              {% set pct2_profit = pct2 if trade_direction == 'bullish' else -pct2 %}
+              {% if pct2_profit > 0 %}{% set _p2c_cls = 'exec-pct clr-green' %}{% else %}{% set _p2c_cls = 'exec-pct clr-red' %}{% endif %}
               <div class="{{ _p2c_cls }}">{{ "%.1f" | format(pct2) }}%</div>
               {% endif %}
             </div>

@@ -99,12 +99,10 @@ def calculate_structural_eligibility(
         # ✅ REFACTORED: Get weights via extractor
         weights = _get_horizon_pillar_weights(extractor)
         
-        # Validate inputs
-        if tech_score is None or fund_score is None or hybrid_score is None:
-            logger.warning(
-                f"[{horizon}] ⚠️ STRUCTURAL ELIGIBILITY: Missing pillar scores | "
-                f"Tech={tech_score}, Fund={fund_score}, Hybrid={hybrid_score}"
-            )
+        # Validate and sanitize inputs (Bug 1: tech/fund/hybrid could be None)
+        tech_score = tech_score or 0.0
+        fund_score = fund_score or 0.0
+        hybrid_score = hybrid_score or 0.0
         
         # Calculate weighted eligibility
         eligibility_score = (
@@ -159,18 +157,7 @@ def compute_opportunity_score(
     
     Returns:
         Opportunity scoring results with trade context
-    # NOTE: Confidence is calculated by resolver's _calculate_confidence()
-#       following the CONFIDENCE_CALCULATION_PIPELINE:
-#       1. Setup baseline floor (40-60 depending on setup)
-#       2. Horizon base adjustment (-10 for intraday, 0 for long_term)
-#       3. ADX confidence bands
-#       4. Volume modifiers (surge/drought/climax)
-#       5. Universal adjustments (divergence, trend strength)
-#       6. Horizon conditional adjustments (penalties/bonuses)
-#       7. Execution rules
-#       8. Clamp to horizon range
-#
-#       See: confidence_config.py for full configuration
+    #       See: confidence_config.py for full configuration
     """
     start_time = datetime.now().timestamp()
     
@@ -240,7 +227,7 @@ def compute_opportunity_score(
             bonus_breakdown["strategy_fit"] = fit_bonus
             
             # Bonus C: Conviction (Excess confidence over 50 floor)
-            setup_type = eval_ctx["setup"]["type"]
+            setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
             baseline_floor = extractor.get_setup_baseline_floor(setup_type)
             conviction_bonus = max(0, (confidence - baseline_floor) / 50.0)
             opp_bonus += conviction_bonus
@@ -339,6 +326,9 @@ def _create_fallback_profile(
     Returns:
         Minimal valid profile structure
     """
+    resolver = get_resolver(horizon)
+    weights = _get_horizon_pillar_weights(resolver.extractor) if resolver else {"tech": 0.33, "fund": 0.33, "hybrid": 0.34}
+    
     return {
         "structural_eligibility": {
             "score": eligibility_base,
@@ -347,7 +337,7 @@ def _create_fallback_profile(
                 "fundamental": 0,
                 "hybrid": 0
             },
-            "weights": {"tech": 0.33, "fund": 0.33, "hybrid": 0.34},
+            "weights": weights,
             "hybrid_breakdown": {}
         },
         "opportunity": {
@@ -368,7 +358,7 @@ def _create_fallback_profile(
         "eval_ctx": None,
         "metric_details": [],
         "applied_penalties": [],
-        "architecture": "v14.1-fallback",
+        "architecture": "v15.0-signal-separation",
         "timestamp": datetime.now().timestamp(),
         "status": "FAILED",
         "error": error_reason
@@ -456,9 +446,14 @@ def compute_all_profiles(
                 fundamental = scoring.get("fundamental", {})
                 hybrid = scoring.get("hybrid", {})
 
-                tech_score = technical.get("score", 0.0)
-                fund_score = fundamental.get("score", 0.0)
-                hybrid_score = hybrid.get("score", 0.0)
+                tech_score = technical.get("score")
+                if tech_score is None: tech_score = 0.0
+
+                fund_score = fundamental.get("score")
+                if fund_score is None: fund_score = 0.0
+
+                hybrid_score = hybrid.get("score")
+                if hybrid_score is None: hybrid_score = 0.0
 
                 tech_penalties = technical.get("penalties", [])
 
@@ -721,14 +716,8 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     setup_type      = eval_ctx.get("setup", {}).get("type", "GENERIC")
 
     # ── Setup intent classification ──────────────────────────────────────
-    if "BREAKOUT" in setup_type or "MOMENTUM" in setup_type:
-        signal_intent = "BREAKOUT"
-    elif "TREND" in setup_type or "PULLBACK" in setup_type:
-        signal_intent = "TREND_FOLLOWING"
-    elif "ACCUMULATION" in setup_type or "VALUE" in setup_type:
-        signal_intent = "ACCUMULATION"
-    else:
-        signal_intent = "GENERIC"
+    suffix = "BUY" if direction == "bullish" else "SELL" if direction == "bearish" else "HOLD"
+    signal_intent = f"{setup_type}_{suffix}"
 
     # ── Resolve primary pattern presence ─────────────────────────────────
     primary_found = bool(
@@ -749,7 +738,7 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     # LAYER 0: STRUCTURE GATE  (highest priority — no overrides)
     # "Does a tradeable entry structure exist?"
     # ════════════════════════════════════════════════════════════════════
-    if setup_type == "GENERIC" and not primary_found:
+    if (setup_type == "GENERIC" or not is_atr_fallback) and not primary_found:
         plan.update({
             "trade_signal":      "WATCH",
             "setup_signal":      "WATCH",
@@ -905,13 +894,14 @@ def apply_rr_validation(exec_ctx: Dict[str, Any], extractor) -> None:
 def generate_trade_plan(
     symbol: str,
     winner_profile: Dict = None,
-    indicators: Dict = {},
-    fundamentals: Dict = {},
+    indicators: Dict = None,
+    fundamentals: Dict = None,
     horizon: str = "short_term",
     macro_trend_status: str = "N/A",
     capital: float = 100000
 ) -> Dict[str, Any]:
-
+    indicators = indicators or {}
+    fundamentals = fundamentals or {}
     METRICS.set_current_symbol(symbol)
     resolver = get_resolver(horizon)
     extractor = resolver.extractor
@@ -995,8 +985,11 @@ def generate_trade_plan(
             )
 
         # ✅ POPULATE SETUP & CONFIDENCE FIELDS IMMEDIATELY
-        confidence_data = eval_ctx["confidence"]
-        plan["setup_type"] = eval_ctx["setup"]["type"]
+        confidence_data = eval_ctx.get("confidence", {
+            "base": 50, "clamped": 50, "final": 50,
+            "horizon_adjustment": 0, "adjustments": {}, "divergence_multiplier": 1.0
+        })
+        plan["setup_type"] = eval_ctx.get("setup", {}).get("type", "GENERIC")
         plan["base_confidence"] = confidence_data["base"]
         plan["final_confidence"] = confidence_data["clamped"]
         plan["setup_confidence"] = confidence_data["base"]  # Same as base
@@ -1120,23 +1113,23 @@ def generate_trade_plan(
         plan["confidence_history"] = [
             {
                 "step": "base_floor", 
-                "value": eval_ctx["confidence"]["base"],
+                "value": confidence_data.get("base", 0),
                 "source": "setup_baseline"
             },
             {
                 "step": "after_adjustments",
-                "value": eval_ctx["confidence"].get("final", eval_ctx["confidence"]["clamped"]),
+                "value": confidence_data.get("final", confidence_data.get("clamped", 0)),
                 "source": "universal_modifiers"
             },
             {
                 "step": "final_clamped", 
-                "value": eval_ctx["confidence"]["clamped"],
+                "value": confidence_data.get("clamped", 0),
                 "source": "clamp_range_applied"
             }
         ]
 
         # Parse penalties and boosts
-        adjustments = eval_ctx["confidence"].get("adjustments", {})
+        adjustments = confidence_data.get("adjustments", {})
         breakdown = adjustments.get("breakdown", [])
 
         plan["penalties_applied"] = []
@@ -1149,7 +1142,7 @@ def generate_trade_plan(
             elif any(x in text for x in ["+", "bonus", "boost"]):
                 plan["boost_reasons"].append({"reason": entry})
 
-        plan["metric_details"] = eval_ctx["scoring"]["metric_details"]
+        plan["metric_details"] = eval_ctx.get("scoring", {}).get("metric_details", [])
 
         # ✅ POPULATE EXECUTION HINTS (NEW)
         entry_permission = exec_ctx.get("entry_permission", {})
@@ -1163,14 +1156,14 @@ def generate_trade_plan(
 
         # ✅ POPULATE ANALYTICS (NEW)
         plan["analytics"] = {
-            "strategy_fit": eval_ctx["strategy"]["fit_score"],
-            "strategy_weighted": eval_ctx["strategy"]["weighted_score"],
+            "strategy_fit": eval_ctx.get("strategy", {}).get("fit_score", 0),
+            "strategy_weighted": eval_ctx.get("strategy", {}).get("weighted_score", 0),
             "pattern_count": len(eval_ctx.get("patterns", {})),
-            "hybrid_score": eval_ctx["scoring"]["hybrid"]["score"],
-            "technical_score": eval_ctx["scoring"]["technical"]["score"],
-            "fundamental_score": eval_ctx["scoring"]["fundamental"]["score"],
-            "setup_fit": eval_ctx["setup"]["best"]["fit_score"],
-            "setup_composite": eval_ctx["setup"]["best"]["composite_score"],
+            "hybrid_score": eval_ctx.get("scoring", {}).get("hybrid", {}).get("score", 0),
+            "technical_score": eval_ctx.get("scoring", {}).get("technical", {}).get("score", 0),
+            "fundamental_score": eval_ctx.get("scoring", {}).get("fundamental", {}).get("score", 0),
+            "setup_fit": eval_ctx.get("setup", {}).get("best", {}).get("fit_score", 0),
+            "setup_composite": eval_ctx.get("setup", {}).get("best", {}).get("composite_score", 0),
             "rr_regime": exec_ctx.get("rr_regime", {}).get("regime", "unknown"),
             "volatility_regime": exec_ctx.get("market_adjusted_targets", {}).get("volatility_regime", "unknown")
         }
@@ -1180,7 +1173,7 @@ def generate_trade_plan(
             plan["debug"] = {
                 "eval_ctx_keys": list(eval_ctx.keys()),
                 "exec_ctx_keys": list(exec_ctx.keys()),
-                "confidence_calculation": eval_ctx["confidence"].get("adjustments", {}),
+                "confidence_calculation": confidence_data.get("adjustments", {}),
                 "gate_details": {
                     "structural": eval_ctx.get("structural_gates", {}).get("summary", {}),
                     "opportunity": eval_ctx.get("opportunity_gates", {}).get("overall", {})
@@ -1291,7 +1284,9 @@ def _calculate_profile_meta_score(
             continue
         
         # 2. Find metric data (check fundamentals first, then indicators)
-        metric_data = fundamentals.get(metric) or indicators.get(metric)
+        metric_data = fundamentals.get(metric)
+        if metric_data is None:
+            metric_data = indicators.get(metric)
         
         if metric_data is None:
             missing_metrics.append(metric)

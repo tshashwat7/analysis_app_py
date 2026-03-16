@@ -1,4 +1,4 @@
-# services/multibagger/multibagger_screener.py
+# config/multibagger/multibagger_screener.py
 """
 Multibagger Screener — Phase 1
 ================================
@@ -27,7 +27,7 @@ import logging
 import concurrent.futures
 from typing import Dict, List, Tuple, Optional, Any
 
-from services.multibagger.multibagger_config import MULTIBAGGER_CONFIG
+from config.multibagger.multibagger_config import MULTIBAGGER_CONFIG
 
 logger = logging.getLogger(__name__)
 

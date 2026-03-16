@@ -807,7 +807,7 @@ class ConfigResolver:
             fit_score = self._calculate_setup_fit_quality(
                 setup_name, tech_namespace, fund, patterns
             )
-
+            
             # ✅ BUG FIX #3: Skip setups that don't meet minimum fit quality
             if fit_score < MIN_FIT_SCORE:
                 rejected.append({
@@ -816,12 +816,11 @@ class ConfigResolver:
                 })
                 continue
 
-            priority = self.extractor.get_setup_priority(setup_name)
-
             candidates.append({
                 "type": setup_name,
-                "priority": priority,
-                "fit_score": fit_score,
+                "fit_score": round(fit_score, 1),
+                "priority": self.extractor.get_setup_priority(setup_name),
+                "confidence_floor": self.extractor.get_setup_baseline_floor(setup_name),
                 "require_fundamentals": require_fund
             })
 
@@ -1304,7 +1303,17 @@ class ConfigResolver:
                         "reason": f"Incompatible with {horizon} horizon (multiplier=0)"
                     })
                 
-                # Check 2: Weighted score vs threshold
+                # Check 2: Market Cap / Liquidity Requirements (via Extractor)
+                market_cap_passed, mc_reason = self._validate_strategy_market_cap_via_extractor(
+                    strategy_name, fundamentals, indicators
+                )
+                if not market_cap_passed:
+                    rejection_reasons.append({
+                        "type": "market_cap_block",
+                        "reason": mc_reason
+                    })
+
+                # Check 3: Weighted score vs threshold
                 elif weighted_score < fit_threshold:
                     rejection_reasons.append({
                         "type": "low_score",
@@ -1374,6 +1383,57 @@ class ConfigResolver:
             }
 
     
+    def _validate_strategy_market_cap_via_extractor(
+        self,
+        strategy_name: str,
+        fundamentals: Dict[str, Any],
+        indicators: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """
+        Validate strategy-level market cap and institutional requirements.
+        Pure retrieval via extractor, pure decision here.
+        """
+        requirements = self.extractor.get_strategy_market_cap_requirements(strategy_name)
+        if not requirements:
+            return True, "No market cap requirements"
+
+        # Determine market cap bracket
+        m_cap = ensure_numeric(fundamentals.get("marketCap"))
+        if m_cap is None:
+            return False, "marketCap missing"
+
+        # Bracket detection
+        bracket = None
+        if m_cap >= 20000: bracket = "mega_cap"
+        elif m_cap >= 5000: bracket = "large_cap"
+        elif m_cap >= 1000: bracket = "mid_cap"
+        elif m_cap >= 500:  bracket = "small_cap"
+        else:               bracket = "micro_cap"
+
+        bracket_reqs = requirements.get(bracket, {})
+        if not bracket_reqs:
+            # Check if bracket is explicitly blocked
+            if bracket in requirements and requirements[bracket] is None:
+                return False, f"Strategy '{strategy_name}' blocked for {bracket}"
+            return True, f"No specific requirements for {bracket}"
+
+        # Check delivery percentage
+        delivery = ensure_numeric(indicators.get("deliveryPercentage"))
+        if delivery is not None:
+            min_delivery = bracket_reqs.get("min_delivery_pct")
+            if min_delivery and delivery < min_delivery:
+                return False, f"Delivery {delivery:.1f}% < min {min_delivery}% for {bracket}"
+
+        # Check institutional ownership
+        inst_own = ensure_numeric(fundamentals.get("institutionalOwnership"))
+        if inst_own is not None:
+            min_inst = bracket_reqs.get("min_institutional_pct")
+            if min_inst and inst_own < min_inst:
+                return False, f"Institutional ownership {inst_own:.1f}% < min {min_inst}% for {bracket}"
+
+        return True, f"Market cap requirements met ({bracket})"
+
+
     def _calculate_strategy_fit_via_extractor(
         self,
         strategy_name: str,
@@ -2578,11 +2638,17 @@ class ConfigResolver:
 
         rr = None
         rr_source = None
+        primary = None
+        sl_price = None
         pattern_targets = None
         generic_targets = None
-        sl_price = None
+        direction = ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
+        
         if price > 0 and atr > 0:
-            sl_price = price - (atr * atr_mult)
+            if direction == "bearish":
+                sl_price = price + (atr * atr_mult)
+            else:
+                sl_price = price - (atr * atr_mult)
         # --------------------------------------------------
         # 1️⃣ Pattern-based RR + SL (validated patterns only)
         # --------------------------------------------------
@@ -2615,9 +2681,15 @@ class ConfigResolver:
 
                     best_target = max(targets) if targets else None
 
-                    if entry and sl_price and best_target and entry > sl_price:
-                        rr = (best_target - entry) / (entry - sl_price)
-                        rr_source = "pattern"
+                    if entry and sl_price and best_target:
+                        if direction == "bearish":
+                            if entry < sl_price and best_target < entry:
+                                rr = abs(entry - best_target) / abs(sl_price - entry)
+                                rr_source = "pattern"
+                        else:
+                            if entry > sl_price and best_target > entry:
+                                rr = (best_target - entry) / (entry - sl_price)
+                                rr_source = "pattern"
 
         # --------------------------------------------------
         # 2️⃣ Generic ATR fallback (RR + SL + Targets)
@@ -2633,16 +2705,25 @@ class ConfigResolver:
                     rr_source = "generic_atr"
                 
                 # Always calculate generic_targets as a backup
-                generic_targets = {
-                    "entry": price,
-                    "stop_loss": price - (atr * atr_mult),
-                    "t1": price + (atr * target_mult),
-                    "t2": price + (atr * target_mult * 2)
-                }
+                if direction == "bearish":
+                    generic_targets = {
+                        "entry": price,
+                        "stop_loss": price + (atr * atr_mult),
+                        "t1": price - (atr * target_mult),
+                        "t2": price - (atr * target_mult * 2)
+                    }
+                else:
+                    generic_targets = {
+                        "entry": price,
+                        "stop_loss": price - (atr * atr_mult),
+                        "t1": price + (atr * target_mult),
+                        "t2": price + (atr * target_mult * 2)
+                    }
 
         return {
             "rrRatio": round(rr, 2) if rr else None,
             "rr_source": rr_source,
+            "primary_pattern": primary if rr_source == "pattern" else None,
             "sl_price": sl_price,
             "pattern_targets": pattern_targets,
             "generic_targets": generic_targets,
@@ -3363,12 +3444,17 @@ class ConfigResolver:
         targets = risk_data.get("pattern_targets") or risk_data.get("generic_targets")
         
         # 2. Validate Price Logic – short-circuit safely
+        direction = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
+        
         if price is None or price <= 0 or sl_price is None:
             valid = False
         else:
-            valid = sl_price < price
+            if direction == "bearish":
+                valid = sl_price > price
+            else:
+                valid = sl_price < price
 
-        risk_per_share = (price - sl_price) if valid else None
+        risk_per_share = abs(price - sl_price) if valid else None
 
         # 3. Initialize Sizing Variables
         quantity = 0
@@ -3428,7 +3514,11 @@ class ConfigResolver:
         if not normalized_targets and price and risk_data.get("atr_multiple"):
              atr = ensure_numeric(eval_ctx["indicators"].get("atrDynamic"))
              if atr:
-                 normalized_targets = [price + (atr * 3.0), price + (atr * 5.0)]
+                 direction = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
+                 if direction == "bearish":
+                     normalized_targets = [price - (atr * 3.0), price - (atr * 5.0)]
+                 else:
+                     normalized_targets = [price + (atr * 3.0), price + (atr * 5.0)]
 
         # 5. Return Final Model
         return {
@@ -3514,28 +3604,54 @@ class ConfigResolver:
                     # ✅ ROOT CAUSE FIX: slAtrDynamic is ALREADY an absolute price level computed by indicators.py
                     # It is NOT a distance. Do NOT subtract it from entry again.
                     return round(sl_atr, 2), "slAtrDynamic"
+                direction = meta.get("type", "bullish")
                 atr = _safe_float(price_data.get("atrDynamic") or ind.get("atrDynamic"))
                 if atr and atr > 0:
-                    return round(entry - (atr * mult), 2), f"atrDynamic*{mult}"
-                return round(entry * 0.97, 2), "pct_fallback_3pct"
+                    if direction == "bearish":
+                        return round(entry + (atr * mult), 2), f"atrDynamic*{mult}"
+                    else:
+                        return round(entry - (atr * mult), 2), f"atrDynamic*{mult}"
+                
+                if direction == "bearish":
+                    return round(entry * 1.03, 2), "pct_fallback_3pct"
+                else:
+                    return round(entry * 0.97, 2), "pct_fallback_3pct"
 
             def _validate_and_build(
                 sl: float, t1: float, t2: float,
-                depth: float, source: str, sl_source: str, t_source: str
+                depth: float, source: str, sl_source: str, t_source: str,
+                dir_override: Optional[str] = None
             ) -> Optional[Dict]:
                 """Validates geometry and returns result dict or None."""
-                if sl >= entry:
-                    self.logger.warning(
-                        f"[{pattern_name}] SL {sl} >= entry {entry} — using ATR fallback"
-                    )
-                    return None
-                if t1 <= entry:
-                    self.logger.warning(
-                        f"[{pattern_name}] T1 {t1} <= entry {entry} — skipping"
-                    )
-                    return None
-                if t2 <= t1:
-                    t2 = round(t1 + (t1 - entry), 2)  # extend by same delta
+                direction = dir_override or meta.get("type", "bullish")
+                
+                if direction == "bearish":
+                    if sl <= entry:
+                        self.logger.warning(
+                            f"[{pattern_name}] SL {sl} <= entry {entry} (bearish) — skipping"
+                        )
+                        return None
+                    if t1 >= entry:
+                        self.logger.warning(
+                            f"[{pattern_name}] T1 {t1} >= entry {entry} (bearish) — skipping"
+                        )
+                        return None
+                    if t2 >= t1:
+                        # For bearish, t2 should be lower than t1
+                        t2 = round(t1 - abs(t1 - entry), 2)
+                else:
+                    if sl >= entry:
+                        self.logger.warning(
+                            f"[{pattern_name}] SL {sl} >= entry {entry} — using ATR fallback"
+                        )
+                        return None
+                    if t1 <= entry:
+                        self.logger.warning(
+                            f"[{pattern_name}] T1 {t1} <= entry {entry} — skipping"
+                        )
+                        return None
+                    if t2 <= t1:
+                        t2 = round(t1 + (t1 - entry), 2)  # extend by same delta
                 return {
                     "entry":     _safe_float(entry),
                     "stop_loss": _safe_float(sl),
@@ -3650,9 +3766,10 @@ class ConfigResolver:
                         t1 = round(target, 2)
                         t2 = round(target + depth * 0.618, 2)   # Fib extension
                     else:
-                        # bearish double top — short setup, return None for now
-                        # (system handles long-only; skip bearish patterns)
-                        return None
+                        # bearish double top — SL above neckline, targets below
+                        sl = round(neckline * 1.01, 2)          # 1% above neckline
+                        t1 = round(target, 2)                   # pre-calculated target (below)
+                        t2 = round(target - depth * 0.618, 2)   # fib extension downward
 
                     result = _validate_and_build(sl, t1, t2, depth,
                         source="structural", sl_source="neckline", t_source="pattern_target")
@@ -3838,19 +3955,26 @@ class ConfigResolver:
             #   (b) all structural calculations above returned None
             # Tagged clearly so UI/monitoring knows it is not structural.
             # ════════════════════════════════════════════════════════════════════
+            direction = meta.get("type", "bullish")
             atr = _safe_float(
                 ind.get("atrDynamic") or
                 price_data.get("atrDynamic") or
                 (entry * 0.02)
             )
             sl_atr, sl_atr_src = _sl_from_atr(2.0)
-            risk_atr = entry - sl_atr
+            
+            if direction == "bearish":
+                risk_atr = sl_atr - entry
+                t1_atr = round(entry - atr * 2.0, 2)
+                t2_atr = round(entry - atr * 4.0, 2)
+            else:
+                risk_atr = entry - sl_atr
+                t1_atr = round(entry + atr * 2.0, 2)
+                t2_atr = round(entry + atr * 4.0, 2)
+
             if risk_atr <= 0:
                 self.logger.error(f"[{pattern_name}] ATR fallback produced invalid SL {sl_atr}")
                 return None
-
-            t1_atr = round(entry + atr * 2.0, 2)
-            t2_atr = round(entry + atr * 4.0, 2)
 
             self.logger.warning(
                 f"[{pattern_name}][{horizon}] Using ATR fallback targets — "
