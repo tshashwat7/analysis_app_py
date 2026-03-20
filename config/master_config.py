@@ -110,7 +110,16 @@ HYBRID_METRIC_REGISTRY = {
 HYBRID_PILLAR_COMPOSITION = {
     "intraday":    {"trendConsistency": 0.40, "priceVsPrimaryTrendPct": 0.20, "fundamentalMomentum": 0.15, "earningsConsistencyIndex": 0.10, "volatilityAdjustedRoe": 0.05, "priceToIntrinsicValue": 0.05, "fcfYieldVsVolatility": 0.05},
     "short_term":  {"trendConsistency": 0.25, "fundamentalMomentum": 0.15, "volatilityAdjustedRoe": 0.15, "priceVsPrimaryTrendPct": 0.15, "earningsConsistencyIndex": 0.10, "priceToIntrinsicValue": 0.10, "fcfYieldVsVolatility": 0.10},
-    "long_term":   {"volatilityAdjustedRoe": 0.20, "priceToIntrinsicValue": 0.20, "earningsConsistencyIndex": 0.15, "fcfYieldVsVolatility": 0.15, "fundamentalMomentum": 0.10, "trendConsistency": 0.10, "priceVsPrimaryTrendPct": 0.10}
+    "long_term":   {"volatilityAdjustedRoe": 0.20, "priceToIntrinsicValue": 0.20, "earningsConsistencyIndex": 0.15, "fcfYieldVsVolatility": 0.15, "fundamentalMomentum": 0.10, "trendConsistency": 0.10, "priceVsPrimaryTrendPct": 0.10},
+    "multibagger": {
+        "fundamentalMomentum": 0.25,
+        "earningsConsistencyIndex": 0.25,
+        "priceToIntrinsicValue": 0.20,
+        "fcfYieldVsVolatility": 0.15,
+        "volatilityAdjustedRoe": 0.05,
+        "trendConsistency": 0.05,
+        "priceVsPrimaryTrendPct": 0.05,
+    }
 }
 
 # STEP 6 LAYER: Global Arbitration (Blueprint)
@@ -118,7 +127,8 @@ HYBRID_PILLAR_COMPOSITION = {
 HORIZON_PILLAR_WEIGHTS = {
     "intraday":    {"tech": 0.70, "fund": 0.00, "hybrid": 0.30},
     "short_term":  {"tech": 0.50, "fund": 0.20, "hybrid": 0.30},
-    "long_term":   {"tech": 0.30, "fund": 0.40, "hybrid": 0.30}
+    "long_term":   {"tech": 0.30, "fund": 0.40, "hybrid": 0.30},
+    "multibagger": {"tech": 0.10, "fund": 0.60, "hybrid": 0.30}
 }
 
 # ============================================================================
@@ -399,7 +409,9 @@ GATE_METRIC_REGISTRY = {
         "category": "risk_reward",
         "validation_type": "threshold",
         "description": "Risk-reward ratio",
-        "context_paths": [("risk_model", "rrRatio")]
+        "context_paths": [("risk_model", "rrRatio")],
+        "optional": True,
+        "skip_reason": "deferred_to_stage2_when_patterns_present"
     },
     
     "technicalScore": {
@@ -474,6 +486,14 @@ GATE_METRIC_REGISTRY = {
 
 
 MASTER_CONFIG = {
+    "hybrid_composition": {
+        "multi_score":  ["technical_score", "fundamental_score"],
+            "multibagger": [
+                "fundamentalMomentum", "earningsConsistencyIndex", "trendConsistency",
+                "priceToIntrinsicValue", "volatilityAdjustedRoe", "fcfYieldVsVolatility",
+                "priceVsPrimaryTrendPct"
+            ],
+    },
     # ============================================================================
     # GLOBAL CONSTANTS (Universal Physics & Logic)
     # ============================================================================
@@ -581,14 +601,9 @@ MASTER_CONFIG = {
         "calculation_engine": {
             "horizon_priority_overrides": {
                 "intraday": {
-                    # Elite Patterns (95-100) - Always win
-                    "PATTERN_DARVAS_BREAKOUT": 98,
-                    "PATTERN_FLAG_BREAKOUT": 97,
-                    "PATTERN_STRIKE_REVERSAL": 96,
-                    "PATTERN_VCP_BREAKOUT": 95,
-                    
-                    # Generic Signals (85-90)
-                    "MOMENTUM_BREAKOUT": 90,
+                    "MOMENTUM_BREAKDOWN":    80,
+                    "BEAR_TREND_FOLLOWING":  75,
+                    "MOMENTUM_BREAKOUT":     90,
                     "VOLATILITY_SQUEEZE": 88,
                     "TREND_PULLBACK": 85,
                     "REVERSAL_MACD_CROSS_UP": 82,
@@ -609,6 +624,8 @@ MASTER_CONFIG = {
                     
                     # Generic Signals (80-90)
                     "MOMENTUM_BREAKOUT": 90,
+                    "MOMENTUM_BREAKDOWN": 70,
+                    "BEAR_TREND_FOLLOWING": 65,
                     "VOLATILITY_SQUEEZE": 88,
                     "TREND_PULLBACK": 85,
                     "REVERSAL_MACD_CROSS_UP": 82,
@@ -636,6 +653,8 @@ MASTER_CONFIG = {
                     
                     # Momentum DEPRIORITIZED (55-65)
                     "MOMENTUM_BREAKOUT": 60,
+                    "MOMENTUM_BREAKDOWN": 45,
+                    "BEAR_TREND_FOLLOWING": 40,
                     "VOLATILITY_SQUEEZE": 58,
                     "PATTERN_FLAG_BREAKOUT": 65
                 }
@@ -684,6 +703,7 @@ MASTER_CONFIG = {
                 "MOMENTUM_BREAKDOWN": 0.7,
                 "SELL_AT_RANGE_TOP": 0.7,
                 "TAKE_PROFIT_AT_MID": 0.6,
+                "BEAR_TREND_FOLLOWING": 0.7,
                 "GENERIC": 0.5
             },
             "volatility_adjustments": {
@@ -946,7 +966,7 @@ MASTER_CONFIG = {
             # ✅ KEEP: Horizon-specific structural gates (universal defaults)
             "entry_gates": {
                 "structural": {
-                    "adx": {"min": 18},
+                    "adx": {"min": 20},  # ✅ Raised from 18; closes ADX dead zone vs confidence penalty
                     "atrPct": {"min": 0.3},
                     "trendStrength": {"min": 5.0},
                     "volatilityQuality": {"min": 5.0}
@@ -965,7 +985,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 65},
-                    "rrRatio": {"min": 1.0},
+                    "rrRatio": {"min": 1.5},  # ✅ Aligned with rr_gates.min_t1
                     "technicalScore": {"min": None},
                     "fundamentalScore": {"min": None}
                 }
@@ -999,7 +1019,7 @@ MASTER_CONFIG = {
                     "DEEP_PULLBACK": 1.5,
                     "MOMENTUM_BREAKOUT": 1.0
                 },
-                "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.01},
+                "atr_sl_limits": {"max_percent": 0.05, "min_percent": 0.01},  # ✅ Extended for overnight gap risk
                 "rrRatio": {"min": 1.4},
                 "horizon_t2_cap": 0.10,
                 "rr_gates": { "min_t1": 1.6, "min_t2": 2.5, "min_structural": 3.0, "execution_floor": 1.4 }
@@ -1040,7 +1060,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 60},
-                    "rrRatio": {"min": 1.2},
+                    "rrRatio": {"min": 1.6},  # ✅ Aligned with rr_gates.min_t1
                     "fundamentalScore": {"min": 3.0}
                 },
             },
@@ -1153,8 +1173,8 @@ MASTER_CONFIG = {
                 "structural": {
                     "adx": {"min": None},
                     "atrPct": {"min": 1.0},
-                    "trendStrength": {"min": 3.0},
-                    "volatilityQuality": {"min": None}
+                    "trendStrength": {"min": 4.0},   # ✅ Raised from 3.0; aligns with penalty & confidence threshold
+                    "volatilityQuality": {"min": 2.0}  # ✅ Added floor; was None
                 },
                 "execution_rules": {
                     "volatility_guards": {
@@ -1169,7 +1189,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 55},
-                    "rrRatio": {"min": 1.3},
+                    "rrRatio": {"min": 2.0},  # ✅ Aligned with rr_gates.min_t1
                     "fundamentalScore": {"min": 6.0},
                     "technicalScore": {"min": None}
                 },

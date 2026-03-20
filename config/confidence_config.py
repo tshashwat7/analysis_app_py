@@ -131,6 +131,7 @@ CONFIDENCE_CONFIG = {
                         "trendStrength": {"min": 8.0}
                     },
                     "confidence_boost": 25,
+                    "exclude_setups": ["MOMENTUM_BREAKDOWN", "BEAR_TREND_FOLLOWING"],
                     "reason": "Explosive trend momentum"
                 },
                 "strong": {
@@ -138,6 +139,7 @@ CONFIDENCE_CONFIG = {
                         "trendStrength": {"min": 6.0, "max": 8.0}
                     },
                     "confidence_boost": 15,
+                    "exclude_setups": ["MOMENTUM_BREAKDOWN", "BEAR_TREND_FOLLOWING"],
                     "reason": "Strong sustained trend"
                 },
                 "moderate": {
@@ -160,7 +162,7 @@ CONFIDENCE_CONFIG = {
         # Setup-specific baseline confidence floors (inherited unless overridden)
         "setup_baseline_floors": {
             "MOMENTUM_BREAKOUT": 55,
-            "MOMENTUM_BREAKDOWN": 55,
+            "MOMENTUM_BREAKDOWN": 48,
             "VOLATILITY_SQUEEZE": 50,
             "QUALITY_ACCUMULATION": 45,
             "QUALITY_ACCUMULATION_DOWNTREND": 40,
@@ -169,7 +171,7 @@ CONFIDENCE_CONFIG = {
             "TREND_PULLBACK": 50,
             "DEEP_PULLBACK": 48,
             "TREND_FOLLOWING": 50,
-            "BEAR_TREND_FOLLOWING": 50,
+            "BEAR_TREND_FOLLOWING": 48,
             "REVERSAL_MACD_CROSS_UP": 48,
             "REVERSAL_RSI_SWING_UP": 45,
             "REVERSAL_ST_FLIP_UP": 52,
@@ -210,7 +212,7 @@ CONFIDENCE_CONFIG = {
                     # ONLY TECHNICAL PENALTIES (No fundamental filtering)
                     # ========================================================
                     "weak_intraday_trend": {
-                        "gates": {"adx": {"max": 20}},
+                        "gates": {"adx": {"max": 19}},  # ✅ Corrected from 20; aligns with moderate band min:20
                         "confidence_penalty": -25,
                         "reason": "Weak trend - choppy intraday action"
                     },
@@ -304,11 +306,11 @@ CONFIDENCE_CONFIG = {
             "adx_confidence_bands": {
                 "explosive": {"gates": {"adx": {"min": 35}}, "confidence_boost": 20},
                 "strong": {"gates": {"adx": {"min": 25, "max": 35}}, "confidence_boost": 10},
-                "moderate": {"gates": {"adx": {"min": 18, "max": 25}}, "confidence_boost": 0}
+                "moderate": {"gates": {"adx": {"min": 20, "max": 25}}, "confidence_boost": 0}  # ✅ Raised from 18 to match structural gate
             },
             "adx_confidence_penalties": {
                 "weak": {
-                    "gates": {"adx": {"max": 17}},  # Fixed: was 18, caused double-hit with moderate min:18
+                    "gates": {"adx": {"max": 19}},  # ✅ Raised: closes dead zone 18-19; pairs with moderate min:20
                     "confidence_penalty": -15,
                     "reason": "Very weak trend - avoid intraday"
                 }
@@ -349,7 +351,7 @@ CONFIDENCE_CONFIG = {
                 "penalties": {
                     "weak_swing_trend": {
                         "gates": {"trendStrength": {"max": 3.5}},
-                        "apply_to_setups": ["TREND_PULLBACK", "TREND_FOLLOWING"],
+                        "apply_to_setups": ["TREND_PULLBACK", "TREND_FOLLOWING", "BEAR_TREND_FOLLOWING"],
                         "confidence_penalty": -20,
                         "reason": "Trend-following setup without trend"
                     },

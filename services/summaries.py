@@ -66,7 +66,8 @@ PATTERN_LIBRARY = {
 }
 
 STRATEGY_LIBRARY = {
-    "swing_trading": "Capitalizes on short-term price swings (3-10 days). We look for oversold dips in uptrends or mean-reversion setups.",
+    "swing_breakout": "Capitalizes on momentum-based price swings. We look for strong breakouts from consolidations or upper Bollinger Band breaks for short-term trend following.",
+    "swing_pullback": "Mean-reversion focused swaps. We look for oversold dips or pullbacks to key supports within established uptrends for buy-low-sell-high opportunities.",
     "day_trading": "Focuses on intraday volatility and liquidity. We look for explosive volume and range expansion for quick profits.",
     "trend_following": "The 'Big Money' approach. We ignore small fluctuations and ride the major Moving Averages (50/200) for months.",
     "momentum": "Buying strength. We look for stocks hitting new highs with high Relative Strength (RSI) and volume surges.",

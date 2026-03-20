@@ -50,6 +50,7 @@ INDICATOR_MIN_ROWS = {
     "wma40": 40,
     "wma10": 10,
     "mma12": 12,
+    "mma24": 24,
     "mma6": 6,
     "adx": 14,
     "stoch": 14,
@@ -670,7 +671,7 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
             "intraday":    {"type": "EMA", "l_s": 20, "l_l": 50},
             "short_term":  {"type": "EMA", "l_s": 20, "l_l": 50},
             "long_term":   {"type": "WMA", "l_s": 10, "l_l": 40},  # matches WMA(10/40/50) trend
-            "multibagger": {"type": "MMA", "l_s": 6,  "l_l": 12}   # matches MMA(6/12/24) trend
+            "multibagger": {"type": "MMA", "l_s": 6,  "l_l": 24}   # matches MMA(6/12/24) trend
         }.get(horizon, {"type": "EMA", "l_s": 20, "l_l": 50})
         
         # 2. Dynamic Lookback
@@ -1219,21 +1220,21 @@ def _compute_composites_legacy(indicators: Dict, horizon: str = "short_term") ->
         "intraday": ["maFastSlope", "maTrendSignal", "supertrendSignal"],
         "short_term": ["adx", "maFastSlope", "maTrendSignal", "supertrendSignal"],
         "long_term": ["adx", "maTrendSignal"],
-        "multibagger": ["maTrendSignal"]
+        "multibagger": ["adx", "maTrendSignal", "maFastSlope"]
     }
     
     momentum_metrics = {
         "intraday": ["rsi", "rsislope", "macd", "stochK"],
         "short_term": ["rsi", "rsislope", "macd", "stochK"],
         "long_term": ["rsi", "macd"],
-        "multibagger": ["rsi"]
+        "multibagger": ["rsi", "macd"]
     }
     
     volatility_metrics = {
         "intraday": ["atrPct", "bbWidth"],
         "short_term": ["atrPct", "bbWidth"],
         "long_term": ["atrPct"],
-        "multibagger": []  # No volatility for multibagger
+        "multibagger": ["atrPct"]  # Added atrPct to prevent 0 volQuality
     }
     
     # Get metrics for this horizon
@@ -1357,6 +1358,10 @@ def compute_indicators(
     ordered = [m for m in PRIORITY if m in raw_metrics] + [m for m in raw_metrics if m not in PRIORITY]
     
     required_horizons = {horizon}
+    # ⚡ STITCHING: Always include intraday for live stitching if we're in a slow horizon
+    if horizon in ["long_term", "multibagger"]:
+        required_horizons.add("intraday")
+
     for m in ordered:
         h_spec = INDICATOR_METRIC_MAP.get(m, {}).get("horizon", "default")
         if h_spec != "default": 
@@ -1369,6 +1374,15 @@ def compute_indicators(
             if raw is not None and not raw.empty:
                 dfs_cache[h] = _slice_for_speed(raw, horizon=h)
         except: pass
+
+    # Find latest live price for stitching before we start indicator logic
+    live_price = None
+    for h in ["intraday", "short_term", horizon]:
+        if h in dfs_cache and not dfs_cache[h].empty and "Close" in dfs_cache[h].columns:
+            c_vals = dfs_cache[h]["Close"].dropna()
+            if not c_vals.empty:
+                live_price = float(c_vals.iloc[-1])
+                break
 
     benchmark_df = None
     try:
@@ -1388,10 +1402,21 @@ def compute_indicators(
     
     if horizon in dfs_cache:
         try:
-            series = dfs_cache[horizon]["Close"]
+            # 🚨 SAFETY: Drop trailing NaNs from the series before indexing
+            series = dfs_cache[horizon]["Close"].dropna()
+
+            # ⚡ SMART STITCH: If weekly/monthly data is stale, append today's live price
+            if horizon in ["long_term", "multibagger"] and live_price is not None:
+                if not series.empty:
+                    last_price = float(series.iloc[-1])
+                    if abs(live_price - last_price) > 0.01: # Use 0.01 tolerance for float
+                        # Append a pseudo-candle for the current "incomplete" period
+                        stitch_idx = pd.Timestamp.now(tz=series.index.tz)
+                        series = pd.concat([series, pd.Series([live_price], index=[stitch_idx])])
+
             indicators["symbol"] = {"value": symbol, "score":0, "alias":"Ticker", "desc": "Stock symbol"}
             # 1. Current Price
-            if len(series) > 0:
+            if not series.empty:
                 price = float(series.iloc[-1])
                 indicators["price"] = {"value": round(price, 2), "score": 0, "alias": "Price", "desc": "Current"}
 
@@ -1730,13 +1755,13 @@ generic_to_legacy = {
 duplicate_mappings = {
     # Moving Average Slopes
     'maFastSlope': ['ema20Slope', 'wma_20_slope', 'mma_20_slope'],
-    'maSlowSlope': ['ema50Slope', 'wma50Slope', 'mma_50_slope'],
+    'maSlowSlope': ['ema50Slope', 'wma50Slope', 'mma_24_slope'],
     
     # Moving Average Crossovers
     'maCrossSignal': ['ema20_50Cross', 'wma_10_40_cross', 'mma_6_12_cross'],
     
     # Moving Average Trend Signals
-    'maTrendSignal': ['ema_20_50_200_trend', 'wma_10_40_50_trend', 'mma_6_12_12_trend'],
+    'maTrendSignal': ['ema_20_50_200_trend', 'wma_10_40_50_trend', 'mma_6_12_24_trend'],
     
     # Price vs Primary Trend
     'priceVsPrimaryTrendPct': ['price_vs_200ema_pct', 'price_vs_50wma_pct', 'price_vs_12mma_pct'],
@@ -1814,7 +1839,7 @@ GENERIC_KEYS = {
             'intraday': 'ema50Slope',
             'short_term': 'ema50Slope',
             'long_term': 'wma50Slope',
-            'multibagger': 'mma_50_slope'
+            'multibagger': 'mma_24_slope'
         },
         'description': 'Slow MA velocity (long-term momentum)'
     },
@@ -1834,7 +1859,7 @@ GENERIC_KEYS = {
             'intraday': 'ema_20_50_200_trend',
             'short_term': 'ema_20_50_200_trend',
             'long_term': 'wma_10_40_50_trend',
-            'multibagger': 'mma_6_12_12_trend'
+            'multibagger': 'mma_6_12_24_trend'
         },
         'description': 'Overall MA alignment (1=strong up, -1=strong down)'
     },

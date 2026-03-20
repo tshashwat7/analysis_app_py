@@ -143,6 +143,7 @@ class IchimokuSignals(BasePattern):
             entry_conditions_met = (tk_cross_bull or tk_cross_bear) and (is_above_cloud or is_below_cloud)
 
             result["meta"] = {
+                "type": "bearish" if "BEAR" in signal_type else "bullish",
                 "bar_index": len(df),
                 "signal": signal_type,
                 "cloud_top": round(cloud_top, 2),

@@ -394,20 +394,20 @@ def compute_indicators_cached(
             benchmark_hash = compute_dataframe_hash(benchmark_df)
     
     # Try cache first (unless forced refresh)
-    if not force_refresh:
-        logger.debug(f"Checking cache for {symbol}:{horizon} (validate_hash={validate_data_hash})")
-        cached = cache.get(
-            symbol, 
-            horizon, 
-            df_hash=df_hash, 
-            benchmark_hash=benchmark_hash,
-            validate_hash=validate_data_hash
-        )
-        if cached is not None:
-            logger.info(f"Using cached indicators for {symbol}:{horizon}")
-            return cached
-    else:
-        logger.info(f"Force refresh enabled for {symbol}:{horizon}")
+    # if not force_refresh:
+    #     logger.debug(f"Checking cache for {symbol}:{horizon} (validate_hash={validate_data_hash})")
+    #     cached = cache.get(
+    #         symbol, 
+    #         horizon, 
+    #         df_hash=df_hash, 
+    #         benchmark_hash=benchmark_hash,
+    #         validate_hash=validate_data_hash
+    #     )
+    #     if cached is not None:
+    #         logger.info(f"Using cached indicators for {symbol}:{horizon}")
+    #         return cached
+    # else:
+    #     logger.info(f"Force refresh enabled for {symbol}:{horizon}")
     
     # Cache miss - compute indicators
     logger.info(f"Computing indicators for {symbol}:{horizon}")
@@ -418,7 +418,7 @@ def compute_indicators_cached(
     )
     
     # Store in cache
-    cache.set(symbol, horizon, indicators, patterns, df_hash, benchmark_hash)
+    # cache.set(symbol, horizon, indicators, patterns, df_hash, benchmark_hash)
     logger.info(f"Cached new indicators for {symbol}:{horizon}")
     
     return indicators, patterns

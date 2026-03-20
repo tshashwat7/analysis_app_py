@@ -34,7 +34,7 @@ MB_TECH_HORIZON_METRIC_INCLUSION = {
         "momentum": [
             "relStrengthNifty",        # Only benchmark outperformance matters
         ],
-        "volatility": [],              # Intentionally empty — zero weight
+        "volatility": ["volatilityQuality"],
         "volume": [
             "rvol",                    # Accumulation detection only
         ],
@@ -42,7 +42,7 @@ MB_TECH_HORIZON_METRIC_INCLUSION = {
             "position52w",             # 52W high breakout context
         ],
         "exclude": [
-            "volatilityQuality", "momentumStrength",
+            "momentumStrength",
             "rsi", "rsislope", "stochK", "macd", "macdCross",
             "vwapBias", "wickRejection", "gapPercent",
             "volSpikeRatio", "volSpikeSignal",
@@ -61,9 +61,9 @@ MB_HORIZON_TECHNICAL_WEIGHTS = {
     "multibagger": {
         "trend":      0.50,
         "momentum":   0.30,
-        "structure":  0.15,
+        "structure":  0.10,
         "volume":     0.05,
-        "volatility": 0.00,  # Intentional zero
+        "volatility": 0.05,
     }
 }
 
@@ -88,6 +88,8 @@ MB_TECH_METRIC_WEIGHTS = {
         "position52w": 1.00,
         # volume (sum = 1.0)
         "rvol": 1.00,
+        # volatility (sum = 1.0)
+        "volatilityQuality": 1.00,
     }
 }
 

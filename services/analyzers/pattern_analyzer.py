@@ -30,6 +30,7 @@ from services.patterns.double_top_bottom import (
     BullishNecklinePattern,
     BearishNecklinePattern,
 )
+from services.patterns.momentum_flow  import MomentumFlowPattern
 from services.fusion.pattern_fusion import merge_pattern_into_indicators
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class PatternAnalyzer:
             DeathCross(),      # alias "deathCross" — separate so matrix CONFLICTING lists work
             BullishNecklinePattern(),
             BearishNecklinePattern(),
+            MomentumFlowPattern(),
         ]
 
     def analyze(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:

@@ -19,12 +19,21 @@ RESPONSIBILITIES (After Refactor):
 Author: Quantitative Trading System
 Version: 14.0 - Query Extractor Integration
 """
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import traceback
 import logging
+import hashlib
+import json
 from datetime import datetime
 
 from config.constants import VALUE_WEIGHTS, GROWTH_WEIGHTS, QUALITY_WEIGHTS, MOMENTUM_WEIGHTS
+
+# ✅ REVERSAL SETUPS: Always enter bullish regardless of prevailing trend direction
+_REVERSAL_LONG_SETUPS = frozenset({
+    "REVERSAL_RSI_SWING_UP",
+    "REVERSAL_ST_FLIP_UP",
+    "REVERSAL_MACD_CROSS_UP",
+})
 
 from config.config_utility.logger_config import METRICS, track_performance, log_failures
 
@@ -65,6 +74,75 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# 0. SIGNAL PROFILING (Semantic Classification)
+# ============================================================================
+
+def _classify_signal_profile(eval_ctx: Dict, eligibility: float) -> Dict[str, Any]:
+    """
+    ✅ NEW: Semantic classification of the trade signal.
+    Normalizes existing confidence adjustments into a readable profile.
+    
+    Args:
+        eval_ctx: Evaluation context containing confidence adjustments
+        eligibility: Base structural eligibility score
+        
+    Returns:
+        Dict containing signal type, durability, and primary drivers
+    """
+    conf_data = eval_ctx.get("confidence", {})
+    adjustments = conf_data.get("structured_adjustments", [])
+    
+    # Extract sources and positive drivers
+    sources = {adj.get("source", "") for adj in adjustments if adj.get("delta", 0) > 0}
+    
+    # Get setup priority
+    setup_data = eval_ctx.get("setup", {})
+    # Resolver uses 'best' for the setup that matched
+    setup_priority = setup_data.get("best", {}).get("priority", 10)
+
+    # 1. Classify by dominant positive driver source
+    # momentum_burst: driven by volume/squeeze events
+    is_squeeze_burst = "conditional" in sources and any(
+        "squeeze" in a.get("name", "").lower() or "volume" in a.get("name", "").lower()
+        for a in adjustments if a.get("delta", 0) > 8
+    )
+    
+    # trend_momentum: driven by strong/explosive trend bands
+    is_trend_driven = any(
+        a.get("name", "").lower() in ("explosive", "strong", "explosive_trend", "strong_trend") 
+        for a in adjustments if a.get("delta", 0) > 0
+    )
+    
+    # structural_quality: driven by quality/institutional modifiers
+    is_fundamental = any(
+        a.get("name", "").lower() in ("highqualitycompounder", "sustainedtrend", "institutionalinterest", "qualitynametailwind")
+        for a in adjustments if a.get("delta", 0) > 0
+    )
+
+    # 2. Assign semantic labels
+    if is_squeeze_burst and not is_trend_driven:
+        sig_type = "momentum_burst"
+        durability = "short_lived"
+    elif is_trend_driven and is_fundamental:
+        sig_type = "structural_quality"
+        durability = "sustained"
+    elif is_trend_driven:
+        sig_type = "trend_momentum"
+        durability = "sustained"
+    else:
+        sig_type = "generic"
+        durability = "unknown"
+
+    return {
+        "type": sig_type,
+        "durability": durability,
+        "setup_specificity": "specific" if setup_priority >= 50 else "fallback",
+        "structure_quality": round(eligibility, 2),
+        "primary_drivers": [a["name"] for a in adjustments if a.get("delta", 0) >= 10],
+    }
+
+
+# ============================================================================
 # 1. PROFILE SCORING (Domain Logic - Stays in Signal Engine)
 # ============================================================================
 
@@ -96,26 +174,41 @@ def calculate_structural_eligibility(
             resolver = get_resolver(horizon)
             extractor = resolver.extractor
         
-        # ✅ REFACTORED: Get weights via extractor
+        # Get weights via extractor
         weights = _get_horizon_pillar_weights(extractor)
         
-        # Validate and sanitize inputs (Bug 1: tech/fund/hybrid could be None)
-        tech_score = tech_score or 0.0
-        fund_score = fund_score or 0.0
-        hybrid_score = hybrid_score or 0.0
+        # ✅ B1 FIX (Refined): Weight Redistribution for missing pillars
+        # Prevents score dilution when some data (e.g. fundamentals) is missing.
+        scores = {
+            'tech': tech_score,
+            'fund': fund_score,
+            'hybrid': hybrid_score
+        }
         
-        # Calculate weighted eligibility
-        eligibility_score = (
-            (tech_score * weights['tech']) + 
-            (fund_score * weights['fund']) + 
-            (hybrid_score * weights['hybrid'])
-        )
+        active_weights = {k: v for k, v in weights.items() if k in scores and scores[k] is not None}
+        
+        if not active_weights:
+            logger.warning(f"[{horizon}] No active pillars for structural eligibility!")
+            return 0.0
+            
+        total_active_weight = sum(active_weights.values())
+        
+        if total_active_weight <= 0:
+            logger.warning(f"[{horizon}] Total active weight is zero! Tech={tech_score}, Fund={fund_score}")
+            return max(tech_score or 0.0, fund_score or 0.0, hybrid_score or 0.0)
+            
+        eligibility_score = 0.0
+        for k, w in active_weights.items():
+            # Redistribute weight proportionally to active pillars
+            redistributed_weight = w / total_active_weight
+            val = scores.get(k, 0.0) or 0.0
+            eligibility_score += val * redistributed_weight
         
         logger.debug(
             f"[{horizon}] 📊 STRUCTURAL ELIGIBILITY: {eligibility_score:.2f} | "
-            f"Components: T={tech_score:.1f}({weights['tech']:.2f}) + "
-            f"F={fund_score:.1f}({weights['fund']:.2f}) + "
-            f"H={hybrid_score:.1f}({weights['hybrid']:.2f})"
+            f"Components: T={tech_score or 0.0:.1f}({weights.get('tech', 0):.2f}) + "
+            f"F={fund_score or 0.0:.1f}({weights.get('fund', 0):.2f}) + "
+            f"H={hybrid_score or 0.0:.1f}({weights.get('hybrid', 0):.2f})"
         )
         
         return round(eligibility_score, 2)
@@ -253,6 +346,13 @@ def compute_opportunity_score(
         
         final_score = (eligibility_base_score * 0.70) + (normalized_bonus * 0.30)
         
+        # ✅ B3 REFACTORED: Score is no longer capped at 5.0 for gate failures.
+        # This decouples "Stock Quality" (Profile Score) from "Trade Feasibility" (Gating).
+        # Blocking is still enforced via gate_result["passed"] for the trade signal.
+        is_blocked = not gate_result["passed"]
+        if is_blocked:
+            logger.info(f"[{ticker}][{horizon}] ⛔ Structural gate blocked (score preserved for transparency)")
+
         # Absolute safety ceiling (though math theoretically prevents it)
         final_score = min(10.0, final_score)
         
@@ -272,13 +372,15 @@ def compute_opportunity_score(
             "final_decision_score": round(final_score, 2),
             "eligibility_base": eligibility_base_score,
             "opportunity_bonus": round(opp_bonus, 2),
+            "signal_profile": _classify_signal_profile(eval_ctx, eligibility_base_score),
             "trade_context": {
                 "setup": setup_type,
                 "strategy": strategy["primary_strategy"],
                 "confidence": confidence,
                 "patterns": setup_meta.get("patterns_detected", []),
                 "gate_passed": gate_result["passed"],
-                "block_reason": gate_result.get("summary")
+                "block_reason": gate_result.get("summary"),
+                "blocked": is_blocked  # ✅ B3: Explicit blocked flag
             },
             "eval_ctx": eval_ctx
         }
@@ -301,9 +403,10 @@ def compute_opportunity_score(
                 "confidence": 50,
                 "patterns": [],
                 "gate_passed": False,
+                "blocked": True,
                 "block_reason": f"Error: {str(e)}"
             },
-            "eval_ctx": None,
+            "eval_ctx": {"stub": True, "error": str(e), "timestamp": datetime.now().isoformat()},
             "error": str(e)
         }
 
@@ -355,7 +458,12 @@ def _create_fallback_profile(
         "final_score": eligibility_base,
         "category": "HOLD",
         "can_trade": False,
-        "eval_ctx": None,
+        "eval_ctx": {
+            "stub": True, 
+            "created_at": datetime.now().isoformat(), 
+            "notes": error_reason,
+            "horizon": horizon
+        },
         "metric_details": [],
         "applied_penalties": [],
         "architecture": "v15.0-signal-separation",
@@ -447,21 +555,30 @@ def compute_all_profiles(
                 hybrid = scoring.get("hybrid", {})
 
                 tech_score = technical.get("score")
-                if tech_score is None: tech_score = 0.0
-
                 fund_score = fundamental.get("score")
-                if fund_score is None: fund_score = 0.0
-
                 hybrid_score = hybrid.get("score")
-                if hybrid_score is None: hybrid_score = 0.0
+
+                # ✅ B1 FIX: Pillar presence tracking
+                pillar_flags = {
+                    "tech_present": tech_score is not None,
+                    "fund_present": fund_score is not None,
+                    "hybrid_present": hybrid_score is not None
+                }
+                completeness_score = sum(pillar_flags.values()) / 3.0
+
+                # Coerce for calculation, but record the fact
+                tech_val = 0.0 if tech_score is None else tech_score
+                fund_val = 0.0 if fund_score is None else fund_score
+                hybrid_val = 0.0 if hybrid_score is None else hybrid_score
 
                 tech_penalties = technical.get("penalties", [])
 
                 logger.debug(
                     f"[{ticker}][{horizon}] 📈 PILLAR SCORES | "
-                    f"Technical={tech_score:.1f} | "
-                    f"Fundamental={fund_score:.1f} | "
-                    f"Hybrid={hybrid_score:.1f}"
+                    f"Technical={tech_val:.1f} | "
+                    f"Fundamental={fund_val:.1f} | "
+                    f"Hybrid={hybrid_val:.1f} | "
+                    f"Completeness={completeness_score:.2f}"
                 )
 
                 # --------------------------------------------------
@@ -469,9 +586,9 @@ def compute_all_profiles(
                 # --------------------------------------------------
                 try:
                     eligibility_score = calculate_structural_eligibility(
-                        tech_score,
-                        fund_score,
-                        hybrid_score,
+                        tech_val,
+                        fund_val,
+                        hybrid_val,
                         horizon,
                         extractor=extractor,
                     )
@@ -526,7 +643,8 @@ def compute_all_profiles(
                 # ── PROFILE SIGNAL: Pure score-based stock quality rating ──────
                 # Independent of patterns, gates, RR, or execution context.
                 # Answers: "Is this stock worth tracking/accumulating?"
-                if final_score >= 8.5:
+                # ✅ B8 FIX: Lowered STRONG threshold (8.5 -> 8.0)
+                if final_score >= 8.0:
                     profile_signal = "STRONG"
                 elif final_score >= 7.0:
                     profile_signal = "MODERATE"
@@ -551,9 +669,13 @@ def compute_all_profiles(
                     "structural_eligibility": {
                         "score": eligibility_score,
                         "components": {
-                            "technical": tech_score,
-                            "fundamental": fund_score,
-                            "hybrid": hybrid_score,
+                            "technical": tech_val,
+                            "fundamental": fund_val,
+                            "hybrid": hybrid_val,
+                        },
+                        "data_completeness": {
+                            "pillar_flags": pillar_flags,
+                            "completeness_score": completeness_score
                         },
                         "weights": weights,
                         "hybrid_breakdown": hybrid.get("breakdown"),
@@ -668,6 +790,26 @@ def compute_all_profiles(
 # ============================================================================
 # 2. TRADE PLAN GENERATION (Clean Orchestrator with Extractor)
 # ============================================================================
+
+def reconcile_direction(resolver_dir: str, market_dir: str, market_adjusted: Dict[str, Any]) -> str:
+    """
+    ✅ B4 FIX: Reconcile direction between resolver and market adjustment.
+    """
+    resolver_dir = str(resolver_dir or "neutral").upper()
+    market_dir = str(market_dir or "neutral").upper()
+    
+    if resolver_dir == market_dir:
+        return resolver_dir
+    
+    # If conflict, prefer market_dir only if market_adjusted has high confidence
+    # (market_adjusted["confidence"] is not standard yet, so we use 'adjusted' flag as proxy for now)
+    if market_adjusted.get("adjusted") and market_adjusted.get("confidence", 0) > 60:
+        logger.warning(f"Direction conflict: Resolver={resolver_dir}, Market={market_dir} | Choosing Market due to adjustments.")
+        return market_dir
+        
+    logger.warning(f"Direction conflict: Resolver={resolver_dir}, Market={market_dir} | Falling back to Resolver.")
+    return resolver_dir
+
 def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extractor=None) -> None:
     """
     SETUP SIGNAL: Execution-based trade decision.
@@ -687,8 +829,16 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
 
     # ── Extract core inputs ──────────────────────────────────────────────
     confidence = plan.get("final_confidence", 0)
-    direction  = plan.get("metadata", {}).get("direction", "neutral")
+    direction_raw = plan.get("metadata", {}).get("direction", "neutral")
+    _dir_map = {"SHORT": "bearish", "LONG": "bullish", "short": "bearish", "long": "bullish"}
+    direction = _dir_map.get(direction_raw, direction_raw.lower())
 
+    # ✅ FIXED (Reversal Override): Reversal setups enter AGAINST the trend.
+    # Force direction to 'bullish' for known long reversal patterns.
+    setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
+    if setup_type in _REVERSAL_LONG_SETUPS:
+        direction = "bullish"
+        
     if extractor:
         try:
             min_tradeable = extractor.get_min_tradeable_confidence()
@@ -706,6 +856,7 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     can_execute     = exec_ctx.get("can_execute", {})
     execution_blocked = not can_execute.get("can_execute", True)
     failures        = can_execute.get("failures", [])
+    is_hard_blocked_flag = can_execute.get("is_hard_blocked", False)
 
     market          = exec_ctx.get("market_adjusted_targets", {})
     rr_t1           = market.get("execution_rr_t1", 0)
@@ -716,6 +867,7 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     setup_type      = eval_ctx.get("setup", {}).get("type", "GENERIC")
 
     # ── Setup intent classification ──────────────────────────────────────
+    is_rr_failure = any(any(s in f for s in ["RR", "Target", "SL"]) for f in failures)
     suffix = "BUY" if direction == "bullish" else "SELL" if direction == "bearish" else "HOLD"
     signal_intent = f"{setup_type}_{suffix}"
 
@@ -728,17 +880,35 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     )
 
     # ── ATR fallback detection ───────────────────────────────────────────
-    is_atr_fallback = (
-        "atr_fallback" in str(rr_source) or
-        "atr_fallback" in str(target_source) or
-        rr_source == "generic_atr"
-    )
+    # ✅ B6 FIX: Robust check for ATR fallback
+    def is_atr_fallback_fn(rr_source, target_source):
+        if not rr_source and not target_source:
+            return True  # safe default: unknown == fallback
+        rr_s = str(rr_source or "").lower()
+        target_s = str(target_source or "").lower()
+        return ("atr_fallback" in rr_s) or ("atr_fallback" in target_s) or (rr_s == "generic_atr")
+
+    is_atr_fallback = is_atr_fallback_fn(rr_source, target_source)
 
     # ════════════════════════════════════════════════════════════════════
     # LAYER 0: STRUCTURE GATE  (highest priority — no overrides)
     # "Does a tradeable entry structure exist?"
     # ════════════════════════════════════════════════════════════════════
-    if (setup_type == "GENERIC" or not is_atr_fallback) and not primary_found:
+    # ✅ B7 FIX: Explicit Layer 0 logic
+    should_block_layer0 = False
+    
+    # Logic: If no primary pattern, you cannot generate a BUY/SELL signal 
+    # unless you are in a GENERIC setup which is allowed to be pattern-less.
+    if not primary_found:
+        if is_atr_fallback:
+            # Traditional ATR fallback with no pattern -> Block for specific setups
+            if setup_type not in ["GENERIC", "MOMENTUM_FLOW_CONTINUATION"]: # Allow flow continuation
+                should_block_layer0 = True
+        else:
+            # Non-fallback structural target but no pattern? Always block.
+            should_block_layer0 = True
+
+    if should_block_layer0:
         plan.update({
             "trade_signal":      "WATCH",
             "setup_signal":      "WATCH",
@@ -799,12 +969,16 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     final_status = base_status
     reason = f"Decision based on {direction} direction"
 
-    is_rr_failure = any("RR" in f for f in failures)
+    # Rescue logic should only activate if we DON'T have a "Hard Stop" (Spread, Volume, etc.)
+    # We define hard stops as any failure message that isn't related to RR.
+    # Non-rescuable failures are typically liquidity, volume, or context gates.
+    hard_stops = ["Volume", "Spread", "Market", "Liquidity", "Proximity", "ADX", "Volatility"]
+    is_hard_blocked = is_hard_blocked_flag or any(any(s in f for s in hard_stops) for f in failures)
 
-    if base_status == "BLOCKED" and is_rr_failure and not is_atr_fallback:
+    if base_status == "BLOCKED" and is_rr_failure and not is_atr_fallback and not is_hard_blocked:
         # Rescue A: High confidence + near-passing T1
         if confidence >= high_conf_threshold and rr_t1 >= 1.2:
-            final_signal = "BUY" if direction == "bullish" else base_signal
+            final_signal = "BUY" if direction == "bullish" else ("SELL" if direction == "bearish" else base_signal)
             final_status = "READY"
             reason = (
                 f"High confidence override: {confidence}% >= {high_conf_threshold}% "
@@ -821,7 +995,7 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
 
         # Rescue B: Structural T2 asymmetry
         elif rr_t2 >= 2.5:
-            final_signal = "BUY" if direction == "bullish" else base_signal
+            final_signal = "BUY" if direction == "bullish" else ("SELL" if direction == "bearish" else base_signal)
             final_status = "READY"
             reason = f"Structural T2 asymmetry override (RR {rr_t2:.2f}, source={rr_source})"
             plan.setdefault("boost_reasons", []).append({
@@ -870,7 +1044,7 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
         "execution_status": final_status.lower(),
     }
 
-def apply_rr_validation(exec_ctx: Dict[str, Any], extractor) -> None:
+def apply_rr_validation(exec_ctx: Dict[str, Any], eval_ctx: Dict[str, Any], extractor) -> None:
     """
     Final RR gate after enhancer.
     Mutates exec_ctx["can_execute"].
@@ -878,7 +1052,7 @@ def apply_rr_validation(exec_ctx: Dict[str, Any], extractor) -> None:
     can_exec = exec_ctx.get("can_execute") or {"can_execute": True, "failures": [], "checks": {}}
     
     # ✅ Pass self.extractor explicitly
-    ok, reason, recommended = validate_execution_rr(exec_ctx, extractor)
+    ok, reason, recommended = validate_execution_rr(exec_ctx, eval_ctx, extractor)
     
     if not ok:
         can_exec["can_execute"] = False
@@ -979,21 +1153,23 @@ def generate_trade_plan(
         # ======================================================
         if winner_profile and "eval_ctx" in winner_profile:
             eval_ctx = winner_profile["eval_ctx"]
+            plan["metadata"]["eval_ctx_source"] = "cached"
         else:
             eval_ctx = build_evaluation_context_v5(
                 symbol, indicators, fundamentals, horizon
             )
+            plan["metadata"]["eval_ctx_source"] = "rebuilt"
 
         # ✅ POPULATE SETUP & CONFIDENCE FIELDS IMMEDIATELY
-        confidence_data = eval_ctx.get("confidence", {
-            "base": 50, "clamped": 50, "final": 50,
-            "horizon_adjustment": 0, "adjustments": {}, "divergence_multiplier": 1.0
-        })
+        confidence_data = eval_ctx.get("confidence", {})
+        if not isinstance(confidence_data, dict):
+            confidence_data = {}
+            
         plan["setup_type"] = eval_ctx.get("setup", {}).get("type", "GENERIC")
-        plan["base_confidence"] = confidence_data["base"]
-        plan["final_confidence"] = confidence_data["clamped"]
-        plan["setup_confidence"] = confidence_data["base"]  # Same as base
-        plan["adjusted_confidence"] = confidence_data.get("final", confidence_data["clamped"])
+        plan["base_confidence"] = confidence_data.get("base", 50)
+        plan["final_confidence"] = confidence_data.get("clamped", 50)
+        plan["setup_confidence"] = confidence_data.get("base", 50)  # Same as base
+        plan["adjusted_confidence"] = confidence_data.get("final", plan["final_confidence"])
 
         # ✅ NEW: Add detailed confidence breakdown for debugging
         plan["confidence_breakdown"] = {
@@ -1008,15 +1184,36 @@ def generate_trade_plan(
         }
 
         # ======================================================
-        # STAGE 2: Execution Context
+        # STAGE 2: Execution Context Evolution
         # ======================================================
-        exec_ctx = build_execution_context_v5(eval_ctx, capital)
-        exec_ctx = enhance_execution_context(
-            eval_ctx, exec_ctx, indicators, symbol, horizon,
+        exec_ctx_raw = build_execution_context_v5(eval_ctx, capital)
+        plan["metadata"]["exec_ctx_raw"] = exec_ctx_raw.copy()  # ✅ Store structural baseline
+        
+        exec_ctx, eval_ctx = enhance_execution_context(
+            eval_ctx, exec_ctx_raw, indicators, symbol, horizon,
             extractor=extractor
         )
+        plan["metadata"]["exec_ctx"] = exec_ctx  # ✅ Store enhanced context for auditability
 
-        apply_rr_validation(exec_ctx, extractor=extractor)  # Mutates exec_ctx["can_execute"]
+        # ✅ B2 FIX (Refined): Check for stale context after execution context is built
+        if exec_ctx.get("stale_context"):
+            plan["metadata"]["stale_context"] = True
+            logger.warning(f"[{symbol}] Stale evaluation context detected in trade plan.")
+
+        # Refresh plan confidence after enhancement (B5 Fix)
+        # We now keep eval_ctx pure and merge exec_ctx adjustments here
+        confidence_data = eval_ctx.get("confidence", {})
+        baseline_final = confidence_data.get("clamped", plan["final_confidence"])
+        baseline_adjusted = confidence_data.get("final", plan["adjusted_confidence"])
+        
+        # Apply execution-time adjustments (Discovery vs Strategy decoupling)
+        exec_adjustments = exec_ctx.get("confidence_adjustments", {})
+        total_penalty = exec_adjustments.get("total_penalty", 0)
+        
+        plan["final_confidence"] = max(30, baseline_final + total_penalty) # Keep within floor
+        plan["adjusted_confidence"] = max(30, baseline_adjusted + total_penalty)
+
+        apply_rr_validation(exec_ctx, eval_ctx, extractor=extractor)  # Mutates exec_ctx["can_execute"]
 
         # ✅ POPULATE ESTIMATED TIME
         if "timeline" in exec_ctx and exec_ctx["timeline"].get("available"):
@@ -1074,7 +1271,17 @@ def generate_trade_plan(
             plan["metadata"]["execution_rr_t1"] = market_adjusted["execution_rr_t1"]
             plan["metadata"]["execution_rr_t2"] = market_adjusted["execution_rr_t2"]
             plan["metadata"]["volatility_regime"] = market_adjusted["volatility_regime"]
-            plan["metadata"]["direction"] = market_adjusted["direction"]
+            
+            # ✅ B4 FIX: Reconcile direction and set conflict flag (Centralized in trade_enhancer)
+            if exec_ctx.get("direction_conflict"):
+                plan["metadata"]["direction_conflict"] = True
+                logger.warning(
+                    f"[{symbol}] DIRECTION CONFLICT DETECTED | Using reconciled direction."
+                )
+            
+            # Use the direction from market adjustment (which is already reconciled in enhancer)
+            plan["metadata"]["direction"] = market_adjusted.get("direction", plan["metadata"].get("direction", "neutral"))
+            
             plan["metadata"]["rr_source"] = risk.get("rr_source")  
             plan["metadata"]["atr_multiple"] = risk.get("atr_multiple")  
             plan["metadata"]["market_adjusted"] = True
@@ -1118,15 +1325,24 @@ def generate_trade_plan(
             },
             {
                 "step": "after_adjustments",
-                "value": confidence_data.get("final", confidence_data.get("clamped", 0)),
+                "value": confidence_data.get("final", 0),
                 "source": "universal_modifiers"
             },
             {
-                "step": "final_clamped", 
+                "step": "discovery_final", 
                 "value": confidence_data.get("clamped", 0),
-                "source": "clamp_range_applied"
+                "source": "discovery_clamping"
             }
         ]
+
+        # Add Execution Adjustments to history if present
+        if total_penalty != 0:
+            plan["confidence_history"].append({
+                "step": "execution_final",
+                "value": plan["final_confidence"],
+                "source": "trade_enhancer_adjustments",
+                "breakdown": exec_adjustments.get("breakdown", [])
+            })
 
         # Parse penalties and boosts
         adjustments = confidence_data.get("adjustments", {})

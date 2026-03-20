@@ -2,91 +2,115 @@
 
 An institutional-grade **Algorithmic Trading System** built with a **Hybrid Data Architecture** for the Indian Market (NSE). A modular, end-to-end **Stock Analysis + Trade Decision System** built using FastAPI, AG Grid, pandas, yfinance, and custom scoring logic. The system processes a stock from **Raw OHLCV → Actionable Trade Plan** using a multi-layer decision pipeline typically found on proprietary trading desks.
 
-## 🚀 Key Differentiators
-- **Multi-Factor Score Synergy**: Combines Technical (price/volume), Fundamental (ratios/growth), and Hybrid (proprietary) pillars into a unified confidence score.
-- **Specialized Multibagger Pipeline**: Dedicated weekly cycle with multithreaded bulk screening (NSE_500 in < 2 mins) and deep evaluation for high-conviction long-term plays.
-- **Smart Decision Matrix**: 8-Phase resolver pipeline that filters noise and ensures setups meet structural and market-cap requirements before issuing signals.
-
-> **Core Philosophy:** Most scanners only look at indicators. This engine understands **Market Structure**. Price does not move randomly—it follows geometry (Cup depth, Flag poles, Box ranges). This engine quantifies that geometry.
-
 ---
 
 ## 🚀 Key Differentiators
 
 ### **1. Unified Configuration Architecture**
-* **Single Source of Truth:** All config parameters are split into 6 horizon-agnostic files defining the system's fixed rules.
-* **Pattern-Config Injection:** Each pattern receives horizon-aware config (e.g., VCP lookback adapts from 50 days to 50 weeks).
-* **Zero Desync Risk:** Eliminates scattered magic numbers across modules.
+- **Single Source of Truth:** All config parameters live in 6 horizon-agnostic files inside `config/` defining the system's fixed rules.
+- **Pattern-Config Injection:** Each pattern receives horizon-aware config (e.g., VCP lookback adapts from 50 days to 50 weeks).
+- **Zero Desync Risk:** Eliminates scattered magic numbers across modules.
 
-### **2. Pattern Lifecycle Management**
-* **Age Tracking:** Every pattern returns `age_candles` and `formation_timestamp` in metadata.
-* **Stateful Invalidation:** Database-backed breakdown tracking (e.g., Darvas box breakdown duration).
-* **Stale Pattern Detection:** Automatic expiry of old formations (prevents trading 30-day-old Cup & Handles).
+### **2. Bidirectional Signal Engine (LONG + SHORT)**
+- **Full Short Support:** `MOMENTUM_BREAKDOWN` and `BEAR_TREND_FOLLOWING` setups generate `SELL` signals with direction-aware SL (above entry), inverted targets (below entry), and correct RR geometry.
+- **Automatic Direction Detection:** `trade_enhancer.py` auto-detects LONG/SHORT from SL position — no flag required.
+- **SHORT Invalidation:** Config-driven breakdown tracking monitors both long and short positions for early exit conditions.
 
-### **3. Hybrid Data Architecture**
-* **Polymorphic Indicators:** Automatically switches math based on horizon (e.g., Intraday uses `ATR(10), EMA (20/50/200)`, Short-Term uses `ATR(14), EMA (20/50/200)`, Long-Term uses `ATR(20), WMA (10/40/50)` Multibagger uses `ATR(12)` | MMA (6/12/12)).
-* **3-Tier Caching:** RAM -> Parquet (Data Lake) -> Yahoo Finance.
-* **Zero-Cost Corp Actions:** Scrapes Equitymaster for upcoming dividends/splits to avoid API costs.
+### **3. Specialized Multibagger Pipeline**
+- **Dedicated Weekly Cycle:** Isolated module (`config/multibagger/`) runs independently of the main 3-horizon loop every Sunday midnight IST.
+- **Two-Phase Screening:** Phase 1 hard-gates (fundamental + technical filters) followed by Phase 2 deep MB resolver using MB-specific extractor stack.
+- **Conviction Tiers:** HIGH (score ≥ 8.5, conf ≥ 75%) / MEDIUM (≥ 7.5, ≥ 65%) / LOW (≥ 6.5, ≥ 60%).
+- **Persisted Intelligence:** Each candidate stores `estimated_hold_months` and the exact `entry_trigger` (pattern) in the database.
+- **Shared Fundamental Cache:** MB pipeline reuses the same 24-hour `FundamentalCache` SQLite table as the main flow — zero duplicate yfinance calls.
 
-### **4. Pattern Recognition Engine (The "Eyes")**
-The system includes a dedicated detection layer that identifies 9 specific institutional setups:
-* **Breakout:** Cup & Handle (O'Neil), Darvas Box, Bull Flag/Pennant.
-* **Volatility:** Minervini VCP (Volatility Contraction), Bollinger Squeeze.
-* **Trend:** Golden/Death Cross, Ichimoku Cloud/TK Cross.
-* **Reversal:** Double Top/Bottom, Three-Line Strike.
+### **4. Multi-Factor Score Synergy**
+- Combines Technical (price/volume), Fundamental (ratios/growth), and Hybrid (proprietary cross-pillar) pillars into a unified confidence score per horizon.
+- Pillar weights shift by horizon: Intraday is 70% technical, Long-Term is 40% fundamental, Multibagger is 60% fundamental.
 
-### **5. Geometric Trade Planning**
-It overrides generic ATR targets with **Pattern Geometry**:
-* **Smart Targets:** If a "Cup & Handle" is found, T1 is calculated based on `Rim + 0.618 × Depth`.
-* **Dynamic Stops:** Stops are auto-tuned based on Volatility Personality.
-* **Pattern-Aware Time:** Uses "Pattern Physics" to estimate holding time.
+### **5. Pattern Lifecycle Management**
+- **Age Tracking:** Every pattern returns `age_candles` and `formation_timestamp` in metadata.
+- **Stateful Invalidation:** Database-backed breakdown tracking (e.g., Darvas box breakdown duration) for both LONG and SHORT positions.
+- **Stale Pattern Detection:** Automatic expiry of old formations (prevents trading 30-day-old Cup & Handles).
 
-#### Phase 1: Bulk Screener
-Processes the entire universe in parallel using worker threads, applying "Hard Gates" (listing age, price caps, sector exclusions).
+### **6. Hybrid Data Architecture**
+- **Polymorphic Indicators:** Automatically switches math based on horizon — Intraday uses `EMA(20/50/200) + ATR(10)`, Short-Term uses `EMA(20/50/200) + ATR(14)`, Long-Term uses `WMA(10/40/50) + ATR(20)`, Multibagger (MB module) uses `MMA(6/12/24) + ATR(12)`.
+- **3-Tier Caching:** RAM → Parquet (Data Lake) → Yahoo Finance.
+- **Zero-Cost Corp Actions:** Scrapes Equitymaster for upcoming dividends/splits to avoid API costs.
 
-#### Phase 2: Detailed Evaluator
-isolated specialized brain scoring 4 Pillars (Growth, Profitability, Solvency, Technicals) using MB-specific config bypass for performance.
+> **Core Philosophy:** Most scanners only look at indicators. This engine understands **Market Structure**. Price does not move randomly — it follows geometry (Cup depth, Flag poles, Box ranges). This engine quantifies that geometry and applies it equally to both long and short setups.
 
 ---
 
-### 🏛️ System Architecture
+## 💎 v15.0 High-Transparency & Robust Architecture
+
+The v15.0 release finalizes the **Quant System** with deep synchronization between the main pipeline and specialized modules.
+
+### **1. Dual-Stage Validation Pipeline**
+- **Stage 1 (Eligibility/Opportunity)**: Establishes a structural ATR-based baseline. Gating here is broad and structural (e.g., "Is there enough room to move?").
+- **Stage 2 (Execution/Refinement)**: Injects pattern geometry and market-adaptive target refinement.
+- **Robust Hardware-Blocks**: Fixed logic in `config_resolver.py` to ensure that structural hard-blocks (permissions, capital, spread) are non-overrideable, preventing unsafe entries.
+
+### **2. Selective & Deferred Gating**
+To prevent tactical constraints (like a tight RR on a pattern) from damaging the indicative quality score of a stock, the engine now supports **Deferred Gating**. Certain gates (like `rrRatio`) are skipped in Stage 1 if a compatible pattern setup is detected, ensuring the stock's "Quality" is accurately represented while the "Entry Timing" is handled by the specialized pattern geometry later.
+
+### **3. Synchronized Multibagger Synergy**
+- **Unified Indicator Physics**: Phase 2 MB Evaluator now uses the exact same `MMA(6/12/24)` anchor as the main pipeline, ensuring zero-desync between screening and evaluation.
+- **Hybrid Metric Recovery**: Restored `volatilityAdjustedRoe` and `volatilityQuality` to the MB pillar composition, providing a 360° view of risk-adjusted returns for long-term compounders.
+
+### **4. Semantic Signal Profiling**
+Trade signals are no longer just a confidence percentage. They are semantically classified into four regimes:
+- **Structural Quality**: Sustained trends backed by institutional fundamentals.
+- **Trend Momentum**: Exploiting strong price action velocity.
+- **Momentum Burst**: Tactical, short-lived opportunities from volume/squeeze events.
+- **Generic**: Standard setup-driven signals.
+
+---
+
+## 🏛️ System Architecture
 
 ```mermaid
 graph TD
     subgraph "Entry Point"
         A["main.py<br>run_analysis()"]
     end
-    
+
     subgraph "Data Layer"
         B["data_fetch.py<br>fundamentals.py<br>indicators.py"]
     end
-    
+
     subgraph "Config Layer — 6 Horizon-Agnostic Files"
-        C1["setup_pattern_matrix_config.py<br>120KB · 3345 lines"]
-        C2["strategy_matrix_config.py<br>30KB · 806 lines"]
-        C3["confidence_config.py<br>47KB · 993 lines"]
-        C4["technical_score_config.py<br>66KB · 1921 lines"]
-        C5["fundamental_score_config.py<br>34KB · 940 lines"]
-        C6["master_config.py<br>62KB · 1585 lines"]
+        C1["setup_pattern_matrix_config.py"]
+        C2["strategy_matrix_config.py"]
+        C3["confidence_config.py"]
+        C4["technical_score_config.py"]
+        C5["fundamental_score_config.py"]
+        C6["master_config.py"]
     end
-    
+
     subgraph "Extraction Layer"
-        D1["ConfigExtractor<br>56KB · 1255 lines"]
-        D2["QueryOptimizedExtractor<br>97KB · 2487 lines · 85 methods"]
+        D1["ConfigExtractor"]
+        D2["QueryOptimizedExtractor<br>85 methods"]
     end
-    
+
     subgraph "Brain Layer"
-        E["ConfigResolver<br>177KB · 4188 lines · 74 methods"]
-        F["signal_engine.py<br>52KB · 1341 lines"]
+        E["ConfigResolver<br>74 methods"]
+        F["signal_engine.py"]
     end
-    
-    subgraph "Execution Layer — Lifecycle & Intelligence"
-        G["trade_enhancer.py<br>49KB · 1203 lines"]
+
+    subgraph "Execution Layer"
+        G["trade_enhancer.py<br>LONG + SHORT aware"]
         H["generate_trade_plan()"]
-        PSM["pattern_state_manager.py<br>Stateful Invalidation"]
-        PVT["pattern_velocity_tracking.py<br>Post-Breakout Analytics"]
+        PSM["pattern_state_manager.py"]
+        PVT["pattern_velocity_tracking.py"]
     end
-    
+
+    subgraph "Multibagger Module — Weekly"
+        MB1["multibagger_screener.py<br>Phase 1: Hard Gates"]
+        MB2["multibagger_evaluator.py<br>Phase 2: MB Resolver"]
+        MB3["mb_scheduler.py<br>Sunday Midnight IST"]
+        MB4["mb_routes.py<br>/multibagger/* API"]
+    end
+
     A --> B
     B --> F
     C1 & C2 & C3 & C4 & C5 & C6 --> D1
@@ -98,6 +122,9 @@ graph TD
     G --> PSM
     G --> PVT
     H --> A
+    MB3 --> MB1
+    MB1 --> MB2
+    MB2 --> MB4
 ```
 
 ---
@@ -114,23 +141,23 @@ Six **horizon-agnostic** config files define the system's fixed rules inside `co
 | `strategy_matrix_config.py` | Strategy DNA: scoring rules, market cap filters | `STRATEGY_MATRIX` (~10 strategies) |
 | `confidence_config.py` | Confidence calculation modifiers | `CONFIDENCE_CONFIG` |
 | `technical_score_config.py` | Technical indicator scoring (40+ metrics) | `METRIC_REGISTRY` + scoring fns |
-| `fundamental_score_config.py`| Fundamental metric scoring overrides | `METRIC_REGISTRY` + `HORIZON_FUNDAMENTAL_WEIGHTS` |
-| `master_config.py` | Horizon-specific overrides, gates, execution rules | `MASTER_CONFIG` (wraps everything) |
+| `fundamental_score_config.py` | Fundamental metric scoring (3-horizon) | `METRIC_REGISTRY` + `HORIZON_FUNDAMENTAL_WEIGHTS` |
+| `master_config.py` | Horizon-specific overrides, gates, execution rules | `MASTER_CONFIG` |
 
 ### Layer 2: Extraction (Config → Query API)
 
-#### `ConfigExtractor` (`config_extractor.py`)
+#### `ConfigExtractor` (`config/config_extractor.py`)
 Pre-extracts all config sections at initialization into typed `ConfigSection` objects.
 
-#### `QueryOptimizedExtractor` (`query_optimized_extractor.py`)
+#### `QueryOptimizedExtractor` (`config/query_optimized_extractor.py`)
 Wraps `ConfigExtractor` with **85 type-safe query methods**, organized in 7 categories (Confidence, Gates, Patterns, Strategy, Scoring, Normalization, Utility).
 
 ### Layer 3: Resolution & Scoring (The Brain)
 
-#### `ConfigResolver` (`config_resolver.py`)
-The **brain** of the application containing 4188 lines and 74 methods with two main public APIs:
+#### `ConfigResolver` (`config/config_resolver.py`)
+The **brain** containing 74 methods with two main public APIs:
 1. `build_evaluation_context_only()` — Phase 1: Pure analysis (no capital/time dependency)
-2. `build_execution_context_from_evaluation()` — Phase 2: Execution projection
+2. `build_execution_context_from_evaluation()` — Phase 2: Execution projection (direction-aware SL/targets for both LONG and SHORT)
 
 **Evaluation Pipeline (8 Internal Phases):**
 1. Foundation (Scores & Conditions)
@@ -143,25 +170,22 @@ The **brain** of the application containing 4188 lines and 74 methods with two m
 8. Opportunity Gates
 
 #### `signal_engine.py` (The Orchestrator)
-Triggers the resolver by looping over horizons, blending technical/fundamental pillars, classifying profiles, and finally generating the trade plan.
+Triggers the resolver by looping over the **3 active trading horizons** (intraday, short_term, long_term), blending technical/fundamental pillars, and generating the trade plan. 
+- **Decoupled Scoring**: Profile scores (Stock Quality) are now at full fidelity even if structural gates block an immediate entry.
+- **Signal Profiling**: Every signal is semantically classified (e.g., `momentum_burst`, `structural_quality`) with durability and specificity assessments.
+- **Multibagger**: Runs separately via its own weekly scheduler.
 
-### Layer 4: Execution (Targets, Hold Times, Enhancement)
+### Layer 4: Execution & Selective Validation
 
 #### `trade_enhancer.py`
-Post-processes the execution context natively with 5 continuous phases:
-1. `adjust_targets_for_market_conditions()`
-2. `get_rr_regime_multipliers()`
-3. `check_pattern_expiration()`
-4. `check_pattern_invalidation()`
-5. `enhance_execution_context()`
-
-Includes `calculate_pattern_timeline()` to estimate realistic hold times.
+Post-processes the execution context with full LONG/SHORT direction awareness. 
+- **Dual-Stage Risk Architecture**: Stage 1 provides a structural ATR-based baseline. Stage 2 applies pattern-specific geometry (targets/SL) for execution.
+- **Deferred Gating**: Tactical gates (like RR) are transparently deferred to Stage 2 if a pattern setup is present, preventing "Setup Blindness" in the scoring layer.
+- **Market Adapters**: `adjust_targets_for_market_conditions()` auto-detects direction and volatility regimes.
 
 ---
 
 ## 🔄 Complete Data Flow: `run_analysis()`
-
-The exact 10 steps happening inside `main.py`:
 
 ```mermaid
 sequenceDiagram
@@ -172,263 +196,147 @@ sequenceDiagram
     participant CR as Config Resolver
     participant TE as Trade Enhancer
 
-    M->>D: Step 2: compute_fundamentals()
-    M->>D: Step 3: compute_indicators_cached() × N horizons
+    M->>D: Step 2: compute_fundamentals() [24h SQLite cache]
+    M->>D: Step 3: compute_indicators_cached() × 3 horizons
     M->>M: Step 4: Extract macro trend
     M->>SE: Step 5: compute_all_profiles()
     SE->>CH: build_evaluation_context_v5()
     CH->>CR: build_evaluation_context_only()
-    CR-->>SE: eval_ctx (setup, strategy, confidence, gates)
-    SE-->>M: profiles{} + best_fit
+    CR-->>SE: eval_ctx (setup, strategy, confidence, gates, direction)
+    SE-->>M: profiles{} + best_fit (intraday/short_term/long_term)
     M->>SE: Step 8: generate_trade_plan()
-    SE->>CH: build_evaluation_context_v5()
     SE->>CH: build_execution_context_v5()
     CH->>CR: build_execution_context_from_evaluation()
-    CR-->>SE: exec_ctx (entry permission, sizing, risk)
+    CR-->>SE: exec_ctx (entry, SL, targets — direction-aware)
     SE->>TE: enhance_execution_context()
-    TE-->>SE: enhanced exec_ctx (real targets, RR, hold time)
-    SE->>SE: finalize_trade_decision()
+    TE-->>SE: enhanced exec_ctx (real targets, RR, hold time, LONG/SHORT)
+    SE->>SE: finalize_trade_decision() → BUY | SELL | HOLD | BLOCKED
     SE-->>M: trade_plan
-    M->>M: Step 9: Save to DB
+    M->>M: Step 9: Save to DB (direction persisted)
 ```
 
 ---
 
-## 📚 Pattern Library (Supported Setups)
+## 🔄 Multibagger Pipeline: Weekly Cycle
 
-| Pattern | Type | Timeframe | Speed Factor | Age Tracking |
-|:---|:---|:---|:---|:---|
-| **Minervini VCP** | Volatility Contraction | Swing | **1.8x** (Explosive) | ✅ Contraction start |
-| **Cup & Handle** | Accumulation | Long Term | **1.2x** (Measured) | ✅ Left rim formation |
-| **Darvas Box** | Trend Continuation | Swing | **1.3x** (Fast) | ✅ Box consolidation start |
-| **Bollinger Squeeze** | Volatility Breakout | Intraday/Daily | **1.5x** (Fast) | ⚠️ Estimated (7-day) |
-| **Golden Cross** | Regime Change | Long Term | **0.8x** (Slow Grind) | ✅ Crossover bar |
-| **Double Bottom** | Reversal | Swing | **0.9x** (Structural) | ✅ First trough |
-| **Three-Line Strike** | Reversal | Short Term | **2.5x** (Violent) | ✅ Always fresh (1 bar) |
-| **Flag/Pennant** | Continuation | Swing | **1.4x** (Fast) | ✅ Pole start |
-| **Ichimoku Signal** | Trend Entry | All | **1.1x** (Steady) | ✅ TK cross (fresh=1) |
+```mermaid
+sequenceDiagram
+    participant S as mb_scheduler.py
+    participant SC as multibagger_screener.py
+    participant EV as multibagger_evaluator.py
+    participant DB as SQLite (multibagger_candidates)
+
+    S->>S: Sunday midnight IST trigger
+    S->>SC: Phase 1 — evaluate_single_screener()
+    SC->>SC: Universe filters (min price, market cap, sector)
+    SC->>SC: Fundamental gates (EPS growth, ROE, ROCE, DE ratio)
+    SC->>SC: Technical gates (Stage 2 alignment, 52W proximity)
+    SC-->>S: passed=True/False + reason
+    S->>EV: Phase 2 — run_mb_resolver() [MB-specific extractor stack]
+    EV->>EV: MBConfigExtractor overrides pillar weights (fund: 60%)
+    EV->>EV: mb_compute_fundamental_score() + mb_compute_technical_score()
+    EV-->>S: {final_score, confidence, setup, strategy, conviction_tier}
+    S->>DB: Upsert MultibaggerCandidate row
+    DB-->>S: HIGH / MEDIUM / LOW conviction tier stored
+```
+
+**MB API Endpoints:**
+- `GET /multibagger/candidates` — All candidates with optional tier filter
+- `GET /multibagger/candidates/{symbol}` — Full thesis for a single stock
+- `GET /multibagger/status` — Last cycle stats + next scheduled run
+- `POST /multibagger/run` — Trigger immediate manual cycle
+- `GET /multibagger_dashboard` — Candidate picks UI
+
+---
+
+## 📚 Pattern Library
+
+| Pattern | Type | Timeframe | Speed Factor | Age Tracking | Direction |
+|:---|:---|:---|:---|:---|:---|
+| **Minervini VCP** | Volatility Contraction | Swing | **1.8x** (Explosive) | ✅ Contraction start | Long |
+| **Cup & Handle** | Accumulation | Long Term | **1.2x** (Measured) | ✅ Left rim formation | Long |
+| **Darvas Box** | Trend Continuation | Swing | **1.3x** (Fast) | ✅ Box consolidation start | Long |
+| **Bollinger Squeeze** | Volatility Breakout | Intraday/Daily | **1.5x** (Fast) | ⚠️ Estimated (7-day) | Neutral |
+| **Golden Cross** | Regime Change (Long) | Long Term | **0.8x** (Slow Grind) | ✅ Crossover bar | Long |
+| **Death Cross** | Regime Change (Short) | Long Term | **0.8x** (Slow Grind) | ✅ Crossover bar | Short |
+| **Double Bottom** | Bullish Reversal | Swing | **0.9x** (Structural) | ✅ First trough | Long |
+| **Double Top** | Bearish Reversal (Short) | Swing | **0.9x** (Structural) | ✅ First peak | Short |
+| **Three-Line Strike** | Reversal | Short Term | **2.5x** (Violent) | ✅ Always fresh (1 bar) | Bull/Bear |
+| **Flag/Pennant** | Continuation | Swing | **1.4x** (Fast) | ✅ Pole start | Bull/Bear |
+| **Ichimoku Signal** | Trend Entry | All | **1.1x** (Steady) | ✅ TK cross | Bull/Bear |
 
 ---
 
 ## 🧩 Smart Workflows
 
 ### **1. 3-Tier Caching Strategy**
-Implemented in `data_fetch.py` to ensure sub-millisecond response times:
-1.  **L1 (RAM):** Instant access using `LRUCache` (TTL: 15m Intraday / 6h Daily).
-2.  **L2 (Disk/Parquet):** Persistent storage handled by `ParquetStore`.
-3.  **L3 (Source API):** Yahoo Finance (only hit if L1 and L2 miss).
+1. **L1 (RAM):** `LRUCache` — TTL 15m intraday / 6h daily.
+2. **L2 (Disk/Parquet):** `ParquetStore` using Polars engine with ZSTD compression and atomic writes.
+3. **L3 (Source API):** Yahoo Finance — only hit on L1+L2 miss.
+
+Fundamental data uses a **separate 24-hour SQLite cache** (`fundamental_cache` table in `trade.db`) shared between the main pipeline and the MB weekly cycle. All timestamps are UTC-aware via `market_utils.get_current_utc()`.
 
 ### **2. Smart Benchmarking**
-- **Auto-Detection:** The system automatically maps stocks to their "Home Index" (e.g., `INFY` → `Nifty IT`, `SUZLON` → `Smallcap 100`).
-- **Relative Strength:** Calculates performance against the *relevant* benchmark.
+- **Auto-Detection:** Maps stocks to their home index (`INFY` → Nifty IT, `SUZLON` → Smallcap 100).
+- **Relative Strength:** Calculates `relStrengthNifty` against the relevant benchmark, not always Nifty 50.
 
 ### **3. Corporate Actions Architecture**
-- **BULK MODE:** Uses ONLY **Equitymaster** (Zero YFinance calls). Safe for scanning 1500+ symbols.
-- **SINGLE-STOCK MODE:** When analyzing a specific stock, fetches detailed history via Yahoo and caches it in JSON.
+- **Bulk Mode:** Equitymaster only — zero yfinance calls. Safe for 1500+ symbol scans.
+- **Single-Stock Mode:** Detailed Yahoo history fetched and cached in JSON on analysis.
+
+### **4. Timezone Architecture**
+All datetime operations go through `config/config_utility/market_utils.py`:
+- `get_current_utc()` — UTC-aware datetime for all DB writes.
+- `get_current_ist()` — IST-aware datetime for scheduling and display.
+- `ensure_utc()` — defensive guard for legacy naive timestamps in SQLite.
+
+---
+
+## 🧪 Transparency & Debugging
+
+The engine includes a **Diagnostic Logging Layer** (`[CONF_DIAG]`) that tracks every point of adjustment in the confidence pipeline.
+- See exactly which penalty (e.g., `poor_fundamentals: -20`) or bonus (e.g., `institutional_interest: +8`) triggered.
+- Full traceback logging for partial method failures in the evaluation context ensures no silent errors.
+
+---
+
+## 📦 Installation
+
+```bash
+# Clone and install dependencies
+pip install -r requirements.txt
+
+# Initialize database schema
+python -c "from services.db import init_db; init_db()"
+
+# Start server
+uvicorn main:app --reload
+```
 
 ---
 
 ## 💻 Dashboard Features
 
 ### **Index View (`index.html`)**
-- **Confluence Dots:** Visual "Traffic Light" (● ● ●) showing alignment across Intraday/Swing/Long-Term.
-- **Actionable Columns:** Shows **R:R Ratio**, **Risk %**, and **Setup Type** badges (🚀, 📉).
-- **Live Filtering:** Sort by "Squeeze", "Trend", or specific Score thresholds.
+- **Confluence Dots:** Visual traffic light (● ● ●) showing alignment across Intraday / Swing / Long-Term. Multibagger score shown separately.
+- **Direction Badge:** LONG / SHORT indicator per stock row.
+- **Actionable Columns:** R:R Ratio, Risk %, Setup Type badges, profit_pct to T1.
 
 ### **Details View (`result.html`)**
-- **Profile Switcher:** Toggle between **Intraday** (Scalp) and **Long Term** (Invest) scoring logic instantly.
-- **Transparency:** "Top Drivers" table shows exactly *which* indicators boosted the score.
-- **Risk Management:** Integrated sticky footer calculator for position sizing based on Stop Loss.
-- **Paper Trading:** Seamless button to log trades to the paper portfolio directly from the results page.
+- **LONG/SHORT Badge:** Direction-aware badges with dynamic styling.
+- **T1/T2 Colours:** Profit percentages coloured green/red correctly for both long and short geometry.
+- **Profile Switcher:** Toggle between Intraday / Short-Term / Long-Term scoring instantly.
+- **Paper Trading:** Log trades directly from the results page to the paper portfolio.
 
 ---
 
-## 🗄️ Detailed File Responsibilities
+## 🗃️ Database Schema (trade.db)
 
-### 1. The Core Engine (The Brain)
-| File | Responsibility |
-|------|----------------|
-| `services/signal_engine.py` | **The Orchestrator.** Loops over timeframes, triggers indicator calculation, evaluates score logic, and builds the raw mathematical profile. |
-| `services/trade_enhancer.py` | **The Execution Planner.** Converts raw signals into actionable trades. Calculates exact Stop Loss arrays, dynamic Take Profits based on pattern geometry, and evaluates hold times. |
-| `main.py` | **The Web Controller.** FastAPI application entry point. Serves HTML templates, exposes API endpoints (/analyze, /quick_scores), and handles incoming user requests. |
-
-### 2. Config Extraction & Resolution
-| File | Responsibility |
-|------|----------------|
-| `config/config_resolver.py` | **The Evaluation Workhorse.** Massive 8-phase pipeline that merges stock data with configured strict gates, outputting technical + fundamental confluence scores. |
-| `config/query_optimized_extractor.py` | **Type-Safe API.** Exposes 85+ robust getter methods to extract specific rule constraints (e.g., Minervini threshold) perfectly without dictionary lookups. |
-| `config/config_extractor.py` | **The Raw Parser.** Interprets the multi-layered Python dictionaries from the config definition files, turning them into standardized objects. |
-| `config/config_validators.py` | **Integrity Checker.** Runs validations against the config schemas at startup to prevent incorrect values from breaking the engine at runtime. |
-
-### 3. Rules & Parameters (Configuration Layer)
-| File | Responsibility |
-|------|----------------|
-| `config/master_config.py` | Global wrapper managing risk profile variables and broad system rules. |
-| `config/setup_pattern_matrix_config.py` | Maps required geometric patterns and strict validation rules to specific Setup logic (e.g., Breakout requires Triangle/VCP). |
-| `config/strategy_matrix_config.py` | Evaluates stock DNA to categorize it into styles: CANSLIM, Swing, Long-term, Scalp. |
-| `config/technical_score_config.py` | Registry of 40+ TA indicators with custom dynamic scoring weights per horizon. |
-| `config/fundamental_score_config.py` | Defines exactly which financial metrics matter and how to parse them. |
-| [main.py](file:///d:/stockviedeo/stock-analyzer-app/main.py) | **The Web Controller.** Entry Point / FastAPI app + Analysis worker. |
-| [services/multibagger/](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/) | **MB Full Module.** Multithreaded bulk screening + MB Brain evaluator. |
-| [config/](file:///d:/stockviedeo/stock-analyzer-app/config/) | **Central Config.** 6 Pillar Configs + MB Specific Scoring Configs. |
-| `config/constants.py` | Contains system constants, magic numbers, string enums, and default paths. |
-| `config/market_utils.py` | Centralizes timezone parsing, enforcing uniform IST (Indian Standard Time) datetimes system-wide. |
-
-### 4. Data Acquisition & Storage
-| File | Responsibility |
-|------|----------------|
-| `services/data_fetch.py` | **L3 Fetcher.** Queries Yahoo Finance for OHLCV bars. Prevents API bans and routes responses to local caches. |
-| `services/fundamentals.py` | Grabs, validates, and calculates trailing corporate financial statements (PE, ROE, Margins) avoiding redundant HTTP requests. |
-| `services/corporate_actions.py` | Web-scrapes Equitymaster for zero-cost upcoming dividend, bonus, and split announcements. |
-| `services/data_layer.py` | **Parquet Lakehouse I/O.** Extremely fast reading/writing of massive Pandas time-series arrays using PyArrow integration. |
-| `services/db.py` | **SQLAlchemy Manager.** Handles SQLite persistence for calculated signals so dashboard reloads are instant. |
-| `services/indicator_cache.py` | Memory buffer layer retaining compiled indicator arrays locally for rapid subsequent reuse during loops. |
-
-### 5. Technical Mathematics
-| File | Responsibility |
-|------|----------------|
-| `services/indicators.py` | **The Math Engine.** Implements Pandas-TA to rapidly calculate 30+ indicators including ATR, MACD, Ichimoku, and Supertrend. |
-| `services/indicator_signals.py` | Reads raw array values and parses them into explicit boolean triggers (e.g., True if RSI > 70). |
-| `services/patterns/` (Directory) | Contains isolated detection logic like `darvas.py` and `minervini_vcp.py` to recognize geometrical structures. |
-
-### 6. Pattern Lifecycle & Intelligence
-| File | Responsibility |
-|------|----------------|
-| `services/patterns/pattern_state_manager.py` | **Persistent Invalidation.** Tracks multi-candle breakdown confirmation using SQLite to prevent premature exit on noise. |
-| `services/patterns/pattern_velocity_tracking.py` | **Execution Intelligence.** Tracks post-breakout movement speed to refine historical hold-time estimates and volatility classification. |
-| `services/patterns/pattern_performance_updater.py` | **Post-Trade Audit.** Logically closes the loop by reconciling actual price action with generated trade plans for accuracy reporting. |
-
----
-
-## 📦 Installation
-
-```
-pip install -r requirements.txt
-```
-
-### **Start server**
-```
-uvicorn main:app --reload
-```
-
-### **Access UI**
-```
-http://localhost:8000
-```
-
----
-
-## 🧠 Logic Deep Dive
-
-The engine uses a deterministic, priority-driven decision framework to classify market setups, validate execution conditions, and generate a geometric, risk-aware trade plan.
-
-### **1. Signal Classification Engine (Priority Queue)**
-The classifier processes all possible setups in descending priority. The **first matching condition** becomes the active signal.
-
-* **🚀 Momentum Breakout (Highest Priority)**
-    * **Logic:** `Price > BB Upper` AND `RSI > 60` AND `RVOL > 1.5×` AND `Trend Strength > 6`.
-    * **Context:** Used for explosive upside events only.
-* **🎯 Volatility Squeeze**
-    * **Logic:** Bollinger Bands inside Keltner Channels (`TTM Squeeze = ON`).
-    * **Context:** Signals volatility contraction before expansion; direction is decided post-breakout.
-* **💎 Quality Accumulation**
-    * **Logic:** `Price in Lower BB Half` AND `ADX < 30` (Ranging) AND `Fundamentals Strong` (PE < 25, ROE > 12%).
-    * **Context:** Used for long-term value accumulation candidates.
-* **📘 Trend Pullback**
-    * **Logic:** `Price > 200 EMA` (Uptrend) AND `Price near 20/50 EMA` AND `RSI > 50`.
-    * **Context:** Standard continuation-pullback entry.
-* **📈 Trend Following**
-    * **Logic:** `20 EMA > 50 EMA > 200 EMA` (Perfect Alignment) AND `MACD Hist > 0`.
-    * **Context:** Used when the trend is fully mature.
-
-### **2. Accumulation Mode (Smart Money Logic)**
-Designed to detect **multibagger-grade accumulation bases** despite weak short-term signals.
-
-* **Fundamental Gate:** `PE < 25`, `ROE > 12%`, `EPS Growth > 0`.
-* **Technical Gate:** `Price > BB Lower Band`, `Price < BB Mid × 1.02`, `ADX < 30`.
-* **Action:** Generates **BUY_ACCUMULATE** with staged position sizing.
-
-### **3. Entry Guards & Safety Filters**
-Every potential trade is validated through multiple protective layers.
-
-* **🟦 Macro Trend Guard:** If NIFTY Trend = Bearish, reduce long confidence by **15%**.
-* **🟥 Supertrend Guard:**
-    * Longs blocked when `Price < Supertrend Bearish` (unless Breakout).
-    * Shorts blocked when `Price > Supertrend Bullish` (unless Breakdown).
-* **🟨 Volatility Guard:**
-    * `ATR% > 4%` → Reject trade (except Breakouts).
-    * `Volatility Quality < 4` → Avoid choppy markets.
-
-### **4. Best Horizon Selection (Profile Competition)**
-The engine computes and scores all horizons simultaneously:
-* Intraday (15m)
-* Short-Term (Daily)
-* Long-Term (Weekly)
-* Multibagger (Monthly)
-
-**Selection Example:**
-* Intraday: 4.5
-* **Short Term: 8.2 (Selected)**
-* Long Term: 6.0
-* Multibagger: 5.4
-
-The **highest-scoring profile** becomes the active view on the dashboard.
-
-### **5. Trade Plan Construction (Geometric Planning)**
-
-* **🎯 Entry Permission Framework:**
-    * **Breakouts:** Require ≥70% confidence.
-    * **Squeezes:** Require ≥65% confidence.
-    * **Pullbacks:** Require ≥55% confidence + `Trend Strength ≥ 5`.
-* **🔻 Stop-Loss Geometry:**
-    * **Base SL:** `Entry − (ATR × SL_MULT)`.
-    * **Supertrend Clamp:** Uses ST if tighter.
-    * **PSAR Tightening:** Uses PSAR if tighter.
-    * **Noise Filter:** SL must be `≥ 0.5× ATR` away.
-* **🎯 Target Calculation:**
-    * **T1:** `Entry + (1.5 × Risk)`.
-    * **T2:** `Entry + (ATR × TP_MULT)`.
-* **📏 Pattern Overrides:**
-    * **Cup & Handle:** Rim depth projection.
-    * **Darvas Box:** Box height projection.
-    * **Flag/Pennant:** Pole height projection.
-* **📊 Risk/Reward Enforcement:**
-    * **Intraday:** 1:1.5
-    * **Swing:** 1:2
-    * **Long-Term:** 1:2.5
-    * *Trades failing RR floor are rejected.*
-
-### **6. Volatility & Volume Controls**
-
-* **Volatility Rules:**
-    * Excessively high ATR% = Dangerous.
-    * Low Volatility Quality = Chop (Avoid).
-* **Volume Rules:**
-    * **Breakouts:** Require strong RVOL.
-    * **Breakdowns:** Require RVOL ≥ 1.0.
-    * **Pullbacks:** Allow low RVOL (healthy consolidation).
-* **Supertrend Proximity:**
-    * Avoid longs directly under bearish ST.
-    * Avoid shorts directly over bullish ST.
-
-### **7. Setup Confidence Model (0–100%)**
-Final Confidence = **Trend + Momentum + Volume ± Macro Adjustment**
-
-* **Trend Component:**
-    * Above 200 EMA → **+20**
-    * Above 50 EMA → **+10**
-    * Supertrend Alignment → **+10**
-    * Trend Strength Tiers
-* **Momentum Component:**
-    * MACD Histogram Positive
-    * RSI Slope Positive
-    * Above VWAP
-    * Breakout Bonus
-* **Volume Component:**
-    * RVOL Tiers
-    * OBV Confirmation
-    * Volume Spike Detection
-* **Final Adjustments:**
-    * Macro Penalty (if Bearish Index)
-    * Setup Boost (VCP, Breakout, Squeeze)
-    * *Confidence is clipped to 0–100% range.*
+| Table | Written By | Purpose |
+|-------|-----------|---------|
+| `signal_cache` | `main.py` | Caches analysis results per symbol — includes `direction` field for LONG/SHORT. |
+| `fundamental_cache` | `fundamentals.py` | 24-hour fundamental data cache — shared between main and MB pipelines. |
+| `pattern_breakdown_state` | `pattern_state_manager.py` | Multi-candle invalidation tracking per symbol/pattern/horizon. |
+| `pattern_performance_history` | `pattern_performance_updater.py` | Post-trade audit log for pattern accuracy reporting. |
+| `paper_trades` | `main.py` | Paper portfolio with entry, SL, T1, T2, horizon, position size. |
+| `multibagger_candidates` | `mb_scheduler.py` | MB pipeline results — including `conviction_tier`, `entry_trigger`, and `hold_months`. |

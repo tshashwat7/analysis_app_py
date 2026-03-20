@@ -218,6 +218,9 @@ class ConfigResolver:
         
         overall_start = datetime.now().timestamp()
         
+        import hashlib
+        import json
+        
         ctx = {
             "meta": {
                 "symbol": symbol,
@@ -226,6 +229,20 @@ class ConfigResolver:
                 "config_version": "6.0"
             }
         }
+        
+        # ✅ NEW: Context Hash Tracking (Risk 2)
+        # Generate hash of input data to detect staleness in execution phase.
+        try:
+            hash_payload = {
+                "indicators": indicators,
+                "fundamentals": fundamentals
+            }
+            # Use sort_keys=True for deterministic hashing
+            payload_str = json.dumps(hash_payload, sort_keys=True, default=str).encode()
+            ctx["meta"]["context_hash"] = hashlib.md5(payload_str).hexdigest()
+        except Exception as e:
+            self.logger.warning(f"[{symbol}] Context hashing failed: {e}")
+            ctx["meta"]["context_hash"] = "N/A"
         
         # Store raw dicts
         ctx["fundamentals"] = safe_fund.raw
@@ -573,12 +590,12 @@ class ConfigResolver:
         )
         
         from services.data_fetch import extract_metric_details
-        breakdown_metrics = {
-            **tech_result["breakdown"],
-            **fund_result["breakdown"],
-            **hybrid_pillar["breakdown"]
-        }
-        metric_details = extract_metric_details(breakdown_metrics)
+        metric_details = {}
+        
+        # Namespace each pillar to avoid leaf-level collisions (e.g. priceVsPrimaryTrendPct in both tech and hybrid)
+        metric_details.update({f"tech.{k}": v for k, v in extract_metric_details(tech_result["breakdown"]).items()})
+        metric_details.update({f"fund.{k}": v for k, v in extract_metric_details(fund_result["breakdown"]).items()})
+        metric_details.update({f"hybrid.{k}": v for k, v in extract_metric_details(hybrid_pillar["breakdown"]).items()})
         
         return {
             "technical": tech_result,
@@ -2004,6 +2021,10 @@ class ConfigResolver:
         pv = ctx.get("pattern_validation", {}).get("by_setup", {}).get(setup_type, {})
         flat_data["pattern_count"] = len(pv.get("confirming_found", []))
 
+        # ✅ PATCH A: Inject divergence_type for pre-computation check
+        divergence_ctx = ctx.get("divergence", {})
+        flat_data["divergence_type"] = divergence_ctx.get("divergence_type", "none")
+
         # ==========================================================
         # STEPS 5-7: UNIVERSAL + HORIZON + CONDITIONAL MODIFIERS
         # ==========================================================
@@ -2222,6 +2243,16 @@ class ConfigResolver:
         final = base + total_adjustment
         clamp = self.extractor.get_confidence_clamp()
         clamped = max(clamp[0], min(clamp[1], final))
+
+        # ✅ B8 FIX (Refined): Structural Score Ceiling
+        # Restrict confidence to 90 unless there is extreme volume confirmation (rvol > 2.0)
+        # Prevents high-confidence scores for momentum setups lacking strong institutional push.
+        if "BREAKOUT" in setup_type or "MOMENTUM" in setup_type:
+            rvol = flat_data.get("rvol", 1.0)
+            if rvol <= 2.0 and clamped > 90:
+                self.logger.info(f"[{ctx['meta']['symbol']}] 🛡️ B8 CEILING: Capping {clamped} -> 90 (rvol={rvol:.2f})")
+                clamped = 90
+                breakdown.append(f"score_ceiling: capped at 90 (rvol {rvol:.2f} <= 2.0)")
 
         # ==========================================================
         # TRADEABILITY CHECK (min_tradeable_confidence)
@@ -2644,81 +2675,43 @@ class ConfigResolver:
         generic_targets = None
         direction = ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
         
-        if price > 0 and atr > 0:
+        # --------------------------------------------------
+        # 1️⃣ Structural ATR-based RR + SL 
+        # --------------------------------------------------
+        if atr > 0 and price > 0:
+            # ✅ ARCHITECTURAL FIX: Resolver only provides structural baseline.
+            # Pattern-specific geometry belongs in Stage 2 (enhance_execution_context).
+            
+            # Check if any primary patterns were found to determine the source tag
+            primary_patterns = (
+                ctx.get("pattern_validation", {})
+                .get("by_setup", {})
+                .get(setup_type, {})
+                .get("primary_found", [])
+            )
+            
+            rr = target_mult / atr_mult if atr_mult > 0 else 1.0
+            
+            # If patterns exist, this is a structural baseline (skip Stage 1 gate)
+            # If no patterns, this is a generic ATR fallback (enforce Stage 1 gate)
+            rr_source = "atr_structural" if primary_patterns else "generic_atr"
+            
             if direction == "bearish":
                 sl_price = price + (atr * atr_mult)
+                generic_targets = {
+                    "entry": price,
+                    "stop_loss": sl_price,
+                    "t1": price - (atr * target_mult),
+                    "t2": price - (atr * target_mult * 2)
+                }
             else:
                 sl_price = price - (atr * atr_mult)
-        # --------------------------------------------------
-        # 1️⃣ Pattern-based RR + SL (validated patterns only)
-        # --------------------------------------------------
-        primary_patterns = (
-            ctx.get("pattern_validation", {})
-            .get("by_setup", {})
-            .get(setup_type, {})
-            .get("primary_found", [])
-        )
-
-        if primary_patterns and atr > 0:
-            primary = primary_patterns[0]
-            pdata = ctx.get("patterns", {}).get(primary, {})
-
-            if pdata.get("found"):
-                pattern_targets = self._calculate_pattern_targets(
-                    primary, pdata, ctx["price_data"],
-                    indicators=ctx.get("indicators", {}),
-                    horizon=self.horizon
-                )
-
-                if pattern_targets:
-                    entry = pattern_targets.get("entry")
-                    sl_price = pattern_targets.get("stop_loss")
-
-                    targets = [
-                        v for k, v in pattern_targets.items()
-                        if k.startswith("t") and isinstance(v, (int, float))
-                    ]
-
-                    best_target = max(targets) if targets else None
-
-                    if entry and sl_price and best_target:
-                        if direction == "bearish":
-                            if entry < sl_price and best_target < entry:
-                                rr = abs(entry - best_target) / abs(sl_price - entry)
-                                rr_source = "pattern"
-                        else:
-                            if entry > sl_price and best_target > entry:
-                                rr = (best_target - entry) / (entry - sl_price)
-                                rr_source = "pattern"
-
-        # --------------------------------------------------
-        # 2️⃣ Generic ATR fallback (RR + SL + Targets)
-        # --------------------------------------------------
-        # Merge the logic to prevent unconditional overwrite
-        if atr > 0 and price > 0:
-            if sl_dist > 0:
-                generic_rr = (atr * target_mult) / sl_dist
-                
-                # ONLY apply if not already set by a primary pattern
-                if rr is None:
-                    rr = generic_rr
-                    rr_source = "generic_atr"
-                
-                # Always calculate generic_targets as a backup
-                if direction == "bearish":
-                    generic_targets = {
-                        "entry": price,
-                        "stop_loss": price + (atr * atr_mult),
-                        "t1": price - (atr * target_mult),
-                        "t2": price - (atr * target_mult * 2)
-                    }
-                else:
-                    generic_targets = {
-                        "entry": price,
-                        "stop_loss": price - (atr * atr_mult),
-                        "t1": price + (atr * target_mult),
-                        "t2": price + (atr * target_mult * 2)
-                    }
+                generic_targets = {
+                    "entry": price,
+                    "stop_loss": sl_price,
+                    "t1": price + (atr * target_mult),
+                    "t2": price + (atr * target_mult * 2)
+                }
 
         return {
             "rrRatio": round(rr, 2) if rr else None,
@@ -2770,6 +2763,22 @@ class ConfigResolver:
 
             # ── Missing value check (Strict for Opportunity Gates) ──
             if actual_value is None:
+                # ✅ FIX: Check if gate is marked as 'optional' in registry
+                # This handles deferred gates (like rrRatio) that correctly return None in Stage 1
+                registry = self.extractor.get_gate_registry()
+                gate_meta = registry.get(gate_name, {})
+                
+                if gate_meta.get("optional", False):
+                    gate_results[gate_name] = {
+                        "status": "skipped",
+                        "reason": gate_meta.get("skip_reason", "deferred_to_stage2_enhancer"),
+                        "required": threshold, "actual": None,
+                        "source": resolved_gate.source
+                    }
+                    stats["skipped"] += 1
+                    continue
+
+                # Original hard-fail for all other None cases
                 gate_results[gate_name] = {
                     "status": "failed", "reason": "value_unavailable",
                     "required": threshold, "actual": None, "source": resolved_gate.source
@@ -2840,8 +2849,11 @@ class ConfigResolver:
             "fundamentalScore": scoring.get("fundamental", {}).get("score"),
             "hybridScore": scoring.get("hybrid", {}).get("score"),
 
-            # Risk / R:R (will be filled next)
-            "rrRatio": risk.get("rrRatio"),
+            # Risk / R:R (selective gating)
+            # ✅ FIX: Only expose RR to opportunity gate if it's ATR-based (no patterns found).
+            # If a pattern is found, rrRatio is skipped here and validated in Stage 2.
+            "rrRatio": risk.get("rrRatio") if risk.get("rr_source") == "generic_atr" else None,
+            "structural_rr": risk.get("rrRatio") if risk.get("rr_source") == "atr_structural" else None,
 
             # Safety metadata (already used)
             "execution_risk_score": execution.get("summary", {}).get("execution_risk_score"),
@@ -3797,6 +3809,23 @@ class ConfigResolver:
                     if result:
                         return result
 
+            # ── deathCross ────────────────────────────────────────────────────────
+            # Physics: maMid/maSlow spread as structural depth for bearish targets
+            elif pattern_name == "deathCross":
+                ma_mid = _safe_float(ind.get("maMid") or price_data.get("maMid"))
+                ma_slow = _safe_float(ind.get("maSlow") or price_data.get("maSlow"))
+                
+                if ma_mid and ma_slow and ma_mid < ma_slow:
+                    depth = ma_slow - ma_mid
+                    sl = round(entry + depth * 0.5, 2)
+                    t1 = round(entry - depth * 1.0, 2)
+                    t2 = round(entry - depth * 2.0, 2)
+                    
+                    result = _validate_and_build(sl, t1, t2, depth,
+                        source="geometry", sl_source="ma_spread", t_source="ma_spread_projection")
+                    if result:
+                        return result
+
             # ── ichimokuSignals ───────────────────────────────────────────────────
             # Physics: trend-confirmation pattern. No single "depth" from detector.
             # SL logic:
@@ -3877,20 +3906,20 @@ class ConfigResolver:
 
             # ── goldenCross ───────────────────────────────────────────────────────
             # Physics: target_ratio=0 in config (intentional — no fixed depth target)
-            # Use MA geometry: distance fast MA has cleared above slow MA = depth
-            # SL: below fast MA (invalidation = fast crosses back under slow)
+            # Use MA geometry: distance maMid has cleared above maSlow = depth
+            # SL: below maMid (invalidation = maMid crosses back under maSlow)
             elif pattern_name == "goldenCross":
-                ma_fast = _safe_float(ind.get("maFast") or price_data.get("maFast"))
+                ma_mid =  _safe_float(ind.get("maMid")  or price_data.get("maMid"))
                 ma_slow = _safe_float(ind.get("maSlow") or price_data.get("maSlow"))
 
-                if ma_fast and ma_slow and ma_fast > ma_slow:
-                    depth = ma_fast - ma_slow       # cross spread = structural depth
-                    sl = round(ma_fast * 0.995, 2)  # just below fast MA
+                if ma_mid and ma_slow and ma_mid > ma_slow:
+                    depth = ma_mid - ma_slow       # cross spread = structural depth
+                    sl = round(ma_mid * 0.995, 2)  # just below mid-length MA
                     t1 = round(entry + depth * 1.0, 2)
                     t2 = round(entry + depth * 2.0, 2)
 
                     result = _validate_and_build(sl, t1, t2, depth,
-                        source="geometry", sl_source="ma_fast", t_source="ma_spread_projection")
+                        source="geometry", sl_source="ma_mid", t_source="ma_spread_projection")
                     if result:
                         return result
 
@@ -4044,10 +4073,12 @@ class ConfigResolver:
         # --------------------------------------------------
         order_type_map = {
             "MOMENTUM_BREAKOUT": "stop_market",
+            "MOMENTUM_BREAKDOWN": "stop_market",
             "VOLATILITY_SQUEEZE": "stop_market",
             "QUALITY_ACCUMULATION": "limit",
             "VALUE_TURNAROUND": "limit",
-            "TREND_PULLBACK": "limit"
+            "TREND_PULLBACK": "limit",
+            "BEAR_TREND_FOLLOWING": "stop_market",
         }
 
         return {
@@ -4122,8 +4153,13 @@ class ConfigResolver:
         if not checks["quantity_available"]:
             failures.append("Position sizing failed: quantity is zero or None")
         
+        # Hard blocks are non-RR related failures (permissions, time, capital)
+        # Any failure in these core checks constitutes a hard execution block.
+        is_hard_blocked = not checks["entry_permission"] or not checks["time_allowed"] or not checks["capital_available"]
+
         return {
             "can_execute": all_passed,
+            "is_hard_blocked": is_hard_blocked,
             "checks": checks,
             "failures": failures
         }

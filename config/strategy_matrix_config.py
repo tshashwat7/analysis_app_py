@@ -25,59 +25,100 @@ from typing import Dict, List, Optional, Any
 # ═══════════════════════════════════════════════════════════════════════
 
 STRATEGY_MATRIX = {
-    "swing_trading": {
-        "description": "Captures multi-day price swings (3-10 days)",
+    "swing_breakout": {
+        "description": "Momentum-based swings focused on breakouts (3-10 days)",
+        "enabled": True,
+        "fit_threshold": 55,
+        
+        "fit_indicators": {
+            "trendStrength": {"min": 5.0, "weight": 0.3},
+            "volatilityQuality": {"min": 6.0, "weight": 0.3},
+            "adx": {"min": 25, "weight": 0.2},
+            "rsi": {"min": 55, "weight": 0.2}
+        },
+        
+        "scoring_rules": {
+            "price_near_bb_high": {
+                "gates": {"bbpercentb": {"min": 0.90}},
+                "points": 35,
+                "reason": "Price in Breakout Zone (BB High)"
+            },
+            "rsi_momentum": {
+                "gates": {"rsi": {"min": 60}},
+                "points": 25,
+                "reason": "Strong RSI Momentum"
+            },
+            "breakout_pattern_confluence": {
+                "gates": {
+                    "_logic": "OR",
+                    "darvasBox": {"equals": True},
+                    "flagPennant": {"equals": True},
+                    "bollingerSqueeze": {"equals": True}
+                },
+                "points": 40,
+                "reason": "Breakout Pattern Confluence"
+            }
+        },
+        
+        "preferred_setups": ["MOMENTUM_BREAKOUT", "PATTERN_DARVAS_BREAKOUT", "PATTERN_FLAG_BREAKOUT"],
+        "avoid_setups": ["DEEP_PULLBACK", "QUALITY_ACCUMULATION"],
+        
+        "horizon_fit_multipliers": {
+            "intraday": 0.8,
+            "short_term": 1.2,
+            "long_term": 1.1
+        },
+        
+        "scoring_rules_max_bonus": 100,
+
+        "notes": "Best for strong uptrends and breakout continuation"
+    },
+
+    "swing_pullback": {
+        "description": "Mean-reversion swings focused on dips (3-15 days)",
         "enabled": True,
         "fit_threshold": 50,
         
         "fit_indicators": {
-            "trendStrength": {"min": 4.0, "weight": 0.3},
-            "volatilityQuality": {"min": 5.0, "weight": 0.3},
-            "adx": {"min": 20, "weight": 0.2}
+            "trendStrength": {"min": 4.0, "weight": 0.4},
+            "volatilityQuality": {"min": 4.0, "weight": 0.3},
+            "priceVsPrimaryTrendPct": {"min": 0, "weight": 0.3}
         },
         
         "scoring_rules": {
             "price_near_bb_low": {
-                "gates": {"bbpercentb": {"max": 0.05}},
-                "points": 35,
-                "reason": "Price near Buy Zone (BB Low)"
-            },
-            "rsi_dip": {
-                "gates": {"rsi": {"max": 45}},
-                "points": 25,
-                "reason": "RSI Oversold/Dip"
-            },
-            "double_bottom_reversal": {
-                "gates": {
-                    "double_top_bottom_found": {"equals": True},
-                    "double_top_bottom_type": {"equals": "bullish"}
-                },
+                "gates": {"bbpercentb": {"max": 0.10}},
                 "points": 40,
-                "reason": "Double Bottom Reversal Pattern"
+                "reason": "Price near Mean Reversion Zone (BB Low)"
             },
-            "squeeze_compression": {
-                "gates": {"ttmSqueeze": {"equals": "Squeeze On"}},
-                "points": 10,
-                "reason": "Volatility Squeeze Active"
+            "rsi_oversold_bounce": {
+                "gates": {"rsi": {"max": 45}},
+                "points": 30,
+                "reason": "RSI Oversold / Deep Dip"
+            },
+            "pullback_confluence": {
+                "gates": {
+                    "_logic": "OR",
+                    "threeLineStrike": {"equals": True},
+                    "doubleTopBottom": {"equals": True}
+                },
+                "points": 30,
+                "reason": "Reversal / Pullback Pattern Confluence"
             }
         },
         
-        # ✅ Strategy preferences (NOT horizon-specific)
-        "preferred_setups": ["TREND_PULLBACK", "DEEP_PULLBACK", "PATTERN_FLAG_BREAKOUT"],
-        "avoid_setups": ["QUALITY_ACCUMULATION"],
+        "preferred_setups": ["TREND_PULLBACK", "DEEP_PULLBACK", "REVERSAL_RSI_SWING_UP"],
+        "avoid_setups": ["MOMENTUM_BREAKOUT"],
         
-        # ✅ Horizon fit multipliers (how well strategy fits each horizon)
         "horizon_fit_multipliers": {
-            "intraday": 0.7,        # Not ideal for swing
-            "short_term": 1.2,      # Best fit
-            "long_term": 1.1        # Good fit
+            "intraday": 0.5,
+            "short_term": 1.1,
+            "long_term": 1.2
         },
         
-        # Max positive bonus points (sum of all positive scoring_rules points)
-        # Used by resolver to normalize bonus to 0-100 before blending
-        "scoring_rules_max_bonus": 110,  # 35+25+40+10
+        "scoring_rules_max_bonus": 100,
 
-        "notes": "Best for 3-10 day holds with clear trend structure"
+        "notes": "Best for buying quality on dips within established uptrends"
     },
 
     "day_trading": {
@@ -652,6 +693,38 @@ STRATEGY_MATRIX = {
         "scoring_rules_max_bonus": 135,  # 40+25+30+20+20 (excludes -25 -20 penalties)
 
         "notes": "Requires patience and quality floor (ROE ≥ 15, low debt)"
+    },
+
+    "short_momentum": {
+        "description": "High-velocity bearish breakdowns with tight stops",
+        "enabled": True,
+        "fit_threshold": 60,
+        "fit_indicators": {
+            "momentumStrength": {"min": 6.0, "weight": 0.4},
+            "rsi": {"max": 45, "weight": 0.3, "direction": "invert"},
+            "volatilityQuality": {"min": 5.0, "weight": 0.3}
+        },
+        "scoring_rules": {
+            "aggressive_breakdown": {
+                "gates": {"momentumStrength": {"min": 8.0}, "rsi": {"max": 35}},
+                "points": 40,
+                "reason": "Aggressive Bearish Momentum"
+            },
+            "volatility_expansion": {
+                "gates": {"rvol": {"min": 1.5}, "bbpercentb": {"max": 0.05}},
+                "points": 30,
+                "reason": "Volatility Expansion Breakdown"
+            }
+        },
+        "preferred_setups": ["MOMENTUM_BREAKDOWN", "BEAR_TREND_FOLLOWING"],
+        "avoid_setups": ["QUALITY_ACCUMULATION", "VALUE_TURNAROUND"],
+        "horizon_fit_multipliers": {
+            "intraday": 1.2,
+            "short_term": 1.0,
+            "long_term": 0.5
+        },
+        "scoring_rules_max_bonus": 70,
+        "notes": "Focus on high-velocity moves. Deprioritized for long-term horizons."
     }
 }
 

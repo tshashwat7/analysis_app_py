@@ -15,6 +15,7 @@ data/
 
 # Distribution / packaging
 .Python
+.agents
 build/
 develop-eggs/
 dist/

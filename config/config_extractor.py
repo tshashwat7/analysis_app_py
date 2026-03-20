@@ -103,6 +103,7 @@ class ConfigExtractor:
             self.extract_risk_sections()
             self.extract_gate_sections()
             self.extract_matrix_sections()
+            self.extract_strategy_sections()
             
             # ✅ NEW: Extract confidence sections
             self.extract_confidence_sections()
@@ -297,8 +298,8 @@ class ConfigExtractor:
         """
         self.logger.warning(
             "⚠️ Using DEPRECATED master_config for confidence — "
-            "min_tradeable_confidence and high_confidence_override will "
-            "not be available. Migrate to confidence_config.py."
+            "This fallback will be REMOVED in the next version. "
+            "Migrate all confidence settings to confidence_config.py."
         )
         
         global_cfg = self.master_config.get("global", {})
@@ -387,10 +388,10 @@ class ConfigExtractor:
             source="master_config.HYBRID_PILLAR_COMPOSITION"
         )
         
-        # ✅ NEW: Extract pillar weights
+        # ✅ NEW: Extract pillar weights (Pre-sliced by horizon)
         self.sections["horizon_pillar_weights"] = ConfigSection(
-            data=HORIZON_PILLAR_WEIGHTS,
-            source="master_config.HORIZON_PILLAR_WEIGHTS"
+            data=HORIZON_PILLAR_WEIGHTS.get(self.horizon, {}),
+            source=f"master_config.HORIZON_PILLAR_WEIGHTS.{self.horizon}"
         )
 
 
@@ -576,11 +577,6 @@ class ConfigExtractor:
             data=horizon_risk.get("base_multiplier", 1.0),
             source=f"horizons.{self.horizon}.risk_management.base_multiplier"
         )
-
-        # Logic placeholders to satisfy properties
-        self.sections["blocked_setups"] = ConfigSection(data=set(), source="placeholder")
-        self.sections["blocked_strategies"] = ConfigSection(data=set(), source="placeholder")
-        self.sections["strategy_multipliers"] = ConfigSection(data={}, source="placeholder")
 
     def extract_gate_sections(self):
         """
@@ -827,6 +823,57 @@ class ConfigExtractor:
                 error=str(e)
             )
 
+    def extract_strategy_sections(self):
+        """Extract strategy configurations."""
+        try:
+            from config.strategy_matrix_config import STRATEGY_MATRIX
+
+            # Full strategy matrix
+            self.sections["strategy_matrix"] = ConfigSection(
+                data=STRATEGY_MATRIX,
+                source="strategy_matrix.STRATEGY_MATRIX"
+            )
+
+            # Individual strategies
+            for strat_name, strat_config in STRATEGY_MATRIX.items():
+                self.sections[f"strategy_{strat_name}"] = ConfigSection(
+                    data=strat_config,
+                    source=f"strategy_matrix.{strat_name}"
+                )
+
+        except (ImportError, Exception) as e:
+            self.logger.warning(f"Could not load strategy_matrix_config: {e}")
+
+        # Horizon strategy preferences
+        horizon_cfg = self.master_config.get("horizons", {}).get(self.horizon, {})
+        prefs = horizon_cfg.get("strategy_preferences", {})
+        
+        self.sections["strategy_preferences"] = ConfigSection(
+            data=prefs,
+            source=f"horizons.{self.horizon}.strategy_preferences"
+        )
+        
+        # Populate property-linked sections
+        self.sections["blocked_setups"] = ConfigSection(
+            data=set(prefs.get("blocked_setups", [])),
+            source=f"horizons.{self.horizon}.strategy_preferences.blocked_setups"
+        )
+        
+        self.sections["preferred_setups"] = ConfigSection(
+            data=prefs.get("preferred_setups", []),
+            source=f"horizons.{self.horizon}.strategy_preferences.preferred_setups"
+        )
+        
+        self.sections["blocked_strategies"] = ConfigSection(
+            data=set(prefs.get("blocked_strategies", [])),
+            source=f"horizons.{self.horizon}.strategy_preferences.blocked_strategies"
+        )
+        
+        self.sections["strategy_multipliers"] = ConfigSection(
+            data=prefs.get("strategy_multipliers", {}),
+            source=f"horizons.{self.horizon}.strategy_preferences.strategy_multipliers"
+        )
+
     # ═══════════════════════════════════════════════════════════════════════
     # VALIDATION METHODS
     # ═══════════════════════════════════════════════════════════════════════
@@ -997,7 +1044,13 @@ class ConfigExtractor:
         section = self.sections.get(section_name)
 
         if not section:
-            self.logger.debug(f"Config section not found: {section_name}")
+            # ✅ PATCH D: Suppress noise for known optional sections
+            is_optional = any(
+                section_name.startswith(prefix) 
+                for prefix in ("strategy_market_cap_", "setup_")
+            )
+            if not is_optional:
+                self.logger.debug(f"Config section not found: {section_name}")
             return default
 
         if not section.is_valid:

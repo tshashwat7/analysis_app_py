@@ -1602,7 +1602,16 @@ async def analyze_common(
             "all_horizon_scores": FULL_HORIZON_SCORES.get(symbol, {}),  # ✅ Global scores for toggle buttons
             "trade_direction": trade_plan.get("metadata", {}).get("direction", "bullish"),
         }
-        logger.debug(f"analysis data for {symbol}: {analysis_data}")
+        # ✅ Log only essential context to reduce noise (with Stage 1 -> Stage 2 evolution)
+        log_context = {
+            "indicators": analysis_data.get("indicators", {}),
+            "fundamentals": analysis_data.get("fundamentals", {}),
+            "eval_ctx": profile_report.get("eval_ctx", {}),
+            "exec_ctx_raw": trade_plan.get("metadata", {}).get("exec_ctx_raw", {}),
+            "exec_ctx_enhanced": trade_plan.get("metadata", {}).get("exec_ctx", {}),
+            "trade_plan": trade_plan
+        }
+        logger.debug(f"analysis data for {symbol}: {log_context}")
         return templates.TemplateResponse("result.html", context)
         
     except Exception as e:

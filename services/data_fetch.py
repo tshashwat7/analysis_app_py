@@ -155,6 +155,13 @@ def _retry(fn, retries=3, backoff=1.5, name: Optional[str] = None):
         except Exception as e:
             last_exc = e
             error_msg = str(e).lower()
+            
+            # ✅ PATCH C: Stop retrying on TypeError (structural data issue)
+            # Retrying NoneType arithmetic errors is futile and wastes time.
+            if isinstance(e, TypeError):
+                logger.warning(f"[FAIL] {name or fn.__name__}: {e} (Non-retriable TypeError)")
+                return None
+
             # ✅ Explicit Detection of Yahoo Rate Limits
             is_rate_limit = any(x in error_msg for x in ["429", "rate limit", "too many requests"])
             if attempt < retries - 1:
@@ -528,7 +535,8 @@ def safe_history(sym: str, period: str = '2y', auto_adjust: bool = True, **kwarg
     try:
         df = _retry(_fetch, retries=3, backoff=2.0)
         if df is None or getattr(df, "empty", True): return pd.DataFrame()
-        return df
+        # Drop rows where Close is NaN (trailing empty rows from weekly/monthly fetches)
+        return df.dropna(subset=["Close"])
     except: return pd.DataFrame()
 
 @lru_cache(maxsize=1024)

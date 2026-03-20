@@ -137,6 +137,16 @@ HORIZON_METRIC_INCLUSION = {
             "shortInterest",    # Market timing
             "days_to_earnings"  # Event timing
         ]
+    },
+    "multibagger": {
+        "valuation": ["peRatio", "pbRatio", "pegRatio"],
+        "profitability": ["roe", "roce", "roic"],
+        "growth": ["epsGrowth5y", "revenueGrowth5y", "profitGrowth3y", "marketCapCagr"],
+        "financial_health": ["deRatio", "interestCoverage", "fcfYield", "ocfVsProfit"],
+        "quality": ["piotroskiF", "earningsStability"],
+        "ownership": ["promoterHolding", "institutionalOwnership"],
+        "market": ["marketCap"],
+        "exclude": ["quarterlyGrowth", "position52w", "shortInterest", "dividendyield"]
     }
 }
 
@@ -153,6 +163,15 @@ HORIZON_FUNDAMENTAL_WEIGHTS = {
     },
     
     "long_term": {"valuation": 0.15,"profitability": 0.25,"growth": 0.20,"financial_health": 0.20,"quality": 0.10,"ownership": 0.05,"dividend": 0.03,"market": 0.02
+    },
+    "multibagger": {
+        "growth": 0.35,
+        "profitability": 0.25,
+        "quality": 0.15,
+        "financial_health": 0.15,
+        "valuation": 0.05,
+        "ownership": 0.03,
+        "market": 0.02
     }
 }
 
@@ -257,7 +276,26 @@ METRIC_WEIGHTS = {
         # MARKET (2%)
         "marketCap": 1.0
     },
-
+    "multibagger": {
+        "epsGrowth5y": 0.40,
+        "revenueGrowth5y": 0.30,
+        "profitGrowth3y": 0.20,
+        "marketCapCagr": 0.10,
+        "roe": 0.50,
+        "roce": 0.30,
+        "roic": 0.20,
+        "piotroskiF": 0.60,
+        "earningsStability": 0.40,
+        "deRatio": 0.50,
+        "interestCoverage": 0.30,
+        "ocfVsProfit": 0.20,
+        "peRatio": 0.40,
+        "pbRatio": 0.30,
+        "pegRatio": 0.30,
+        "promoterHolding": 0.70,
+        "institutionalOwnership": 0.30,
+        "marketCap": 1.0
+    }
 }
 
 # ==============================================================================
@@ -446,9 +484,19 @@ def compute_category_score(
         if metric_weight is None:
             continue
         
-        metric_data = fundamentals.get(metric)
+        # ✅ FIX: For position52w, prioritize proximity (%) over drawdown (%)
+        if metric == "position52w":
+            metric_data = fundamentals.get("priceVs52wHighPct", fundamentals.get("position52w"))
+        else:
+            metric_data = fundamentals.get(metric)
+
         score = extract_normalized_score(metric_data, metric, horizon)
         
+        # ✅ FIX (Issue 5 + Weight Redistribution): Skip missing metrics
+        if score is None:
+            logger.warning(f"[DATA_GAP] {metric}: value=None — metric excluded, weight redistributed.")
+            continue
+            
         score = max(0.0, min(10.0, score))  # Defensive clamp
         
         weighted_score += score * metric_weight
@@ -461,6 +509,7 @@ def compute_category_score(
         }
     
     if total_weight == 0:
+        logger.warning(f"[DATA_GAP] {category}: all metrics missing, returning 0.0")
         return 0.0, breakdown
     
     normalized = weighted_score / total_weight
@@ -635,22 +684,22 @@ def extract_normalized_score(
         # Fallback: re-normalize from raw value
         raw = metric_data.get("raw") if metric_data.get("raw") is not None else metric_data.get("value")
         if raw is None:
-            logger.warning(f"No score/raw for {metric_name}")
-            return 0.0
+            logger.warning(f"[DATA_GAP] No score/raw for {metric_name} — Returning None for skipping.")
+            return None
 
     elif isinstance(metric_data, (int, float, str)):
         raw = metric_data
     else:
-        logger.warning(f"Invalid type for {metric_name}: {type(metric_data)}")
-        return 0.0
+        logger.warning(f"[DATA_GAP] Invalid type for {metric_name}: {type(metric_data)} — Returning None for skipping.")
+        return None
 
     # Robust float conversion for raw
     try:
         raw_float = float(str(raw).replace('%', '').replace('x', '').replace(',', '').strip())
         return _normalize_fundamental_metric(metric_name, raw_float, horizon)
     except (ValueError, TypeError):
-        logger.warning(f"Could not convert raw value '{raw}' to float for {metric_name}")
-        return 0.0
+        logger.warning(f"[DATA_GAP] Could not convert raw value '{raw}' to float for {metric_name} — Returning None.")
+        return None
 
 def _normalize_fundamental_metric(
     metric_name: str,
@@ -680,6 +729,8 @@ def _normalize_fundamental_metric(
         return _normalize_health_quality(metric_name, raw_value)
     elif category == "ownership":
         return _normalize_ownership(metric_name, raw_value)
+    elif category == "market":
+        return _normalize_market(metric_name, raw_value)
     else:
         # Generic linear scaling for unknown categories
         return min(10.0, max(0.0, raw_value / 10))
@@ -795,6 +846,21 @@ def _normalize_health_quality(metric: str, val: float) -> float:
     
     return 5.0  # Neutral for marketCap, position52w, etc.
 
+
+def _normalize_market(metric: str, val: float) -> float:
+    """Normalize market related metrics like position52w"""
+    if val is None: return 0.0
+    
+    if metric == "position52w":
+        # val should be % of 52w high (e.g., 90.0) -> Score 9.0
+        # If it's still drawdown (e.g., 10.0), it will score 1.0 (correctly penalized)
+        return min(10.0, max(0.0, val / 10.0))
+    
+    elif metric == "marketCap":
+        # Handled by fallback or custom logic if needed
+        return min(10.0, max(0.0, val / 1e11)) # Very generic placeholder
+        
+    return 5.0
 
 def _normalize_ownership(metric: str, val: float) -> float:
     """Context-dependent scoring"""

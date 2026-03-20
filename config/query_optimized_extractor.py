@@ -17,7 +17,7 @@ Version: 3.0
 
 import hashlib
 import re
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Set
 from dataclasses import dataclass
 from functools import lru_cache
 import logging
@@ -409,6 +409,13 @@ class QueryOptimizedExtractor:
         for key in ("confidence_multiplier", "confidence_boost", "confidence_penalty"):
             if key in modifier_config:
                 adjustment = modifier_config[key]
+                if key == "confidence_penalty" and adjustment is not None and float(adjustment) > 0:
+                    self.logger.error(
+                        f"[CONFIG BUG] confidence_penalty={adjustment} is positive — "
+                        f"must be negative in confidence_config.py. Auto-correcting. "
+                        f"Check: {modifier_config.get('reason', 'unknown')}"
+                    )
+                    adjustment = -abs(float(adjustment))
                 break
         
         block_entry = modifier_config.get("block_entry", False)
@@ -450,13 +457,17 @@ class QueryOptimizedExtractor:
         """
         results = {}
         
+        # 0. Prepare flat namespace for nested indicator/fundamental checks
+        # This handles fund_valuation_bucket, technicalScore, etc.
+        eval_data = self._prepare_evaluation_namespace(data)
+        
         # 1. Volume Modifiers
         volume_mods = self.get_volume_modifiers()
         results["volume_modifiers"] = {}
         
         for mod_name, mod_config in volume_mods.items():
             applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
-                mod_config, data, setup_type
+                mod_config, eval_data, setup_type
             )
             results["volume_modifiers"][mod_name] = {
                 "applies": applies,
@@ -470,9 +481,24 @@ class QueryOptimizedExtractor:
         divergence = universal.get("divergence_penalties", {})
         results["divergence_penalties"] = {}
         
+        # ✅ PATCH A: Honour the pre-computed divergence_type from detect_divergence().
+        # If the upstream resolver already determined divergence_type='none', skip all
+        # penalty gate evaluation — prevents rsislope gate from double-counting momentum
+        # deceleration as a structural divergence.
+        precomputed_divergence_type = eval_data.get("divergence_type", None)
+        skip_divergence_eval = (precomputed_divergence_type == "none")
+
         for severity, div_config in divergence.items():
+            if skip_divergence_eval:
+                results["divergence_penalties"][severity] = {
+                    "applies": False,
+                    "adjustment": None,
+                    "reason": "Divergence type pre-evaluated as none by detect_divergence()",
+                    "block_entry": False
+                }
+                continue
             applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
-                div_config, data, setup_type
+                div_config, eval_data, setup_type
             )
             results["divergence_penalties"][severity] = {
                 "applies": applies,
@@ -509,7 +535,7 @@ class QueryOptimizedExtractor:
                 continue
             
             applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
-                band_config, data, setup_type
+                band_config, eval_data, setup_type
             )
             results["trend_strength_bands"][band_name] = {
                 "applies": applies,
@@ -535,7 +561,7 @@ class QueryOptimizedExtractor:
         # Penalties
         for penalty_name, penalty_config in conditional.get("penalties", {}).items():
             applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
-                penalty_config, data, setup_type
+                penalty_config, eval_data, setup_type
             )
             results["conditional_adjustments"]["penalties"][penalty_name] = {
                 "applies": applies,
@@ -547,7 +573,7 @@ class QueryOptimizedExtractor:
         # Bonuses
         for bonus_name, bonus_config in conditional.get("bonuses", {}).items():
             applies, adjustment, reason, block_entry = self.evaluate_confidence_modifier(
-                bonus_config, data, setup_type
+                bonus_config, eval_data, setup_type
             )
             results["conditional_adjustments"]["bonuses"][bonus_name] = {
                 "applies": applies,
@@ -1058,7 +1084,7 @@ class QueryOptimizedExtractor:
             Dict of {metric_name: normalized_fit_config}
             
         Example:
-            >>> fit = extractor.get_strategy_fit_indicators('swing_trading')
+            >>> fit = extractor.get_strategy_fit_indicators('swing_breakout')
             >>> print(fit['adx'])
             {
                 'min': 20,
@@ -1274,12 +1300,16 @@ class QueryOptimizedExtractor:
         Returns:
             {"tech": 0.70, "fund": 0.00, "hybrid": 0.30}
         """
-        weights_all = self.base_extractor.get("horizon_pillar_weights", {})
-        return weights_all.get(self.horizon, {
+        weights = self.base_extractor.get("horizon_pillar_weights", {})
+        if weights:
+            return weights
+            
+        # Fallback only if extraction failed completely
+        return {
             "tech": 0.5, 
             "fund": 0.3, 
             "hybrid": 0.2
-        })
+        }
     
     def get_hybrid_metric_registry(self) -> Dict:
         """
@@ -1539,7 +1569,7 @@ class QueryOptimizedExtractor:
         Example:
             >>> strategies = extractor.get_all_strategy_names()
             >>> print(strategies[:3])
-            ['swing_trading', 'day_trading', 'minervini_growth']
+            ['swing_breakout', 'day_trading', 'minervini_growth']
         """
         strategy_matrix = self.base_extractor.get("strategy_matrix", {})
         return list(strategy_matrix.keys())
@@ -1774,11 +1804,17 @@ class QueryOptimizedExtractor:
                 max_val = gates.get("adx", {}).get("max")
                 
                 if max_val is not None and adx_value <= max_val:
-                    penalty = config.get("confidence_penalty", 0)
-                    adjusted_floor += penalty  # Penalty is negative
+                    penalty_val = config.get("confidence_penalty", 0)
+        
+                    # ✅ SIGN GUARD: Penalties must be negative (prevent unintended boosts)
+                    if penalty_val > 0:
+                        self.logger.warning(f"[CONFIG BUG] Positive penalty {penalty_val} in {setup_type} auto-negated")
+                        penalty_val = -penalty_val
+                        
+                    adjusted_floor += penalty_val # Penalty is negative
                     self.logger.debug(
                         f"[{setup_type}] ADX {adx_value:.1f} <= {max_val}, "
-                        f"applying {name} penalty: {penalty}"
+                        f"applying {name} penalty: {penalty_val}"
                     )
                     break  # Apply only the first matching penalty
         
@@ -1789,8 +1825,6 @@ class QueryOptimizedExtractor:
     # ========================================================================
     # ✅ CATEGORY 7: UTILITY METHODS
     # ========================================================================
-
-
 
     def _prepare_evaluation_namespace(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1822,36 +1856,27 @@ class QueryOptimizedExtractor:
             else:
                 namespace[key] = value
 
-        # ✅ FIXED (BUG 13): Flatten 'indicators' and 'price_data' dicts for condition checks (prev_* variables)
+        # ✅ FIXED: Flatten 'indicators' and 'price_data' dicts for condition checks
         for nested_key in ["indicators", "price_data"]:
             nested = data.get(nested_key, {})
             if isinstance(nested, dict):
                 for k, v in nested.items():
-                    if k not in namespace:  # don't override top-level intentionally passed values
+                    if k not in namespace:  # don't override top-level
                         namespace[k] = (
                             v.get("value") if isinstance(v, dict) and "value" in v and not isinstance(v.get("value"), str) else
                             v.get("raw") if isinstance(v, dict) and "raw" in v else
                             v.get("score") if isinstance(v, dict) and "score" in v else
                             v
                         )
-        # ============================================================
-        # NEW: Expose fundamental category scores as buckets
-        # ============================================================
         
-        # Check if we have fundamental scoring data
+        # Expose fundamental category scores as buckets
         fundamental_data = data.get("fundamental", {})
-        
-        # If fundamental_data is a dict with scoring info
         if isinstance(fundamental_data, dict):
-            # Extract overall fundamental score
             if "score" in fundamental_data:
                 namespace["fundamentalScore"] = fundamental_data.get("score", 0.0)
             
-            # Extract category scores as buckets
             category_scores = fundamental_data.get("category_scores", {})
-            
             if category_scores:
-                # Map category scores to bucket names
                 namespace["fund_valuation_bucket"] = category_scores.get("valuation", {}).get("score")
                 namespace["fund_profitability_bucket"] = category_scores.get("profitability", {}).get("score")
                 namespace["fund_growth_bucket"] = category_scores.get("growth", {}).get("score")
@@ -1861,18 +1886,12 @@ class QueryOptimizedExtractor:
                 namespace["fund_dividend_bucket"] = category_scores.get("dividend", {}).get("score")
                 namespace["fund_market_bucket"] = category_scores.get("market", {}).get("score")
         
-        # ============================================================
-        # NEW: Also expose technical composites if not already present
-        # ============================================================
-        
         technical_data = data.get("technical", {})
         if isinstance(technical_data, dict):
-            # Extract technical score
             if "score" in technical_data:
                 namespace["technicalScore"] = technical_data.get("score", 0.0)
         
         return namespace
-    
     def get_technical_score(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
         """
         Proxy for technical score calculation.
@@ -2029,7 +2048,7 @@ class QueryOptimizedExtractor:
         
         Example:
             >>> # For short_term horizon
-            >>> mult = extractor.get_strategy_horizon_multiplier('swing_trading')
+            >>> mult = extractor.get_strategy_horizon_multiplier('swing_breakout')
             >>> print(mult)
             1.2  # Swing trading is boosted for short_term
         """
@@ -2045,28 +2064,6 @@ class QueryOptimizedExtractor:
     # INTERNAL HELPERS
     # ========================================================================
 
-    def _normalize_threshold(self, threshold: Any) -> Dict[str, float]:
-        """
-        Normalize threshold to {"min": X, "max": Y} format.
-        
-        Handles:
-        - {"min": 5.0, "max": 10.0} → as-is
-        - 5.0 → {"min": 5.0}
-        - {"value": 5.0} → {"min": 5.0}
-        """
-        if isinstance(threshold, dict):
-            normalized = {}
-            if "min" in threshold:
-                normalized["min"] = threshold["min"]
-            if "max" in threshold:
-                normalized["max"] = threshold["max"]
-            if "value" in threshold and not normalized:
-                normalized["min"] = threshold["value"]
-            return normalized
-        elif isinstance(threshold, (int, float)):
-            return {"min": threshold}
-        else:
-            return {}
 
     # ------------------------------------------------------------------------
     # 🆕 NORMALIZATION: Unified Threshold Format
@@ -2292,6 +2289,30 @@ class QueryOptimizedExtractor:
         Delegates to base_extractor to avoid AttributeError.
         """
         return getattr(self.base_extractor, 'has_confidence_config', False)
+
+    # ------------------------------------------------------------------------
+    # PROPERTY PROXIES (Delegated to base_extractor)
+    # ------------------------------------------------------------------------
+
+    @property
+    def blocked_setups(self) -> Set[str]:
+        """Get blocked setups for this horizon."""
+        return self.base_extractor.blocked_setups
+
+    @property
+    def preferred_setups(self) -> List[str]:
+        """Get preferred setups for this horizon."""
+        return self.base_extractor.preferred_setups
+
+    @property
+    def blocked_strategies(self) -> Set[str]:
+        """Get blocked strategies for this horizon."""
+        return self.base_extractor.blocked_strategies
+
+    @property
+    def strategy_multipliers(self) -> Dict[str, float]:
+        """Get strategy priority multipliers for this horizon."""
+        return self.base_extractor.strategy_multipliers
     
 
 

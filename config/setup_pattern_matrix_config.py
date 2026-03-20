@@ -102,7 +102,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "intraday": {
                 "context_requirements": {
                     "technical": {
-                        "adx": {"min": 18},
+                        "adx": {"min": 20},
                         "trendStrength": {"min": 5.0},
                         "volatilityQuality": {"min": 5.0},
                         "rvol": {"min": 2.0}  # Higher for intraday
@@ -569,25 +569,25 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
 
     "MOMENTUM_BREAKOUT": {
         "patterns": {
-            "PRIMARY": ["darvasBox", "bollingerSqueeze", "cupHandle"],
+            "PRIMARY": ["darvasBox", "bollingerSqueeze", "cupHandle", "momentumFlow"],
             "CONFIRMING": ["ichimokuSignals", "goldenCross", "flagPennant", "threeLineStrike"],
             "CONFLICTING": ["bullishNecklinePattern", "bearishNecklinePattern", "deathCross", "minerviniStage2"]
         },
         "classification_rules": {
             "pattern_detection": {},  # No specific pattern required
             "technical_gates": {
-                "bbpercentb": {"min": 0.98},
+                "bbpercentb": {"min": 0.90},  # ✅ Tightened from 0.75 to align with swing_breakout scoring gate
                 "rsi": {"min": 60},
-                "rvol": {"min": 1.5}
+                "rvol": {"min": 1.25}         # ⬇️ Relaxed from 1.5
             },
             "require_fundamentals": False
         },
         "default_priority": 90,
         "context_requirements": {
             "technical": {
-                "bbpercentb": {"min": 0.98},
+                "bbpercentb": {"min": 0.90},   # ✅ Tightened from 0.75; consistent with classification_rules
                 "rsi": {"min": 60, "max": 80},
-                "rvol": {"min": 1.5},
+                "rvol": {"min": 1.25},        # ⬇️ Relaxed from 1.5
                 "adx": {"min": 18},
                 "trendStrength": {"min": 5.0},
                 "volatilityQuality": {"min": 4.0},
@@ -660,27 +660,27 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
 
     "MOMENTUM_BREAKDOWN": {
         "patterns": {
-            "PRIMARY": ["bullishNecklinePattern", "bearishNecklinePattern", "deathCross"],
+            "PRIMARY": ["bullishNecklinePattern", "bearishNecklinePattern", "deathCross", "momentumFlow"],
             "CONFIRMING": ["bollingerSqueeze"],
             "CONFLICTING": ["goldenCross", "cupHandle", "minerviniStage2", "flagPennant"]
         },
         "classification_rules": {
             "pattern_detection": {},
             "technical_gates": {
-                "bbpercentb": {"max": 0.02},
-                "rsi": {"max": 40},
-                "rvol": {"min": 1.5}
+                "bbpercentb": {"max": 0.15},  # ⬆️ Relaxed from 0.02
+                "rsi": {"max": 45},           # ⬆️ Relaxed from 40
+                "rvol": {"min": 1.25}         # ⬇️ Relaxed from 1.5
             },
             "require_fundamentals": False
         },
         "default_priority": 88,
         "context_requirements": {
             "technical": {
-                "bbpercentb": {"max": 0.02},
-                "rsi": {"max": 40},
-                "rvol": {"min": 1.5},
-                "adx": {"min": 18},
-                "trendStrength": {"min": 5.0},
+                "bbpercentb": {"max": 0.15},
+                "rsi": {"max": 45},
+                "rvol": {"min": 1.25},
+                "adx": {"min": 16},
+                "trendStrength": {"min": 4.0},
                 "maTrendSignal": -1
             },
             "fundamental": {
@@ -746,6 +746,69 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             },
         },
         "description": "Bearish breakdown for short/avoid"
+    },
+
+    "MOMENTUM_FLOW_BREAKDOWN": {
+        "patterns": {
+            "PRIMARY": ["momentumFlow"],
+            "CONFIRMING": ["bearishNecklinePattern", "deathCross"],
+            "CONFLICTING": ["goldenCross", "bullishNecklinePattern"]
+        },
+        "classification_rules": {
+            "pattern_detection": {
+                "momentumFlow": True
+            },
+            "technical_gates": {
+                "rsi": {"max": 50},
+                "rvol": {"min": 1.2}
+            },
+            "require_fundamentals": False
+        },
+        "default_priority": 85,
+        "context_requirements": {
+            "technical": {
+                "rsi": {"max": 50},
+                "rvol": {"min": 1.2},
+                "trendStrength": {"min": 3.0}
+            }
+        },
+        "min_pattern_quality": 6.5,
+        "min_setup_score": 55,
+        "setup_type": "momentum",
+        "description": "Continuous bearish distribution flow"
+    },
+
+    "MOMENTUM_FLOW_CONTINUATION": {
+        "patterns": {
+            "PRIMARY": ["momentumFlow"],
+            "CONFIRMING": ["ichimokuSignals", "goldenCross"],
+            "CONFLICTING": ["deathCross", "bearishNecklinePattern"]
+        },
+        "classification_rules": {
+            "pattern_detection": {
+                "momentumFlow": True
+            },
+            "technical_gates": {
+                "bbpercentb": {"min": 0.65},
+                "rsi": {"min": 55},
+                "rvol": {"min": 1.2}
+            },
+            "require_fundamentals": False
+        },
+        "default_priority": 92,
+        "context_requirements": {
+            "technical": {
+                "bbpercentb": {"min": 0.65},
+                "rsi": {"min": 55},
+                "rvol": {"min": 1.2},
+                "adx": {"min": 20},
+                "trendStrength": {"min": 5.5}
+            }
+        },
+        "min_pattern_quality": 7.5,
+        "min_setup_score": 65,
+        "setup_type": "momentum",
+        "description": "Continuous bullish institutional flow"
     },
 
     # ========================================================
@@ -3079,6 +3142,51 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "long_term": "TIGHTEN_STOP"
             }
         }
+    },
+    "momentumFlow": {
+        "type": "momentum_flow",
+        "timeframe_agnostic": True,
+        "direction": "neutral",
+        "typical_duration": {"min": 3, "max": 10},
+        "failure_rate": 0.30,
+        "best_horizons": ["intraday", "short_term"],
+        "physics": {
+            "target_ratio": 1.5,
+            "duration_multiplier": 1.0,
+            "max_stop_pct": 5.0,
+            "horizons_supported": ["intraday", "short_term", "long_term"]
+        },
+        "entry_rules": {
+            "intraday": {
+                "order_type": "market",
+                "trigger": "flow_detected",
+                "gates": {
+                    "rvol": {"min": 1.2},
+                    "rsi": {"max": 55}
+                }
+            },
+            "short_term": {
+                "order_type": "market",
+                "trigger": "flow_detected",
+                "gates": {
+                    "rvol": {"min": 1.1},
+                    "rsi": {"max": 50}
+                }
+            }
+        },
+        "invalidation": {
+            "breakdown_threshold": {
+                "intraday": {
+                    "gates": {
+                        "price": {"max_metric": "prev_high", "duration": 1}
+                    }
+                }
+            },
+            "action": {
+                "intraday": "EXIT_IMMEDIATELY",
+                "short_term": "EXIT_ON_CLOSE"
+            }
+        }
     }
 }
 
@@ -3137,6 +3245,11 @@ PATTERN_INDICATOR_MAPPINGS = {
         "intraday": "threeLineStrikeIntraday",
         "short_term": "threeLineStrikeShortTerm",
         "long_term": "threeLineStrikeLongTerm"
+    },
+    "momentumFlow": {
+        "intraday": "momentumFlowIntraday",
+        "short_term": "momentumFlowShortTerm",
+        "long_term": "momentumFlowLongTerm"
     }
 }
 

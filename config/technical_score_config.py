@@ -26,27 +26,15 @@ METRIC_REGISTRY = {
     "rsi": {
         "type": "numeric",
         "category": "momentum",
-        "scoring_type": "linear_range",
-        "params": {
-            "min_val": 30,
-            "max_val": 70,
-            "score_at_min": 10,  # Oversold = bullish
-            "score_at_max": 0    # Overbought = bearish
-        },
-        "description": "RSI linear scoring (30=10, 70=0)"
+        "scoring_type": "passthrough",
+        "description": "RSI (0-100) - Ownership moved to composites for context-aware scoring"
     },
 
     "rsislope": {
         "type": "numeric",
         "category": "momentum",
-        "scoring_type": "linear_range",
-        "params": {
-            "min_val": -2.0,
-            "max_val": 2.0,
-            "score_at_min": 0,   # Falling momentum = bearish
-            "score_at_max": 10   # Rising momentum = bullish
-        },
-        "description": "RSI slope momentum indicator"
+        "scoring_type": "passthrough",
+        "description": "RSI slope momentum indicator (ownership moved to composites)"
     },
 
     "macdCross": {
@@ -76,14 +64,8 @@ METRIC_REGISTRY = {
     "stochK": {
         "type": "numeric",
         "category": "momentum",
-        "scoring_type": "linear_range",
-        "params": {
-            "min_val": 20,
-            "max_val": 80,
-            "score_at_min": 10,  # Oversold
-            "score_at_max": 0    # Overbought
-        },
-        "description": "Stochastic K% value"
+        "scoring_type": "passthrough",
+        "description": "Stochastic K% value (ownership moved to stochCross or composites)"
     },
 
     "macd": {
@@ -138,7 +120,7 @@ METRIC_REGISTRY = {
         "scoring_type": "linear_range",
         "params": {
             "min_val": -10,
-            "max_val": 25,
+            "max_val": 20,  # ✅ Lowered from 25; aligns with strategy.momentum 'high_velocity' gate of 20
             "score_at_min": 0,   # Downtrend
             "score_at_max": 10   # Strong uptrend
         },
@@ -255,14 +237,14 @@ METRIC_REGISTRY = {
     "position52w": {
         "type": "numeric",
         "category": "structure",
-        "scoring_type": "linear_range",
-        "params": {
-            "min_val": 70,       # Below 70% of 52W high = Score 0 (Weak/Bottom)
-            "max_val": 100,      # At 52W high = Score 10 (Strong/Breakout zone)
-            "score_at_min": 0,
-            "score_at_max": 10
-        },
-        "description": "Price location relative to 52-week high (Bullish near high)"
+        "scoring_type": "passthrough",
+        "description": "52W Position % (Ownership moved to setup fit or composites)"
+    },
+    "bbpercentb": {
+        "type": "numeric",
+        "category": "volatility",
+        "scoring_type": "passthrough",
+        "description": "Bollinger %B (Ownership moved to composites)"
     },
     # ===========================
     # VOLUME METRICS
@@ -509,7 +491,7 @@ HORIZON_METRIC_INCLUSION = {
     "short_term": {
         "trend": ["trendStrength", "maTrendSignal", "maFastSlope", "supertrendSignal", "priceVsPrimaryTrendPct"],
         "momentum": ["momentumStrength", "rsi", "rsislope", "macd", "macdCross", "stochK", "stochCross"],
-        "volatility": ["volatilityQuality", "atrPct", "bbWidth"],
+        "volatility": ["volatilityQuality", "atrPct", "bbWidth", "bbpercentb"], # Activated Ghost Metric
         "volume": ["rvol", "volSpikeRatio", "obvDiv", "cmfSignal"],
         "structure": ["position52w", "priceAction", "wickRejection", "gapPercent"],
         
@@ -533,6 +515,14 @@ HORIZON_METRIC_INCLUSION = {
             "wickRejection", # Intraday pattern
             "gapPercent"     # Short-term event
         ]
+    },
+    "multibagger": {
+        "trend": ["trendStrength", "maTrendSignal", "adx", "relStrengthNifty"],
+        "momentum": ["momentumStrength", "rsi"],
+        "volatility": ["volatilityQuality"],
+        "volume": ["rvol", "obvDiv"],
+        "structure": ["position52w"],
+        "exclude": ["rsislope", "stochK", "vwapBias", "volSpikeRatio", "wickRejection", "gapPercent", "macd"]
     }
 }
 
@@ -561,6 +551,13 @@ HORIZON_TECHNICAL_WEIGHTS = {
         "volume": 0.15,
         "structure": 0.10,
         "volatility": 0.05  # ← Very low weight
+    },
+    "multibagger": {
+        "trend": 0.50,
+        "structure": 0.20,
+        "momentum": 0.10,
+        "volume": 0.10,
+        "volatility": 0.10
     }
 }
 
@@ -579,12 +576,9 @@ METRIC_WEIGHTS = {
             "supertrendSignal": 0.25,     # Quick trend filter
         },
         "momentum": {
-            "momentumStrength": 0.30,     # Composite momentum
-            "rsi": 0.20,                  # Overbought/oversold
-            "rsislope": 0.20,             # Momentum acceleration
-            "macd": 0.10,                 # Trend momentum
-            "macdCross": 0.08,            # Entry signal
-            "stochK": 0.07,               # Fast oscillator
+            "momentumStrength": 0.70,     # Increased weight: Now encapsulates RSI, RSI Slope, and StochK
+            "macd": 0.15,                 # Trend momentum
+            "macdCross": 0.10,            # Entry signal
             "stochCross": 0.05,          # Stochastic signal
         },
         "volatility": {
@@ -620,13 +614,10 @@ METRIC_WEIGHTS = {
             "adx": 0.05,                  # Trend strength confirmation
         },
         "momentum": {
-            "momentumStrength": 0.35,     # Composite momentum
-            "rsi": 0.20,                  # Momentum level
-            "rsislope": 0.15,             # Momentum change
+            "momentumStrength": 0.70,     # Increased weight: Now encapsulates RSI, RSI Slope, and StochK
             "macd": 0.12,                 # Trend momentum
             "macdCross": 0.10,            # Entry signal
-            "stochK": 0.05,               # Oscillator
-            "stochCross": 0.03,          # Stochastic signal
+            "stochCross": 0.08,          # Stochastic signal
         },
         "volatility": {
             "volatilityQuality": 0.50,    # Composite volatility
@@ -641,10 +632,9 @@ METRIC_WEIGHTS = {
             "cmfSignal": 0.20,            # Money flow
         },
         "structure": {
-            "position52w": 0.35,          # 52-week position (breakout proximity)
-            "priceAction": 0.25,          # Candle analysis
-            "wickRejection": 0.20,        # Support/resistance
-            "gapPercent": 0.20,           # Gap moves
+            "priceAction": 0.35,          # Redistributed position52w weight
+            "wickRejection": 0.35,
+            "gapPercent": 0.30,
         }
     },
     
@@ -660,8 +650,7 @@ METRIC_WEIGHTS = {
             "relStrengthNifty": 0.08,     # Outperformance vs benchmark
         },
         "momentum": {
-            "momentumStrength": 0.40,     # Composite momentum
-            "rsi": 0.25,                  # Momentum level
+            "momentumStrength": 0.65,     # Now encapsulates raw RSI
             "macd": 0.20,                 # Trend momentum
             "relStrengthNifty": 0.15,     # Benchmark comparison
         },
@@ -675,6 +664,28 @@ METRIC_WEIGHTS = {
         "structure": {
             "position52w": 0.60,          # Multi-year breakout level
             "priceAction": 0.40,          # Weekly candle patterns
+        }
+    },
+    "multibagger": {
+        "trend": {
+            "trendStrength": 0.40,
+            "maTrendSignal": 0.30,
+            "adx": 0.20,
+            "relStrengthNifty": 0.10
+        },
+        "momentum": {
+            "momentumStrength": 0.70,
+            "rsi": 0.30
+        },
+        "volatility": {
+            "volatilityQuality": 1.0
+        },
+        "volume": {
+            "rvol": 0.60,
+            "obvDiv": 0.40
+        },
+        "structure": {
+            "position52w": 1.0
         }
     }
 }
@@ -790,7 +801,8 @@ TECHNICAL_PENALTIES = {
             "operator": "<",
             "threshold": 30,
             "penalty": 0.10,
-            "reason": "Far from breakout zone"
+            "reason": "Extremely overextended downside (Bearish Trend)",
+            "skip_on_setups": ["QUALITY_ACCUMULATION", "DEEP_VALUE_PLAY", "DEEP_PULLBACK"]
         },
         {
             "metric": "wickRejection",
@@ -1084,6 +1096,10 @@ COMPOSITE_SCORING_CONFIG = {
                 "atrSmaRatio": {
                     "weight": 0.15,
                     "thresholds": [{"max": 0.025, "score": 10}, {"max": 0.045, "score": 5}, {"default": 0}]
+                },
+                "bbpercentb": {     # Activated for Momentum contexts
+                    "weight": 0.15,
+                    "thresholds": [{"min": 0.8, "score": 10}, {"min": 0.5, "score": 7}, {"default": 2}]
                 }
             }
         }
@@ -1496,7 +1512,12 @@ def extract_metric_score(metric_data: Any, metric_name: str, indicators: Dict = 
 
     # Handle dict format
     if isinstance(metric_data, dict):
-        # Try 'raw' first (most accurate)
+        # ✅ NEW: Prioritize pre-calculated 'score' field (Strategy-injected)
+        score = metric_data.get("score")
+        if score is not None:
+            return float(score)
+
+        # Try 'raw' next (scaled to registry)
         raw = metric_data.get("raw")
         if raw is not None:
             return calculate_dynamic_score(metric_name, raw, indicators)
@@ -1671,7 +1692,7 @@ def compute_category_score(
     normalized = weighted_score / total_weight
     return round(normalized, 2), breakdown
 
-def apply_technical_penalties(indicators: dict, horizon: str) -> tuple:
+def apply_technical_penalties(indicators: dict, horizon: str, active_setup: str = None) -> tuple:
     """
     Returns:
         (total_penalty, list_of_reasons)
@@ -1681,6 +1702,11 @@ def apply_technical_penalties(indicators: dict, horizon: str) -> tuple:
     reasons = []
 
     for rule in penalties:
+        # ✅ NEW: Skip penalty if setup allows (e.g. Accumulation plays)
+        if active_setup and "skip_on_setups" in rule:
+            if active_setup in rule["skip_on_setups"]:
+                continue
+
         metric = rule["metric"]
         metric_data = indicators.get(metric)
         
@@ -1763,7 +1789,8 @@ def compute_technical_score(indicators: dict, horizon: str) -> dict:
         category_breakdown[category] = breakdown
 
     # Penalties
-    penalty, penalty_reasons = apply_technical_penalties(indicators, horizon)
+    active_setup = indicators.get("_context", {}).get("setup_class") or indicators.get("setup_type")
+    penalty, penalty_reasons = apply_technical_penalties(indicators, horizon, active_setup=active_setup)
 
     # Bonuses
     bonus, bonus_reasons = apply_technical_bonuses(indicators , horizon)

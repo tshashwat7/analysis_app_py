@@ -356,8 +356,8 @@ class MBConfigExtractor(ConfigExtractor):
         # Overwrite baked-in module-level sections — use guard in case
         # base extractor didn't produce the key (safe for any config shape)
         for key, val in [
-            ("horizon_pillar_weights",    MB_HORIZON_PILLAR_WEIGHTS),
-            ("hybrid_pillar_composition", MB_HYBRID_PILLAR_COMPOSITION),
+            ("horizon_pillar_weights",    MB_HORIZON_PILLAR_WEIGHTS.get(horizon, {})),
+            ("hybrid_pillar_composition", MB_HYBRID_PILLAR_COMPOSITION.get(horizon, {})),
         ]:
             if key in self.sections:
                 self.sections[key].data = val

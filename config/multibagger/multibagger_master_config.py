@@ -30,7 +30,8 @@ from config.master_config import HYBRID_METRIC_REGISTRY, GATE_METRIC_REGISTRY
 MB_HYBRID_PILLAR_COMPOSITION = {
     "multibagger": {
         # Fundamentals dominate the hybrid pillar for long-hold thesis
-        "fundamentalMomentum":      0.30,  # Growth + EPS composite
+        "volatilityAdjustedRoe":    0.05,  # ROE quality vs technical price risk
+        "fundamentalMomentum":      0.25,  # Growth + EPS composite
         "earningsConsistencyIndex": 0.25,  # ROE + NPM quality composite
         "priceToIntrinsicValue":    0.20,  # IV-based valuation
         "fcfYieldVsVolatility":     0.15,  # FCF quality vs price risk
@@ -299,7 +300,7 @@ MB_MASTER_CONFIG = {
                 "penalties": {
                     "weak_weekly_trend": {
                         "gates": {"trendStrength": {"max": 2.0}},
-                        "confidence_penalty": -15,
+                        "confidence_penalty": 15,
                         "reason": "Trend too weak for accumulation thesis",
                     }
                 },

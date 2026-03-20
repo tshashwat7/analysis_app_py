@@ -38,6 +38,9 @@ Post-processing layer for real-time pattern monitoring.
 """
 
 import logging
+import copy
+import hashlib
+import json
 from typing import Dict, Any, Optional, Tuple
 
 
@@ -61,9 +64,14 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 MIN_EXECUTION_RR_GATE = {
-    'intraday': 1.5,
-    'short_term': 1.5,
     'long_term': 2.0
+}
+
+MIN_RR_BY_TREND = {
+    "explosive": {"strength": 8.5, "min_rr": 1.0}, # Momentum flow
+    "strong": {"strength": 6.5, "min_rr": 1.3}, 
+    "normal": {"strength": 4.5, "min_rr": 1.5},
+    "weak": {"strength": 0.0, "min_rr": 2.0}
 }
 
 VOLATILITY_BUFFER_FACTORS = {
@@ -172,22 +180,50 @@ def adjust_targets_for_market_conditions(
             execution_sl = max(pattern_sl, volatility_sl)  # Wider stop
             sl_buffer = execution_sl - pattern_sl
         
-        # === Market-Adjusted Targets (Preserve Geometry) ===
+        # === Target Selection: Prioritize Structural vs Market ===
+        # If structural target already provides decent RR, don't move it further.
+        # This prevents missing valid trades that are structurally sound.
         target_factor = TARGET_ADJUSTMENT_FACTORS.get(volatility_regime, 1.0)
         
-        t1_distance = abs(pattern_t1 - pattern_entry)
+        # Calculate RR for structural targets first
         if direction == "LONG":
-            execution_t1 = pattern_entry + (t1_distance * target_factor)
+            struct_risk = current_price - execution_sl
+            struct_reward = pattern_t1 - current_price
         else:
-            execution_t1 = pattern_entry - (t1_distance * target_factor)
+            struct_risk = execution_sl - current_price
+            struct_reward = current_price - pattern_t1
+            
+        struct_rr = struct_reward / struct_risk if struct_risk > 0 else 0
         
-        execution_t2 = None
-        if pattern_t2:
-            t2_distance = abs(pattern_t2 - pattern_entry)
+        # TREND-BASED RR RELAXATION (Dynamic Gate)
+        trend_strength = _get_val(indicators, "trendStrength", 5.0)
+        effective_min_rr = 1.5
+        for level in sorted(MIN_RR_BY_TREND.values(), key=lambda x: x["strength"], reverse=True):
+            if trend_strength >= level["strength"]:
+                effective_min_rr = level["min_rr"]
+                break
+        
+        # Optimization: If structural RR passes relaxed gate, don't stretch target
+        if struct_rr >= effective_min_rr:
+            execution_t1 = pattern_t1
+            execution_t2 = pattern_t2
+            target_source = "structural_priority"
+        else:
+            # Stretch targets based on market volatility
+            t1_distance = abs(pattern_t1 - pattern_entry)
             if direction == "LONG":
-                execution_t2 = pattern_entry + (t2_distance * target_factor)
+                execution_t1 = pattern_entry + (t1_distance * target_factor)
             else:
-                execution_t2 = pattern_entry - (t2_distance * target_factor)
+                execution_t1 = pattern_entry - (t1_distance * target_factor)
+            
+            execution_t2 = None
+            if pattern_t2:
+                t2_distance = abs(pattern_t2 - pattern_entry)
+                if direction == "LONG":
+                    execution_t2 = pattern_entry + (t2_distance * target_factor)
+                else:
+                    execution_t2 = pattern_entry - (t2_distance * target_factor)
+            target_source = "market_adjusted"
         
         # === Spread Cost ===
         base_spread = BASE_SPREAD_PCT.get(horizon, 0.001)
@@ -202,7 +238,14 @@ def adjust_targets_for_market_conditions(
             market_cap=market_cap_crores,
             horizon=horizon
         )
-        # current_price * base_spread * spread_multiplier
+        # ✅ NEW: Spread Cost Cap (Issue 3)
+        # Cap spread at 50% of potential T1 reward to prevent RR distortion
+        reward_to_t1 = abs(execution_t1 - current_price)
+        if reward_to_t1 > 0:
+            capped_spread = min(spread_cost, reward_to_t1 * 0.5)
+            if capped_spread < spread_cost:
+                logger.debug(f"[{horizon}] Capping spread cost: {spread_cost:.2f} -> {capped_spread:.2f} (50% rule)")
+                spread_cost = capped_spread
         
         # === Execution RR ===
         if direction == "LONG":
@@ -219,7 +262,11 @@ def adjust_targets_for_market_conditions(
         
         # ✅ GUARD: Re-verify RR after spread (Bug 3)
         if effective_reward_t1 <= 0:
-            return {"adjusted": False, "reason": "T1 target at or behind current price after spread"}
+            return {
+                "adjusted": False, 
+                "reason": "T1 target at or behind current price after spread",
+                "is_hard_blocked": True # Spread is a hard block
+            }
         return {
             "adjusted": True,
             "direction": direction,
@@ -306,10 +353,12 @@ def get_rr_regime_multipliers(
         t1_mult = regime_cfg.get("t1_mult", 1.5)
         t2_mult = regime_cfg.get("t2_mult", 3.0)
 
+        # ✅ PATCH: Log tag for fallback vs config
+        tag = "[FALLBACK]" if not rr_cfg.get(regime) else "[CONFIG]"
         adx_str = f"{adx_val:.1f}" if adx_val else "N/A"
 
         logger.info(
-            f"RR regime '{regime}': ADX={adx_str}, "
+            f"{tag} RR regime '{regime}': ADX={adx_str}, "
             f"T1 mult={t1_mult}, T2 mult={t2_mult}"
         )
         
@@ -585,7 +634,7 @@ def enhance_execution_context(
     symbol: str,
     horizon: str = "short_term",
     extractor: Optional[Any] = None
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     ✅ Idempotency guard + ordering dependency documented.
 
@@ -626,11 +675,44 @@ def enhance_execution_context(
             resolver = get_resolver(horizon)
             extractor = resolver.extractor
 
+        # ===================================================================
+        # ✅ NEW: Context Hash Verification (Risk 2)
+        # ===================================================================
+        try:
+            stored_hash = eval_ctx.get("meta", {}).get("context_hash")
+            if stored_hash:
+                hash_payload = {
+                    "indicators": indicators,
+                    "fundamentals": eval_ctx.get("fundamentals", {})
+                }
+                current_hash = hashlib.md5(json.dumps(hash_payload, sort_keys=True, default=str).encode()).hexdigest()
+                
+                if current_hash != stored_hash:
+                    exec_ctx["stale_context"] = True
+                    exec_ctx["warning"] = "Market moved since evaluation"
+                    logger.warning(
+                        f"[{symbol}] STALE CONTEXT DETECTED | "
+                        f"Eval Hash: {stored_hash} != execution data hash."
+                    )
+        except Exception as e:
+            logger.error(f"[{symbol}] Context hash verification failed: {e}")
+
+        # ✅ B5 FIX: Stop mutating eval_ctx (Discovery Purity)
+        # eval_ctx = copy.deepcopy(eval_ctx) # Removed: do not mutate discovery data
+        
         detected_patterns = eval_ctx.get("patterns", {})
+
+        # ✅ B6 FIX: Layer 0 Guard
+        # Only enhance recognized setups. GENERIC setups carry too much ambiguity
+        # for pattern-specific timeline and target adjustments.
+        setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
+        if setup_type == "GENERIC":
+            logger.debug(f"[{symbol}] Skipping enhancement for GENERIC setup")
+            return exec_ctx, eval_ctx
 
         if not detected_patterns:
             logger.debug(f"[{symbol}] No patterns to enhance")
-            return exec_ctx
+            return exec_ctx, eval_ctx
 
         # ===================================================================
         # ✅ v5.0: Use shared pattern metadata extractor
@@ -677,41 +759,21 @@ def enhance_execution_context(
                 "reason": expiration["reason"]
             })
 
-            # Idempotency guard — skip if penalty already applied.
-            # Prevents confidence being reduced twice if this function is called
-            # more than once on the same eval_ctx (e.g. retry or batch re-eval).
-            confidence_ctx = eval_ctx.get("confidence", {})
-            if confidence_ctx.get("pattern_expiry_penalty") is not None:
-                logger.debug(
-                    f"[{symbol}] Pattern expiry penalty already applied "
-                    f"({confidence_ctx['pattern_expiry_penalty']}%), skipping"
-                )
-            else:
-                # ✅ Snapshot current confidence BEFORE any mutation
-                current_conf = confidence_ctx.get("clamped", 50)
-                penalty = -20
-                new_conf = max(0, current_conf + penalty)
+            # Move penalty to exec_ctx (Strategic Phase)
+            exec_ctx["confidence_adjustments"] = exec_ctx.get("confidence_adjustments", {
+                "total_penalty": 0,
+                "breakdown": []
+            })
+            
+            penalty = -20
+            exec_ctx["confidence_adjustments"]["total_penalty"] += penalty
+            exec_ctx["confidence_adjustments"]["breakdown"].append(
+                f"Pattern expired ({expiration['pattern']}): {penalty}%"
+            )
 
-                # Apply penalty — eval_ctx is mutated intentionally here.
-                # finalize_trade_decision reads this value downstream.
-                eval_ctx["confidence"]["clamped"] = new_conf
-                eval_ctx["confidence"]["pattern_expiry_penalty"] = penalty
-
-                # ✅ Audit trail — append to adjustments breakdown.
-                # Re-read adjustments AFTER mutation so we operate on the
-                # live dict, not a stale snapshot captured before the write.
-                adjustments = eval_ctx["confidence"].get("adjustments", {})
-                breakdown = adjustments.get("breakdown", [])
-                breakdown.append(
-                    f"Pattern expired ({expiration['pattern']}): {penalty}%"
-                )
-                adjustments["breakdown"] = breakdown
-                eval_ctx["confidence"]["adjustments"] = adjustments
-
-                logger.warning(
-                    f"[{symbol}] Pattern expired: {expiration['reason']} "
-                    f"(confidence {current_conf} → {new_conf}, penalty={penalty}%)"
-                )
+            logger.warning(
+                f"[{symbol}] Pattern expired: {expiration['reason']} (penalty={penalty}%)"
+            )
 
         # ===================================================================
         # 2. Check Pattern Invalidation
@@ -736,6 +798,7 @@ def enhance_execution_context(
                 exec_ctx["can_execute"] = {"can_execute": False, "failures": []}
 
             exec_ctx["can_execute"]["can_execute"] = False
+            exec_ctx["can_execute"]["is_hard_blocked"] = True
             exec_ctx["can_execute"]["failures"].append(
                 f"Pattern invalidation: {invalidation['reason']}"
             )
@@ -784,14 +847,56 @@ def enhance_execution_context(
 
             if market_adjusted.get("adjusted"):
                 exec_ctx["market_adjusted_targets"] = market_adjusted
+            
+            # ✅ BRIDGE: Propagate hard blocks (like spread failure) to can_execute
+            if market_adjusted.get("is_hard_blocked"):
+                exec_ctx.setdefault("can_execute", {})["can_execute"] = False
+                exec_ctx["can_execute"]["is_hard_blocked"] = True
+                if market_adjusted.get("reason"):
+                    exec_ctx["can_execute"].setdefault("failures", []).append(
+                        f"Market Adjustment: {market_adjusted['reason']}"
+                    )
 
-        return exec_ctx
+                # ===================================================================
+                # ✅ NEW: Direction Conflict Reconciliation (Risk 1)
+                # ===================================================================
+                # = :DIRECTION_NORM Reconciliation (Logic Bridge) =
+                # Bridge Trend vocabulary (BULLISH/BEARISH) with Execution vocabulary (LONG/SHORT)
+                eval_direction = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "neutral").upper()
+                execution_direction = market_adjusted.get("direction", "neutral").upper()
+                
+                DIRECTION_NORM = {
+                    "BULLISH": "LONG",
+                    "BEARISH": "SHORT",
+                    "NEUTRAL": "NEUTRAL"
+                }
+                eval_dir_norm = DIRECTION_NORM.get(eval_direction, eval_direction)
+                
+                if (eval_dir_norm != execution_direction 
+                    and execution_direction != "NEUTRAL"
+                    and eval_dir_norm != "NEUTRAL"):
+                    exec_ctx["direction_conflict"] = True
+                    
+                    if "can_execute" not in exec_ctx:
+                        exec_ctx["can_execute"] = {"can_execute": False, "failures": []}
+                    
+                    exec_ctx["can_execute"]["can_execute"] = False
+                    exec_ctx["can_execute"]["failures"].append(
+                        f"Direction Conflict: Trend={eval_direction} vs Execution={execution_direction}"
+                    )
+
+                    logger.warning(
+                        f"[{symbol}] DIRECTION CONFLICT | "
+                        f"Eval: {eval_direction} ({eval_dir_norm}) vs Execution: {execution_direction} | BLOCKING"
+                    )
+
+        return exec_ctx, eval_ctx
 
     except Exception as e:
         logger.error(
             f"[{symbol}] enhance_execution_context failed: {e}", exc_info=True
         )
-        return exec_ctx
+        return exec_ctx, eval_ctx
     
 def calculate_adaptive_spread_cost(
     current_price: float,
@@ -879,7 +984,9 @@ def extract_pattern_execution_metadata(
                 continue
             
             raw = pattern_data.get("raw", {})
-            quality = raw.get("quality", 0)
+            # ✅ PATCH B: Check multiple levels for quality
+            quality = raw.get("quality") or pattern_data.get("quality") or 0
+            quality = float(quality)
             
             if quality > best_quality:
                 best_pattern = pattern_name
@@ -1179,6 +1286,7 @@ def _get_rr_regime_config(extractor) -> Dict[str, Any]:
 
 def validate_execution_rr(
     exec_ctx: Dict[str, Any], 
+    eval_ctx: Dict[str, Any], # Accept eval_ctx for trend access
     extractor: Any
 ) -> Tuple[bool, Optional[str], Optional[str]]:
     """
@@ -1222,13 +1330,22 @@ def validate_execution_rr(
     min_structural = rr_gates.get("min_structural", 2.0)
     execution_floor = rr_gates.get("execution_floor", 1.0)
 
-    # --- Absolute Floor Check ---
+    # --- Decision Logic with Trend-Based Relaxation ---
+    trend_strength = eval_ctx.get("trend", {}).get("trendStrength", 5.0)
+    
+    # Calculate effective min threshold
+    effective_min_t1 = min_t1
+    for level in sorted(MIN_RR_BY_TREND.values(), key=lambda x: x["strength"], reverse=True):
+        if trend_strength >= level["strength"]:
+            effective_min_t1 = min(min_t1, level["min_rr"]) # Never harder than config
+            break
+
     if rrt1 < execution_floor:
          return False, f"RR T1 ({rrt1:.2f}) below hard floor ({execution_floor})", None
 
-    # --- Decision Logic ---
-    if rrt1 >= min_t1:
-        return True, None, "T1"
+    if rrt1 >= effective_min_t1:
+        msg = f"T1 OK (Relaxed to {effective_min_t1:.1f} by trend)" if effective_min_t1 < min_t1 else None
+        return True, msg, "T1"
 
     if rrt2 >= min_t2 and structural_rr >= min_structural:
         return True, "Using T2 target due to low T1 RR", "T2"

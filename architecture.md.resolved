@@ -205,12 +205,12 @@ _build_execution_context():
 
 The Multibagger module operates as a parallel, specialized pipeline for high-conviction, long-term plays.
 
-#### Phase 1: Bulk Screener ([multibagger_screener.py](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/multibagger_screener.py))
+#### Phase 1: Bulk Screener ([multibagger_screener.py](file:///d:/stockviedeo/stock-analyzer-app/config/multibagger/multibagger_screener.py))
 - **Multithreaded Bulk Scan**: Processes the entire `NSE_500` or custom universe in parallel (default 10 worker threads).
 - **Hard Gatekeeper**: Filters based on Listing Age (min 5 years), Price Caps, Sector Exclusions, and "Distance from High" (max 25% from 52-week high).
 - **Efficiency**: Only symbols passing Phase 1 proceed to the resource-heavy Phase 2.
 
-#### Phase 2: Detailed Evaluator ([multibagger_evaluator.py](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/multibagger_evaluator.py))
+#### Phase 2: Detailed Evaluator ([multibagger_evaluator.py](file:///d:/stockviedeo/stock-analyzer-app/config/multibagger/multibagger_evaluator.py))
 - **Isolated Brain**: Uses a custom `MBQueryOptimizedExtractor` that bypasses the main pipeline's global state to avoid circular dependencies.
 - **Deep Scoring**: Evaluates 4 Pillars (Growth, Profitability, Solvency, Technicals) using specialized MB scoring logic.
 - **Persistence**: Results are upserted into the `MultibaggerCandidate` table (SQLite).
@@ -312,6 +312,6 @@ sequenceDiagram
 | [signal_engine.py](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py) | services/ | 1341 | 52KB | Profiling + trade plan orchestrator |
 | [trade_enhancer.py](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py) | services/ | 1203 | 49KB | Execution enhancement |
 | [main.py](file:///d:/stockviedeo/stock-analyzer-app/main.py) | root | ~1850 | 83KB | FastAPI app + run_analysis |
-| [multibagger/](file:///d:/stockviedeo/stock-analyzer-app/services/multibagger/) | services/ | ~2200 | 110KB | MB Full Module (15 files) |
+| [multibagger/](file:///d:/stockviedeo/stock-analyzer-app/config/multibagger/) | services/ | ~2200 | 110KB | MB Full Module (15 files) |
 
 **Total core codebase: ~24,500 lines across 28 files**
