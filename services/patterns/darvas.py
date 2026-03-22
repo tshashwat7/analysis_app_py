@@ -73,8 +73,10 @@ class DarvasBoxPattern(BasePattern):
             result["meta"] = {
                 "box_high": round(box_high, 2),
                 "box_low": round(box_low, 2),
+                "type": "bullish",
                 "breakout_vol": bool(has_volume),
                 "age_candles": len(df) - formation_index,
+                "formation_time": float(df.index[formation_index].timestamp()),
                 "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
                 "box_duration_candles": self.box_length * 2,
                 # 🆕 Pattern-Specific Velocity Tracking
@@ -113,10 +115,6 @@ class DarvasBoxPattern(BasePattern):
             # ADD TO META:
             result["meta"].update({
                 "bar_index": len(df),
-                # Raw Anchors (Required for Config Conditions)
-                "box_low": round(invalidation_level, 2), # The raw box bottom
-                "box_high": round(entry_trigger_price, 2), # The raw box top
-                
                 # Analytics
                 "box_height_pct": round(((box_high - box_low) / box_low) * 100, 2),
                 # Entry/Exit Levels (Critical)

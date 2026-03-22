@@ -474,7 +474,7 @@ METRIC_REGISTRY = {
 HORIZON_METRIC_INCLUSION = {
     "intraday": {
         "trend": ["maFastSlope", "maTrendSignal", "supertrendSignal"],  # ← No trendStrength composite
-        "momentum": ["momentumStrength", "rsi", "rsislope", "macd", "stochK", "stochCross"],  # ← Fast signals
+        "momentum": ["momentumStrength", "macd", "macdCross", "stochCross"],  # ← Fast signals
         "volatility": ["volatilityQuality", "atrPct", "bbWidth", "ttmSqueeze"],
         "volume": ["rvol", "volSpikeRatio", "volSpikeSignal", "cmfSignal"],
         "structure": ["vwapBias", "priceAction", "wickRejection", "gapPercent"],
@@ -489,8 +489,8 @@ HORIZON_METRIC_INCLUSION = {
     },
     
     "short_term": {
-        "trend": ["trendStrength", "maTrendSignal", "maFastSlope", "supertrendSignal", "priceVsPrimaryTrendPct"],
-        "momentum": ["momentumStrength", "rsi", "rsislope", "macd", "macdCross", "stochK", "stochCross"],
+        "trend": ["trendStrength", "maTrendSignal", "maFastSlope", "supertrendSignal", "priceVsPrimaryTrendPct", "adx"],
+        "momentum": ["momentumStrength", "macd", "macdCross", "stochCross"],
         "volatility": ["volatilityQuality", "atrPct", "bbWidth", "bbpercentb"], # Activated Ghost Metric
         "volume": ["rvol", "volSpikeRatio", "obvDiv", "cmfSignal"],
         "structure": ["position52w", "priceAction", "wickRejection", "gapPercent"],
@@ -632,9 +632,10 @@ METRIC_WEIGHTS = {
             "cmfSignal": 0.20,            # Money flow
         },
         "structure": {
-            "priceAction": 0.35,          # Redistributed position52w weight
-            "wickRejection": 0.35,
-            "gapPercent": 0.30,
+            "position52w": 0.20,          # Added from inclusion
+            "priceAction": 0.30,          # Redistributed position52w weight
+            "wickRejection": 0.30,
+            "gapPercent": 0.20,
         }
     },
     
@@ -754,21 +755,21 @@ TECHNICAL_PENALTIES = {
             "metric": "rvol",
             "operator": "<",
             "threshold": 0.8,
-            "penalty": 0.15,
+            "penalty": 1.5,
             "reason": "Low intraday activity"
         },
         {
             "metric": "atrPct",
             "operator": "<",
             "threshold": 0.5,
-            "penalty": 0.10,
+            "penalty": 1.0,
             "reason": "Insufficient volatility"
         },
         {
             "metric": "wickRejection",
             "operator": ">",
             "threshold": 2.5,
-            "penalty": 0.20,
+            "penalty": 2.0,
             "reason": "Strong wick rejection (institutional sell-off)"
         }
 
@@ -779,28 +780,28 @@ TECHNICAL_PENALTIES = {
             "metric": "trendStrength",
             "operator": "<",
             "threshold": 3.5,
-            "penalty": 0.20,
+            "penalty": 2.0,
             "reason": "Weak trend for swing trade"
         },
         {
             "metric": "rvol",
             "operator": "<",
             "threshold": 0.7,
-            "penalty": 0.10,
+            "penalty": 1.0,
             "reason": "Low volume confirmation"
         },
         {
             "metric": "relStrengthNifty",
             "operator": "<",
             "threshold": -5,
-            "penalty": 0.15,
+            "penalty": 1.5,
             "reason": "Underperforming benchmark"
         },
         {
             "metric": "position52w",
             "operator": "<",
             "threshold": 30,
-            "penalty": 0.10,
+            "penalty": 1.0,
             "reason": "Extremely overextended downside (Bearish Trend)",
             "skip_on_setups": ["QUALITY_ACCUMULATION", "DEEP_VALUE_PLAY", "DEEP_PULLBACK"]
         },
@@ -808,14 +809,14 @@ TECHNICAL_PENALTIES = {
             "metric": "wickRejection",
             "operator": ">",
             "threshold": 2.5,
-            "penalty": 0.20,
+            "penalty": 2.0,
             "reason": "Strong wick rejection (institutional sell-off)"
         },
         {
             "metric": "priceVsPrimaryTrendPct",
             "operator": ">",
             "threshold": 15.0,
-            "penalty": 0.15,
+            "penalty": 1.5,
             "reason": "Overextended from primary trend"
         }
 
@@ -833,21 +834,21 @@ TECHNICAL_PENALTIES = {
             "metric": "adx",
             "operator": "<",
             "threshold": 18,
-            "penalty": 0.15,
+            "penalty": 1.5,
             "reason": "Weak trend confirmation"
         },
         {
             "metric": "relStrengthNifty",
             "operator": "<",
             "threshold": 0,
-            "penalty": 0.20,
+            "penalty": 2.0,
             "reason": "Not outperforming benchmark"
         },
         {
             "metric": "priceVsPrimaryTrendPct",
             "operator": ">",
             "threshold": 15.0,
-            "penalty": 0.15,
+            "penalty": 1.5,
             "reason": "Overextended from primary trend"
         },
         {

@@ -65,6 +65,7 @@ METRIC_REGISTRY = {
     # ===========================
     "piotroskiF": {"type": "numeric","category": "quality","description": "Piotroski F-Score (0-9)"},
     "earningsStability": {"type": "numeric","category": "quality","description": "Earnings coefficient of variation"},
+    "roeStability": {"type": "numeric","category": "quality","description": "ROE stability over 3-5 years"},
     "assetTurnover": {"type": "numeric","category": "quality","description": "Asset turnover efficiency"},
     "RDIntensity": {"type": "numeric","category": "quality","description": "R&D spend as % of revenue"},
     "roe3yAvg": {"type": "numeric","category": "quality","description": "3-year average Return on Equity"},
@@ -276,25 +277,44 @@ METRIC_WEIGHTS = {
         # MARKET (2%)
         "marketCap": 1.0
     },
+    # C2 FIX: Restructured from a flat dict to sub-category groups.
+    # The scoring function must walk category -> metric to apply category weights.
+    # A flat dict returns 0 because no category buckets are found.
+    # Category weights for MB: 30% growth, 30% profitability, 20% health,
+    # 10% quality, 5% valuation, 3% ownership, 2% market.
     "multibagger": {
-        "epsGrowth5y": 0.40,
-        "revenueGrowth5y": 0.30,
-        "profitGrowth3y": 0.20,
-        "marketCapCagr": 0.10,
-        "roe": 0.50,
-        "roce": 0.30,
-        "roic": 0.20,
-        "piotroskiF": 0.60,
-        "earningsStability": 0.40,
-        "deRatio": 0.50,
-        "interestCoverage": 0.30,
-        "ocfVsProfit": 0.20,
-        "peRatio": 0.40,
-        "pbRatio": 0.30,
-        "pegRatio": 0.30,
-        "promoterHolding": 0.70,
-        "institutionalOwnership": 0.30,
-        "marketCap": 1.0
+        "growth": {
+            "epsGrowth5y":      0.40,
+            "revenueGrowth5y":  0.30,
+            "profitGrowth3y":   0.20,
+            "marketCapCagr":    0.10,
+        },
+        "profitability": {
+            "roe":   0.50,
+            "roce":  0.30,
+            "roic":  0.20,
+        },
+        "financial_health": {
+            "deRatio":          0.50,
+            "interestCoverage": 0.30,
+            "ocfVsProfit":      0.20,
+        },
+        "quality": {
+            "piotroskiF":       0.60,
+            "earningsStability":0.40,
+        },
+        "valuation": {
+            "peRatio":  0.40,
+            "pbRatio":  0.30,
+            "pegRatio": 0.30,
+        },
+        "ownership": {
+            "promoterHolding":        0.70,
+            "institutionalOwnership": 0.30,
+        },
+        "market": {
+            "marketCap": 1.0,
+        },
     }
 }
 
@@ -308,21 +328,21 @@ FUNDAMENTAL_PENALTIES = {
             "metric": "deRatio",
             "operator": ">",
             "threshold": 2.0,
-            "penalty": 0.30,
+            "penalty": 3.0,
             "reason": "High debt burden"
         },
         {
             "metric": "promoterpledge",
             "operator": ">",
             "threshold": 20,
-            "penalty": 0.25,
+            "penalty": 2.5,
             "reason": "High promoter pledge"
         },
         {
             "metric": "currentRatio",
             "operator": "<",
             "threshold": 0.8,
-            "penalty": 0.20,
+            "penalty": 2.0,
             "reason": "Liquidity crisis risk"
         }
     ],
@@ -332,28 +352,28 @@ FUNDAMENTAL_PENALTIES = {
             "metric": "deRatio",
             "operator": ">",
             "threshold": 1.5,
-            "penalty": 0.25,
+            "penalty": 2.5,
             "reason": "Elevated debt levels"
         },
         {
             "metric": "interestCoverage",
             "operator": "<",
             "threshold": 2.0,
-            "penalty": 0.30,
+            "penalty": 3.0,
             "reason": "Poor interest coverage"
         },
         {
             "metric": "promoterpledge",
             "operator": ">",
             "threshold": 15,
-            "penalty": 0.25,
+            "penalty": 2.5,
             "reason": "Promoter pledge risk"
         },
         {
             "metric": "roe",
             "operator": "<",
             "threshold": 10,
-            "penalty": 0.20,
+            "penalty": 2.0,
             "reason": "Below-average ROE"
         }
     ]
@@ -369,7 +389,7 @@ FUNDAMENTAL_BONUSES = [
             "roe": {"min": 25},
             "roce": {"min": 20}
         },
-        "bonus": 0.20,
+        "bonus": 2.0,
         "reason": "Exceptional capital efficiency"
     },
     {
@@ -377,14 +397,14 @@ FUNDAMENTAL_BONUSES = [
             "epsGrowth5y": {"min": 20},
             "profitGrowth3y": {"min": 20}
         },
-        "bonus": 0.25,
+        "bonus": 2.5,
         "reason": "Strong sustained growth"
     },
     {
         "gates": {
             "piotroskiF": {"min": 8}
         },
-        "bonus": 0.15,
+        "bonus": 1.5,
         "reason": "High Piotroski F-Score"
     },
     {
@@ -392,7 +412,7 @@ FUNDAMENTAL_BONUSES = [
             "deRatio": {"max": 0.3},
             "interestCoverage": {"min": 10}
         },
-        "bonus": 0.15,
+        "bonus": 1.5,
         "reason": "Fortress balance sheet"
     },
     {
@@ -400,7 +420,7 @@ FUNDAMENTAL_BONUSES = [
             "promoterHolding": {"min": 60},
             "promoterpledge": {"equals": 0}
         },
-        "bonus": 0.20,
+        "bonus": 2.0,
         "reason": "Strong promoter conviction (no pledge)"
     },
     {
@@ -408,14 +428,14 @@ FUNDAMENTAL_BONUSES = [
             "fcfYield": {"min": 8},
             "ocfVsProfit": {"min": 1.2}
         },
-        "bonus": 0.15,
+        "bonus": 1.5,
         "reason": "Excellent cash generation"
     },
     {
         "gates": {
             "marketCapCagr": {"min": 30}
         },
-        "bonus": 0.20,
+        "bonus": 2.0,
         "reason": "Multi-year wealth creator"
     }
 ]
@@ -603,8 +623,7 @@ def compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
     active = get_active_metrics_for_horizon(horizon, sector)
     category_weights = HORIZON_FUNDAMENTAL_WEIGHTS.get(horizon, {})
 
-    # if active in SECTOR_SPECIFIC_EXCLUSIONS.get(fundamentals.get('sector')):
-    #     active.__delattr__
+
     
     category_scores = {}
     category_breakdown = {}
@@ -828,7 +847,7 @@ def _normalize_health_quality(metric: str, val: float) -> float:
         elif val >= 1.0: return 6
         else: return 4
 
-    elif metric == "roeStability": # Lower is better (std dev of ROE)
+    elif metric == "earningsStability": # Lower is better (std dev of earnings/ROE)
         if val <= 2.0: return 10
         elif val <= 4.0: return 8
         elif val <= 7.0: return 5

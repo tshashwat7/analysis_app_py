@@ -115,7 +115,7 @@ def _classify_signal_profile(eval_ctx: Dict, eligibility: float) -> Dict[str, An
     
     # structural_quality: driven by quality/institutional modifiers
     is_fundamental = any(
-        a.get("name", "").lower() in ("highqualitycompounder", "sustainedtrend", "institutionalinterest", "qualitynametailwind")
+        a.get("name", "").lower() in ("high_quality_compounder", "sustained_trend", "institutional_interest", "quality_name_tailwind")
         for a in adjustments if a.get("delta", 0) > 0
     )
 
@@ -322,10 +322,13 @@ def compute_opportunity_score(
             # Bonus C: Conviction (Excess confidence over 50 floor)
             setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
             baseline_floor = extractor.get_setup_baseline_floor(setup_type)
-            conviction_bonus = max(0, (confidence - baseline_floor) / 50.0)
+            
+            # W14 FIX: baseline_floor can be None if setup is blocked. Use 50 as safe fallback for bonus calc.
+            floor_val = baseline_floor if baseline_floor is not None else 50.0
+            conviction_bonus = max(0, (confidence - floor_val) / 50.0)
             opp_bonus += conviction_bonus
             bonus_breakdown["conviction"] = conviction_bonus
-            bonus_breakdown["baseline_floor"] = baseline_floor  # Track for debugging
+            bonus_breakdown["baseline_floor"] = floor_val  # Track for debugging
             
             logger.debug(
                 f"[{ticker}][{horizon}] 💎 OPPORTUNITY BONUS: {opp_bonus:.2f} | "
@@ -833,12 +836,12 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     _dir_map = {"SHORT": "bearish", "LONG": "bullish", "short": "bearish", "long": "bullish"}
     direction = _dir_map.get(direction_raw, direction_raw.lower())
 
-    # ✅ FIXED (Reversal Override): Reversal setups enter AGAINST the trend.
-    # Force direction to 'bullish' for known long reversal patterns.
+    # C12 FIX: Reversal direction override is DEFERRED to after signal determination.
+    # We still read setup_type here so thresholds can be computed correctly,
+    # but we do NOT force direction yet — that would corrupt WATCH signals.
     setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
-    if setup_type in _REVERSAL_LONG_SETUPS:
-        direction = "bullish"
-        
+    # (reversal override applied below after Layer 0/1/2/3 gates)
+
     if extractor:
         try:
             min_tradeable = extractor.get_min_tradeable_confidence()
@@ -849,9 +852,16 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
             high_conf_threshold = hco.get("threshold", 80) if isinstance(hco, dict) else float(hco)
         except Exception:
             high_conf_threshold = 80
+        try:
+            # C13 FIX: Get config-driven confidence floor (not hardcoded 30)
+            conf_floor = extractor.get_confidence_clamp()
+            confidence_floor = conf_floor[0] if conf_floor else 30
+        except Exception:
+            confidence_floor = 30
     else:
         min_tradeable = 60
         high_conf_threshold = 80
+        confidence_floor = 30  # C13: Named constant, not magic number
 
     can_execute     = exec_ctx.get("can_execute", {})
     execution_blocked = not can_execute.get("can_execute", True)
@@ -865,6 +875,13 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     target_source   = market.get("target_source", "") or market.get("source", "")
 
     setup_type      = eval_ctx.get("setup", {}).get("type", "GENERIC")
+
+    # C12 FIX: Apply reversal direction override HERE — after Layer 0 WATCH gate.
+    # Reversal setups enter AGAINST the macro trend, so direction must be 'bullish'
+    # for known long reversal patterns. This must happen AFTER the Layer 0 check
+    # so WATCH signals are not incorrectly published as BUY signals.
+    if setup_type in _REVERSAL_LONG_SETUPS:
+        direction = "bullish"
 
     # ── Setup intent classification ──────────────────────────────────────
     is_rr_failure = any(any(s in f for s in ["RR", "Target", "SL"]) for f in failures)
@@ -949,7 +966,7 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
         base_signal = "BLOCKED"
         base_status = "BLOCKED"
     elif confidence < min_tradeable:
-        base_signal = "HOLD"
+        base_signal = "WATCH"
         base_status = "LOW_CONFIDENCE"
     else:
         if direction == "bullish":
@@ -976,8 +993,9 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     is_hard_blocked = is_hard_blocked_flag or any(any(s in f for s in hard_stops) for f in failures)
 
     if base_status == "BLOCKED" and is_rr_failure and not is_atr_fallback and not is_hard_blocked:
+        rescue_rr = extractor.get_risk_management_config().get("rescue_rr_floor", 1.2) if extractor else 1.2
         # Rescue A: High confidence + near-passing T1
-        if confidence >= high_conf_threshold and rr_t1 >= 1.2:
+        if confidence >= high_conf_threshold and rr_t1 >= rescue_rr:
             final_signal = "BUY" if direction == "bullish" else ("SELL" if direction == "bearish" else base_signal)
             final_status = "READY"
             reason = (
@@ -1198,7 +1216,10 @@ def generate_trade_plan(
         # ✅ B2 FIX (Refined): Check for stale context after execution context is built
         if exec_ctx.get("stale_context"):
             plan["metadata"]["stale_context"] = True
-            logger.warning(f"[{symbol}] Stale evaluation context detected in trade plan.")
+            plan["status"] = "WATCH"
+            plan["trade_signal"] = "WATCH"
+            plan["reason"] = "Stale evaluation context — monitor for refresh."
+            logger.warning(f"[{symbol}] Stale evaluation context detected. Downgrading to WATCH.")
 
         # Refresh plan confidence after enhancement (B5 Fix)
         # We now keep eval_ctx pure and merge exec_ctx adjustments here
@@ -1210,8 +1231,15 @@ def generate_trade_plan(
         exec_adjustments = exec_ctx.get("confidence_adjustments", {})
         total_penalty = exec_adjustments.get("total_penalty", 0)
         
-        plan["final_confidence"] = max(30, baseline_final + total_penalty) # Keep within floor
-        plan["adjusted_confidence"] = max(30, baseline_adjusted + total_penalty)
+        # C13 FIX: Get config-driven confidence floor (not hardcoded 30)
+        try:
+            conf_clamp = extractor.get_confidence_clamp()
+            confidence_floor = conf_clamp[0] if conf_clamp else 30
+        except Exception:
+            confidence_floor = 30
+
+        plan["final_confidence"] = max(confidence_floor, baseline_final + total_penalty) 
+        plan["adjusted_confidence"] = max(confidence_floor, baseline_adjusted + total_penalty)
 
         apply_rr_validation(exec_ctx, eval_ctx, extractor=extractor)  # Mutates exec_ctx["can_execute"]
 
@@ -1250,8 +1278,8 @@ def generate_trade_plan(
         # ======================================================
         # STAGE 3: Risk & Order (FINALIZED VALUES)
         # ======================================================
-        risk = exec_ctx["risk"]
-        market_adjusted = exec_ctx.get("market_adjusted_targets", {})
+        risk = exec_ctx.get("risk", {}) or {}  # Ensure at least an empty dict
+        market_adjusted = exec_ctx.get("market_adjusted_targets", {}) or {}
         
         # ✅ FIX Issue 6: Set direction from eval_ctx BEFORE branches
         # so finalize_trade_decision always has a valid direction
@@ -1260,17 +1288,17 @@ def generate_trade_plan(
         plan["metadata"]["direction"] = trend_classification.get("direction", "neutral")
         
         if market_adjusted.get("adjusted"):
-            plan["entry"] = market_adjusted["execution_entry"]
-            plan["stop_loss"] = market_adjusted["execution_sl"]
-            plan["targets"]["t1"] = market_adjusted["execution_t1"]
-            plan["targets"]["t2"] = market_adjusted["execution_t2"]
-            plan["rr_ratio"] = market_adjusted["execution_rr_t2"] or market_adjusted["execution_rr_t1"]
-            plan["position_size"] = risk.get("quantity", 0) 
+            plan["entry"] = market_adjusted.get("execution_entry")
+            plan["stop_loss"] = market_adjusted.get("execution_sl")
+            plan["targets"]["t1"] = market_adjusted.get("execution_t1")
+            plan["targets"]["t2"] = market_adjusted.get("execution_t2")
+            plan["rr_ratio"] = market_adjusted.get("execution_rr_t2") or market_adjusted.get("execution_rr_t1")
+            plan["position_size"] = risk.get("quantity", 0)
             
-            plan["metadata"]["pattern_rr"] = market_adjusted["structural_rr"]
-            plan["metadata"]["execution_rr_t1"] = market_adjusted["execution_rr_t1"]
-            plan["metadata"]["execution_rr_t2"] = market_adjusted["execution_rr_t2"]
-            plan["metadata"]["volatility_regime"] = market_adjusted["volatility_regime"]
+            plan["metadata"]["pattern_rr"] = market_adjusted.get("structural_rr")
+            plan["metadata"]["execution_rr_t1"] = market_adjusted.get("execution_rr_t1")
+            plan["metadata"]["execution_rr_t2"] = market_adjusted.get("execution_rr_t2")
+            plan["metadata"]["volatility_regime"] = market_adjusted.get("volatility_regime")
             
             # ✅ B4 FIX: Reconcile direction and set conflict flag (Centralized in trade_enhancer)
             if exec_ctx.get("direction_conflict"):
@@ -1286,33 +1314,56 @@ def generate_trade_plan(
             plan["metadata"]["atr_multiple"] = risk.get("atr_multiple")  
             plan["metadata"]["market_adjusted"] = True
         else:
-            if risk is None:
-                raise RuntimeError("exec_ctx missing 'risk' section")
-            else:
-                plan["entry"] = risk["entry_price"]
-                plan["stop_loss"] = risk["stop_loss"]
-                targets = risk.get("targets", [])
-                plan["targets"]["t1"] = targets[0] if targets else 0
-                plan["targets"]["t2"] = targets[1] if len(targets) > 1 else 0
-                plan["rr_ratio"] = risk.get("rrRatio", 0)
-                plan["position_size"] = risk.get("quantity", 0)
-                plan["metadata"]["market_adjusted"] = False
-                plan["metadata"]["direction"] = risk.get("direction", exec_ctx.get("direction", "neutral"))
+            # C11 FIX: Defensive access for failed/uninitialized risk extraction
+            plan["entry"] = risk.get("entry_price", indicators.get("close", 0))
+            plan["stop_loss"] = risk.get("stop_loss", 0)
+            targets = risk.get("targets", [])
+            plan["targets"]["t1"] = targets[0] if targets else 0
+            plan["targets"]["t2"] = targets[1] if len(targets) > 1 else 0
+            plan["rr_ratio"] = risk.get("rrRatio", 0)
+            plan["position_size"] = risk.get("quantity", 0)
+            plan["metadata"]["market_adjusted"] = False
+            plan["metadata"]["direction"] = risk.get("direction", exec_ctx.get("direction", "neutral"))
 
         # Common metadata (regardless of adjustment)
         plan["metadata"]["order_model"] = exec_ctx.get("order_model") 
 
         # ======================================================
-        # STAGE 4: Macro Adjustment (PRESENTATION ONLY)
+        # STAGE 4: Macro Adjustment (W24 Fix: Short-aware)
         # ======================================================
+        direction_str = plan["metadata"].get("direction", "neutral").lower()
+        is_long = direction_str in ("bullish", "long")
+        is_short = direction_str in ("bearish", "short")
+        
         if macro_trend_status and "downtrend" in macro_trend_status.lower():
-            original_qty = plan["position_size"]
-            plan["position_size"] = int(original_qty * 0.7)
-            plan["boost_reasons"].append({
-                "reason": "Macro downtrend",
-                "change": "-30% position"
-            })
-            plan["metadata"]["original_position_size"] = original_qty
+            if is_long:
+                original_qty = plan["position_size"]
+                macro_factor = exec_ctx.get("macro_downtrend_factor", 0.7)
+                plan["position_size"] = int(original_qty * macro_factor)
+                plan["boost_reasons"].append({
+                    "reason": "Macro downtrend (Long penalty)",
+                    "change": "-30% position"
+                })
+                plan["metadata"]["original_position_size"] = original_qty
+            elif is_short:
+                 # ✅ W24 FIX: Boost shorts in downtrend
+                 original_qty = plan["position_size"]
+                 boost_factor = 1.2 # Configurable boost for trend alignment
+                 plan["position_size"] = int(original_qty * boost_factor)
+                 plan["boost_reasons"].append({
+                    "reason": "Macro downtrend (Short confirmation boost)",
+                    "change": "+20% position"
+                })
+        elif macro_trend_status and "uptrend" in macro_trend_status.lower():
+            if is_short:
+                # Penalty for shorts in uptrend
+                original_qty = plan["position_size"]
+                macro_factor = 0.7
+                plan["position_size"] = int(original_qty * macro_factor)
+                plan["boost_reasons"].append({
+                    "reason": "Macro uptrend (Short penalty)",
+                    "change": "-30% position"
+                })
 
         # ======================================================
         # STAGE 5: Confidence & Audit Trail

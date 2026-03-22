@@ -46,6 +46,7 @@ def track_pattern_entry(
     Returns:
         Record ID for later updates, or None if failed
     """
+    db = None  # C23 FIX: guard against NameError if SessionLocal() fails
     try:
         db = SessionLocal()
         existing = db.query(PatternPerformanceHistory).filter(
@@ -82,19 +83,21 @@ def track_pattern_entry(
         db.refresh(record)
         
         logger.info(
-            f"✅ Pattern tracked: {pattern_name} on {symbol}/{horizon} "
+            f"Pattern tracked: {pattern_name} on {symbol}/{horizon} "
             f"(ID: {record.id}, Quality: {detection_quality:.1f})"
         )
         
         return record.id
     
     except Exception as e:
-        logger.error(f"❌ track_pattern_entry failed: {e}", exc_info=True)
-        db.rollback()
+        logger.error(f"track_pattern_entry failed: {e}", exc_info=True)
+        if db:  # C23 FIX: only rollback if db was successfully created
+            db.rollback()
         return None
     
     finally:
-        db.close()
+        if db:  # C23 FIX: only close if db was successfully created
+            db.close()
 
 
 def update_pattern_performance(
@@ -308,13 +311,16 @@ def get_historical_velocity_multiplier(
     """
     stats = get_pattern_velocity_stats(pattern_name, horizon, trend_regime)
     
-    if not stats or stats["sample_size"] < 5:
+    if not stats:  # W45 FIX: removed dead `< 5` check (stats already has >= 10 samples)
         return None, None
     
     actual_days = stats["median_days_to_t1"]
     
+    MAX_VELOCITY_MULTIPLIER = 5.0  # W44 FIX: cap outlier multipliers
+
     if base_estimate_days > 0:
         multiplier = actual_days / base_estimate_days
+        multiplier = min(multiplier, MAX_VELOCITY_MULTIPLIER)  # W44: prevent 20-30x inflation
     else:
         multiplier = 1.0
     
@@ -402,6 +408,7 @@ def classify_volatility(atr_pct: Optional[float]) -> str:
 
 def cleanup_old_performance_records(days_old: int = 365) -> int:
     """Archives old performance records."""
+    db = None  # DB guard: same pattern as C23 fix in track_pattern_entry
     try:
         db = SessionLocal()
         
@@ -415,14 +422,16 @@ def cleanup_old_performance_records(days_old: int = 365) -> int:
         db.commit()
         
         if count > 0:
-            logger.info(f"✅ Archived {count} old records (>{days_old} days)")
+            logger.info(f"Archived {count} old records (>{days_old} days)")
         
         return count
     
     except Exception as e:
-        logger.error(f"❌ cleanup failed: {e}", exc_info=True)
-        db.rollback()
+        logger.error(f"cleanup failed: {e}", exc_info=True)
+        if db:
+            db.rollback()
         return 0
     
     finally:
-        db.close()
+        if db:
+            db.close()

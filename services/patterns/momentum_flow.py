@@ -65,14 +65,33 @@ class MomentumFlowPattern(BasePattern):
             
             from services.patterns.utils import _build_formation_context
             
+            current_price = window.iloc[-1]["Close"]
+            if flow_type == "bullish":
+                invalidation_level = window.iloc[0]["Low"] * 0.99
+            else:
+                invalidation_level = window.iloc[0]["High"] * 1.01
+
             result["meta"] = {
                 "type": flow_type,
-                "vol_growth": vol_growth,
-                "velocity_pct": price_move_pct,
+                "vol_growth": round(vol_growth, 2),
+                "velocity_pct": round(price_move_pct, 2),
                 "candles": 4,
                 "age_candles": 1, # Fresh detection
-                "formation_time": df.index[-1].timestamp(),
-                "formation_context": _build_formation_context(indicators)
+                "formation_time": float(df.index[-1].timestamp()),
+                "formation_timestamp": df.index[-1].isoformat(),
+                "formation_context": _build_formation_context(indicators),
+                # Standardization fixes
+                "bar_index": len(df),
+                "invalidation_level": round(invalidation_level, 2),
+                "velocity_tracking": {
+                    "can_track": quality >= 7.0,
+                    "entry_conditions_met": True,
+                    "quality_sufficient": quality >= 7.0,
+                    "flow_confirmed": True
+                },
+                "pattern_strength": "strong" if quality >= 8.5 else "moderate" if quality >= 6.5 else "weak",
+                "current_price": round(current_price, 2),
+                "horizon": horizon
             }
             
         return result

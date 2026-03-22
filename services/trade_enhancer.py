@@ -51,7 +51,8 @@ from services.patterns.pattern_state_manager import (
     get_breakdown_state,
     save_breakdown_state,
     update_breakdown_state,
-    delete_breakdown_state
+    delete_breakdown_state,
+    HORIZON_WINDOWS  # ✅ W46
 )
 
 # ✅ NEW v5.0: Import shared utilities
@@ -59,47 +60,6 @@ from config.config_helpers import get_resolver
 from services.patterns.pattern_velocity_tracking import get_pattern_velocity_stats
 from services.patterns.utils import _classify_volatility
 logger = logging.getLogger(__name__)
-# ============================================================
-# EXECUTION POLICY CONSTANTS (Config-Driven)
-# ============================================================
-
-MIN_EXECUTION_RR_GATE = {
-    'long_term': 2.0
-}
-
-MIN_RR_BY_TREND = {
-    "explosive": {"strength": 8.5, "min_rr": 1.0}, # Momentum flow
-    "strong": {"strength": 6.5, "min_rr": 1.3}, 
-    "normal": {"strength": 4.5, "min_rr": 1.5},
-    "weak": {"strength": 0.0, "min_rr": 2.0}
-}
-
-VOLATILITY_BUFFER_FACTORS = {
-    'low': 0.0,
-    'normal': 0.25,
-    'high': 0.5,
-    'extreme': 1.0
-}
-
-MIN_SL_ATR_MULTIPLES = {
-    'intraday': 2.0,
-    'short_term': 2.0,
-    'long_term': 2.5
-}
-
-TARGET_ADJUSTMENT_FACTORS = {
-    'low': 0.85,
-    'normal': 1.0,
-    'high': 1.15,
-    'extreme': 1.3
-}
-
-BASE_SPREAD_PCT = {
-    'intraday': 0.0015,
-    'short_term': 0.001,
-    'long_term': 0.0008
-}
-
 def adjust_targets_for_market_conditions(
     risk_data: Dict[str, Any],
     indicators: Dict[str, Any],
@@ -164,11 +124,21 @@ def adjust_targets_for_market_conditions(
         atr_pct = _get_val(indicators, "atrPct") or safe_float(indicators.get("atrPct"), 2.0)
         if not atr_pct:
             atr_pct = 2.0
-        volatility_regime = _classify_volatility(atr_pct)
+        # === Fetch Config-Driven Policy Constants ===
+        # Replaces module-level hardcodes (W37)
+        resolver = get_resolver(horizon=horizon)
+        risk_management_cfg = resolver.get_config().get("global", {}).get("risk_management", {})
+        
+        # Pull directly from config with simple defaults mirroring master_config
+        vol_buffer_factors = risk_management_cfg.get("volatility_buffer_factors", {})
+        min_sl_atr = risk_management_cfg.get("min_sl_atr_multiples", {})
+        targ_adj_factors = risk_management_cfg.get("target_adjustment_factors", {})
+        min_rr_by_trend = risk_management_cfg.get("min_rr_by_trend", {})
+        base_spread_pct_dict = risk_management_cfg.get("base_spread_pct", {})
         
         # === Volatility-Adjusted SL ===
-        vol_buffer = VOLATILITY_BUFFER_FACTORS.get(volatility_regime, 0.25)
-        min_sl_mult = MIN_SL_ATR_MULTIPLES.get(horizon, 2.0)
+        vol_buffer = vol_buffer_factors.get(volatility_regime, 0.25)
+        min_sl_mult = min_sl_atr.get(horizon, 2.0)
         min_sl_distance = current_atr * (min_sl_mult + vol_buffer)
         
         if direction == "LONG":
@@ -181,9 +151,7 @@ def adjust_targets_for_market_conditions(
             sl_buffer = execution_sl - pattern_sl
         
         # === Target Selection: Prioritize Structural vs Market ===
-        # If structural target already provides decent RR, don't move it further.
-        # This prevents missing valid trades that are structurally sound.
-        target_factor = TARGET_ADJUSTMENT_FACTORS.get(volatility_regime, 1.0)
+        target_factor = targ_adj_factors.get(volatility_regime, 1.0)
         
         # Calculate RR for structural targets first
         if direction == "LONG":
@@ -198,7 +166,7 @@ def adjust_targets_for_market_conditions(
         # TREND-BASED RR RELAXATION (Dynamic Gate)
         trend_strength = _get_val(indicators, "trendStrength", 5.0)
         effective_min_rr = 1.5
-        for level in sorted(MIN_RR_BY_TREND.values(), key=lambda x: x["strength"], reverse=True):
+        for level in sorted(min_rr_by_trend.values(), key=lambda x: x["strength"], reverse=True):
             if trend_strength >= level["strength"]:
                 effective_min_rr = level["min_rr"]
                 break
@@ -209,20 +177,20 @@ def adjust_targets_for_market_conditions(
             execution_t2 = pattern_t2
             target_source = "structural_priority"
         else:
-            # Stretch targets based on market volatility
-            t1_distance = abs(pattern_t1 - pattern_entry)
+            # Stretch targets based on market volatility, anchored to current price.
+            t1_distance = abs(pattern_t1 - current_price)
             if direction == "LONG":
-                execution_t1 = pattern_entry + (t1_distance * target_factor)
+                execution_t1 = current_price + (t1_distance * target_factor)
             else:
-                execution_t1 = pattern_entry - (t1_distance * target_factor)
+                execution_t1 = current_price - (t1_distance * target_factor)
             
             execution_t2 = None
             if pattern_t2:
-                t2_distance = abs(pattern_t2 - pattern_entry)
+                t2_distance = abs(pattern_t2 - current_price)
                 if direction == "LONG":
-                    execution_t2 = pattern_entry + (t2_distance * target_factor)
+                    execution_t2 = current_price + (t2_distance * target_factor)
                 else:
-                    execution_t2 = pattern_entry - (t2_distance * target_factor)
+                    execution_t2 = current_price - (t2_distance * target_factor)
             target_source = "market_adjusted"
         
         # === Spread Cost ===
@@ -399,12 +367,8 @@ def check_pattern_expiration(
         resolver = get_resolver(horizon)
         extractor = resolver.extractor
     
-    HORIZON_SECONDS = {
-        "intraday": 900,
-        "short_term": 86400,
-        "long_term": 604800
-    }
-    candle_sec = HORIZON_SECONDS.get(horizon, 86400)
+    # ✅ W46: Use centralized window definitions
+    candle_sec = HORIZON_WINDOWS.get(horizon, 86400)
     
     try:
         for pattern_name, pattern_data in detected_patterns.items():
@@ -437,13 +401,29 @@ def check_pattern_expiration(
             
             # ✅ Real-time age calculation (FIXED timezone)
             if formation_ts:
-                seconds_since = get_current_utc().timestamp() - formation_ts
-                real_time_age = int(seconds_since / candle_sec)
-                current_age = max(cached_age, real_time_age)
-                
-                logger.debug(
-                    f"{pattern_name}: cached={cached_age}, real_time={real_time_age}, using={current_age}"
-                )
+                # W38 FIX: formation_ts may be a Unix float (normal case) or an
+                # ISO 8601 string injected by some detectors.  Normalise to float
+                # before doing arithmetic to prevent a TypeError crash.
+                if isinstance(formation_ts, str):
+                    try:
+                        from datetime import datetime as _dt
+                        formation_ts = _dt.fromisoformat(formation_ts).timestamp()
+                    except Exception:
+                        logger.warning(
+                            f"{pattern_name}: Could not parse formation_ts ISO string "
+                            f"'{formation_ts}' — skipping real-time age calculation"
+                        )
+                        formation_ts = None
+                if formation_ts is not None:
+                    seconds_since = get_current_utc().timestamp() - formation_ts
+                    real_time_age = int(seconds_since / candle_sec)
+                    current_age = max(cached_age, real_time_age)
+
+                    logger.debug(
+                        f"{pattern_name}: cached={cached_age}, real_time={real_time_age}, using={current_age}"
+                    )
+                else:
+                    current_age = cached_age
             else:
                 current_age = cached_age
             
@@ -541,6 +521,12 @@ def check_pattern_invalidation(
         # ✅ Evaluate gates       
         is_broken, gate_results = extractor.evaluate_invalidation_gates(gates, namespace)
         
+        # ✅ W39 FIX: SHORT trades are CONFIRMED by breakdowns, not invalidated.
+        # Only invalidate if is_broken AND it's a LONG trade.
+        if is_broken and position_type == "SHORT":
+            logger.info(f"✅ [{symbol}] {pattern_name} breakdown treated as CONFIRMATION for SHORT")
+            continue
+
         logger.info(
             f"[{symbol}][{pattern_name}] Breakdown check: {is_broken} logic={logic})"
         )
@@ -702,136 +688,138 @@ def enhance_execution_context(
         
         detected_patterns = eval_ctx.get("patterns", {})
 
-        # ✅ B6 FIX: Layer 0 Guard
-        # Only enhance recognized setups. GENERIC setups carry too much ambiguity
-        # for pattern-specific timeline and target adjustments.
+        # ✅ S16 FIX: GENERIC setups still need market adaptation and the
+        # direction conflict gate.  Only skip the pattern-specific phases
+        # (expiration, invalidation, RR regime multipliers, pattern timeline).
+        # Flag so the branches below can detect the short-circuit.
         setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
-        if setup_type == "GENERIC":
-            logger.debug(f"[{symbol}] Skipping enhancement for GENERIC setup")
-            return exec_ctx, eval_ctx
+        _is_generic = setup_type == "GENERIC"
+        if _is_generic:
+            logger.debug(f"[{symbol}] GENERIC setup — skipping pattern-specific enhancement phases")
 
-        if not detected_patterns:
+        if not detected_patterns and not _is_generic:
             logger.debug(f"[{symbol}] No patterns to enhance")
             return exec_ctx, eval_ctx
 
         # ===================================================================
-        # ✅ v5.0: Use shared pattern metadata extractor
+        # Pattern-specific phases — skipped for GENERIC setups (S16 fix).
+        # Market adaptation (phase 4) and direction conflict gate run for all.
         # ===================================================================
-        pattern_meta = extract_pattern_execution_metadata(
-            eval_ctx, horizon, extractor
-        )
-
-        if pattern_meta.get("available"):
-            exec_ctx["pattern_meta"] = pattern_meta
-            logger.debug(
-                f"[{symbol}] Pattern metadata: {pattern_meta['pattern']} "
-                f"(quality={pattern_meta['quality']}, age={pattern_meta['age_candles']})"
+        if not _is_generic:
+            # v5.0: Use shared pattern metadata extractor
+            pattern_meta = extract_pattern_execution_metadata(
+                eval_ctx, horizon, extractor
             )
 
-        # ===================================================================
-        # ✅ v5.0: Use shared timeline calculator
-        # ===================================================================
-        if pattern_meta.get("available"):
-            risk = exec_ctx.get("risk", {})
-            trend = eval_ctx.get("trend", {})
-
-            timeline = calculate_pattern_timeline(
-                pattern_meta, risk, trend, horizon
-            )
-
-            if timeline.get("available"):
-                exec_ctx["timeline"] = timeline
-                logger.info(
-                    f"[{symbol}] Timeline: T1={timeline['t1_estimate']}, "
-                    f"T2={timeline.get('t2_estimate', 'N/A')} "
-                    f"(confidence={timeline['confidence']})"
+            if pattern_meta.get("available"):
+                exec_ctx["pattern_meta"] = pattern_meta
+                logger.debug(
+                    f"[{symbol}] Pattern metadata: {pattern_meta['pattern']} "
+                    f"(quality={pattern_meta['quality']}, age={pattern_meta['age_candles']})"
                 )
 
-        # ===================================================================
-        # 1. Check Pattern Expiration
-        # ===================================================================
-        expiration = check_pattern_expiration(detected_patterns, horizon, extractor)
-        if expiration["expired"]:
-            exec_ctx["pattern_warnings"] = exec_ctx.get("pattern_warnings", [])
-            exec_ctx["pattern_warnings"].append({
-                "type": "expiration",
-                "pattern": expiration["pattern"],
-                "reason": expiration["reason"]
-            })
+            # v5.0: Use shared timeline calculator
+            if pattern_meta.get("available"):
+                risk = exec_ctx.get("risk", {})
+                trend = eval_ctx.get("trend", {})
 
-            # Move penalty to exec_ctx (Strategic Phase)
-            exec_ctx["confidence_adjustments"] = exec_ctx.get("confidence_adjustments", {
-                "total_penalty": 0,
-                "breakdown": []
-            })
-            
-            penalty = -20
-            exec_ctx["confidence_adjustments"]["total_penalty"] += penalty
-            exec_ctx["confidence_adjustments"]["breakdown"].append(
-                f"Pattern expired ({expiration['pattern']}): {penalty}%"
+                timeline = calculate_pattern_timeline(
+                    pattern_meta, risk, trend, horizon
+                )
+
+                if timeline.get("available"):
+                    exec_ctx["timeline"] = timeline
+                    logger.info(
+                        f"[{symbol}] Timeline: T1={timeline['t1_estimate']}, "
+                        f"T2={timeline.get('t2_estimate', 'N/A')} "
+                        f"(confidence={timeline['confidence']})"
+                    )
+
+            # 1. Check Pattern Expiration
+            expiration = check_pattern_expiration(detected_patterns, horizon, extractor)
+            if expiration["expired"]:
+                exec_ctx["pattern_warnings"] = exec_ctx.get("pattern_warnings", [])
+                exec_ctx["pattern_warnings"].append({
+                    "type": "expiration",
+                    "pattern": expiration["pattern"],
+                    "reason": expiration["reason"]
+                })
+
+                # C21 FIX: idempotency guard — prevent the -20 penalty from
+                # stacking on successive re-evaluations of the same context.
+                _adj = exec_ctx.setdefault("confidence_adjustments", {
+                    "total_penalty": 0,
+                    "breakdown": []
+                })
+                if not _adj.get("expiry_applied"):
+                    penalty = risk_management_cfg.get("expiry_penalty", -20)
+                    _adj["total_penalty"] += penalty
+                    _adj["breakdown"].append(
+                        f"Pattern expired ({expiration['pattern']}): {penalty}%"
+                    )
+                    _adj["expiry_applied"] = True  # C21: mark so second call is a no-op
+
+                    logger.warning(
+                        f"[{symbol}] Pattern expired: {expiration['reason']} (penalty={penalty}%)"
+                    )
+                else:
+                    logger.debug(
+                        f"[{symbol}] Expiry penalty already applied — skipping to prevent stacking"
+                    )
+
+            # 2. Check Pattern Invalidation
+            trend_dir = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
+            position_type = "SHORT" if trend_dir == "bearish" else "LONG"
+
+            invalidation = check_pattern_invalidation(
+                detected_patterns,
+                indicators,
+                symbol,
+                position_type=position_type,
+                horizon=horizon,
+                extractor=extractor
             )
 
-            logger.warning(
-                f"[{symbol}] Pattern expired: {expiration['reason']} (penalty={penalty}%)"
+            if invalidation["invalidated"]:
+                exec_ctx["pattern_invalidation"] = invalidation
+
+                # Mark execution as blocked
+                if "can_execute" not in exec_ctx:
+                    exec_ctx["can_execute"] = {"can_execute": False, "failures": []}
+
+                exec_ctx["can_execute"]["can_execute"] = False
+                exec_ctx["can_execute"]["is_hard_blocked"] = True
+                exec_ctx["can_execute"]["failures"].append(
+                    f"Pattern invalidation: {invalidation['reason']}"
+                )
+
+                logger.error(
+                    f"[{symbol}] ❌ Pattern invalidated: {invalidation['reason']} "
+                    f"(action={invalidation['action']})"
+                )
+
+            # 3. Get RR Regime Multipliers
+            t1_mult, t2_mult, regime = get_rr_regime_multipliers(
+                eval_ctx, horizon, extractor
             )
 
-        # ===================================================================
-        # 2. Check Pattern Invalidation
-        # ===================================================================
-        trend_dir = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
-        position_type = "SHORT" if trend_dir == "bearish" else "LONG"
+            exec_ctx["rr_regime"] = {
+                "regime": regime,
+                "t1_multiplier": t1_mult,
+                "t2_multiplier": t2_mult,
+                "adx": (
+                    indicators.get("adx", {}).get("value")
+                    if isinstance(indicators.get("adx"), dict)
+                    else indicators.get("adx")
+                )
+            }
 
-        invalidation = check_pattern_invalidation(
-            detected_patterns,
-            indicators,
-            symbol,
-            position_type=position_type,
-            horizon=horizon,
-            extractor=extractor
-        )
-
-        if invalidation["invalidated"]:
-            exec_ctx["pattern_invalidation"] = invalidation
-
-            # Mark execution as blocked
-            if "can_execute" not in exec_ctx:
-                exec_ctx["can_execute"] = {"can_execute": False, "failures": []}
-
-            exec_ctx["can_execute"]["can_execute"] = False
-            exec_ctx["can_execute"]["is_hard_blocked"] = True
-            exec_ctx["can_execute"]["failures"].append(
-                f"Pattern invalidation: {invalidation['reason']}"
+            logger.info(
+                f"[{symbol}] ✅ Execution context enhanced | "
+                f"Pattern={pattern_meta.get('pattern', 'N/A')} | "
+                f"RR regime={regime} | "
+                f"Timeline={'✅' if exec_ctx.get('timeline', {}).get('available') else '❌'}"
             )
-
-            logger.error(
-                f"[{symbol}] ❌ Pattern invalidated: {invalidation['reason']} "
-                f"(action={invalidation['action']})"
-            )
-
-        # ===================================================================
-        # 3. Get RR Regime Multipliers
-        # ===================================================================
-        t1_mult, t2_mult, regime = get_rr_regime_multipliers(
-            eval_ctx, horizon, extractor
-        )
-
-        exec_ctx["rr_regime"] = {
-            "regime": regime,
-            "t1_multiplier": t1_mult,
-            "t2_multiplier": t2_mult,
-            "adx": (
-                indicators.get("adx", {}).get("value")
-                if isinstance(indicators.get("adx"), dict)
-                else indicators.get("adx")
-            )
-        }
-
-        logger.info(
-            f"[{symbol}] ✅ Execution context enhanced | "
-            f"Pattern={pattern_meta.get('pattern', 'N/A')} | "
-            f"RR regime={regime} | "
-            f"Timeline={'✅' if exec_ctx.get('timeline', {}).get('available') else '❌'}"
-        )
 
         # ===================================================================
         # 4. Market-Adaptive RR Adjustment
@@ -857,38 +845,40 @@ def enhance_execution_context(
                         f"Market Adjustment: {market_adjusted['reason']}"
                     )
 
-                # ===================================================================
-                # ✅ NEW: Direction Conflict Reconciliation (Risk 1)
-                # ===================================================================
-                # = :DIRECTION_NORM Reconciliation (Logic Bridge) =
-                # Bridge Trend vocabulary (BULLISH/BEARISH) with Execution vocabulary (LONG/SHORT)
-                eval_direction = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "neutral").upper()
-                execution_direction = market_adjusted.get("direction", "neutral").upper()
-                
-                DIRECTION_NORM = {
-                    "BULLISH": "LONG",
-                    "BEARISH": "SHORT",
-                    "NEUTRAL": "NEUTRAL"
-                }
-                eval_dir_norm = DIRECTION_NORM.get(eval_direction, eval_direction)
-                
-                if (eval_dir_norm != execution_direction 
-                    and execution_direction != "NEUTRAL"
-                    and eval_dir_norm != "NEUTRAL"):
-                    exec_ctx["direction_conflict"] = True
-                    
-                    if "can_execute" not in exec_ctx:
-                        exec_ctx["can_execute"] = {"can_execute": False, "failures": []}
-                    
-                    exec_ctx["can_execute"]["can_execute"] = False
-                    exec_ctx["can_execute"]["failures"].append(
-                        f"Direction Conflict: Trend={eval_direction} vs Execution={execution_direction}"
-                    )
 
-                    logger.warning(
-                        f"[{symbol}] DIRECTION CONFLICT | "
-                        f"Eval: {eval_direction} ({eval_dir_norm}) vs Execution: {execution_direction} | BLOCKING"
-                    )
+        # ===================================================================
+        # C19 FIX: Direction Conflict Reconciliation — runs UNCONDITIONALLY
+        # (was previously inside `if risk:` — missed when risk was empty)
+        # ===================================================================
+        # Bridge Trend vocabulary (BULLISH/BEARISH) with Execution vocabulary (LONG/SHORT)
+        eval_direction = eval_ctx.get("trend", {}).get("classification", {}).get("direction", "neutral").upper()
+        # Source execution direction from market_adjusted_targets or risk
+        _mat = exec_ctx.get("market_adjusted_targets", {})
+        execution_direction = _mat.get("direction", exec_ctx.get("risk", {}).get("direction", "neutral")).upper()
+
+        DIRECTION_NORM = {
+            "BULLISH": "LONG",
+            "BEARISH": "SHORT",
+            "NEUTRAL": "NEUTRAL"
+        }
+        eval_dir_norm = DIRECTION_NORM.get(eval_direction, eval_direction)
+
+        if (
+            eval_dir_norm != execution_direction
+            and execution_direction != "NEUTRAL"
+            and eval_dir_norm != "NEUTRAL"
+        ):
+            exec_ctx["direction_conflict"] = True
+            exec_ctx.setdefault("can_execute", {})
+            exec_ctx["can_execute"]["can_execute"] = False
+            exec_ctx["can_execute"].setdefault("failures", []).append(
+                f"Direction Conflict: Trend={eval_direction} vs Execution={execution_direction}"
+            )
+
+            logger.warning(
+                f"[{symbol}] DIRECTION CONFLICT | "
+                f"Eval: {eval_direction} ({eval_dir_norm}) vs Execution: {execution_direction} | BLOCKING"
+            )
 
         return exec_ctx, eval_ctx
 
@@ -1131,14 +1121,22 @@ def calculate_pattern_timeline(
                 
                 if config_estimate_days > 0:
                     learned_multiplier = actual_median_days / config_estimate_days
-                    
+                    # W44 FIX: Clamp learned_multiplier to prevent outlier math drift.
+                    # Without this, a single anomalous trade (e.g. T1 hit in 200 days
+                    # on a pattern estimated at 1 day) would produce a 200x multiplier
+                    # that inflates all subsequent timeline estimates.
+                    learned_multiplier = max(0.1, min(10.0, learned_multiplier))
+
                     # Blend historical data with config (70% historical, 30% config)
                     duration_mult = (
                         learned_multiplier * 0.7 +
                         config_duration_mult * 0.3
                     )
+                    # W44 FIX: Clamp the blended result too so extreme config
+                    # values cannot escape the safety envelope.
+                    duration_mult = max(0.1, min(10.0, duration_mult))
                     data_source = f"historical (n={historical_stats['sample_size']})"
-                    
+
                     logger.debug(
                         f"Using learned multiplier: {duration_mult:.2f} "
                         f"(historical={learned_multiplier:.2f}, config={config_duration_mult:.2f})"
@@ -1147,12 +1145,20 @@ def calculate_pattern_timeline(
         # ===================================================================
         # STEP 2: Determine regime factor
         # ===================================================================
-        regime = trend.get("regime", "normal")
-        regime_factor = {
-            "strong": 1.3,   # Faster movement
-            "normal": 1.0,
-            "weak": 0.7      # Slower movement
-        }.get(regime, 1.0)
+        # ✅ W13 FIX: Use multipliers from exec_ctx if available (calculated via get_rr_regime_multipliers)
+        rr_regime = exec_ctx.get("rr_regime", {})
+        regime = rr_regime.get("regime") or trend.get("regime", "normal")
+        
+        # Use T1 multiplier as the base duration factor for timeline estimates
+        regime_factor = rr_regime.get("t1_multiplier")
+        
+        if regime_factor is None:
+            # Fallback if exec_ctx doesn't have it
+            regime_factor = {
+                "strong": 1.3,
+                "normal": 1.0,
+                "weak": 0.7
+            }.get(regime, 1.0)
         
         # ===================================================================
         # STEP 3: Calculate unit names (already have bars_per_unit above)
@@ -1331,11 +1337,21 @@ def validate_execution_rr(
     execution_floor = rr_gates.get("execution_floor", 1.0)
 
     # --- Decision Logic with Trend-Based Relaxation ---
-    trend_strength = eval_ctx.get("trend", {}).get("trendStrength", 5.0)
+    trend_strength = _get_val(eval_ctx.get("indicators", {}), "trendStrength", 5.0)
     
     # Calculate effective min threshold
     effective_min_t1 = min_t1
-    for level in sorted(MIN_RR_BY_TREND.values(), key=lambda x: x["strength"], reverse=True):
+    min_rr_by_trend = rr_gates.get("min_rr_by_trend", {})
+    if not min_rr_by_trend:
+        # Emergency fallback if config is missing keys
+        min_rr_by_trend = {
+            "explosive": {"strength": 8.5, "min_rr": 1.0},
+            "strong": {"strength": 6.5, "min_rr": 1.3}, 
+            "normal": {"strength": 4.5, "min_rr": 1.5},
+            "weak": {"strength": 0.0, "min_rr": 2.0}
+        }
+
+    for level in sorted(min_rr_by_trend.values(), key=lambda x: x["strength"], reverse=True):
         if trend_strength >= level["strength"]:
             effective_min_t1 = min(min_t1, level["min_rr"]) # Never harder than config
             break

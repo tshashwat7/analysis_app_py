@@ -143,7 +143,7 @@ class QueryOptimizedExtractor:
         )
 
 
-    def get_setup_baseline_floor(self, setup_name: str) -> float:
+    def get_setup_baseline_floor(self, setup_name: str) -> Optional[float]:
         """
         Get baseline confidence floor for a setup.
         
@@ -158,7 +158,7 @@ class QueryOptimizedExtractor:
             override = horizon_overrides[setup_name]
             if override is None:
                 # Explicitly blocked for this horizon
-                return 0
+                return None
             return override
         
         # Check global baseline
@@ -252,8 +252,8 @@ class QueryOptimizedExtractor:
         Returns:
             {
                 "explosive": {"gates": {"adx": {"min": 35}}, "confidence_boost": 20},
-                "strong": {...},
-                "moderate": {...},
+                "strong": {"gates": {"adx": {"min": 28}}, "confidence_boost": 15},
+                "moderate": {"gates": {"adx": {"min": 20}}, "confidence_boost": 10},
             }
         """
         bands = self.base_extractor.get("horizon_adx_confidence_bands", {})
@@ -350,7 +350,7 @@ class QueryOptimizedExtractor:
         modifier_config: Dict[str, Any],
         data: Dict[str, Any],
         setup_type: Optional[str] = None
-    ) -> Tuple[bool, Optional[float], str]:
+    ) -> Tuple[bool, Optional[float], str, bool]:
         """
         Evaluate a confidence modifier (penalty/bonus) and return adjustment.
         
@@ -377,7 +377,7 @@ class QueryOptimizedExtractor:
             setup_type: Current setup type (for filtering)
         
         Returns:
-            Tuple of (applies: bool, adjustment: float, reason: str)
+            Tuple of (applies: bool, adjustment: float, reason: str, block_entry: bool)
         """
         # 1. Setup Filtering
         apply_to = modifier_config.get("apply_to_setups")
@@ -1367,17 +1367,10 @@ class QueryOptimizedExtractor:
         """
         Check if setup is blocked for this horizon.
         
-        ✅ NOW USES: setup_pattern_matrix_config.py
-        A setup is blocked if its horizon override explicitly sets confidence min to None.
+        A setup is blocked if its baseline confidence floor is explicitly set to None 
+        in the horizon's setup_floor_overrides within confidence_config.py.
         """
-        horizon_override = self.base_extractor.get(
-            f"setup_{setup_name}_override_{self.horizon}", {}
-        )
-        opportunity = horizon_override.get("opportunity", {})
-        confidence = opportunity.get("confidence", {})
-        
-        # Explicit None in confidence min means blocked
-        return confidence.get("min") is None and "min" in confidence
+        return self.get_setup_baseline_floor(setup_name) is None
 
     def get_setup_classification_rules(
             self,
@@ -1701,7 +1694,7 @@ class QueryOptimizedExtractor:
         Pure config access — no evaluation.
         """
 
-        if self.horizon == "intraday":
+        if self.horizon in ["intraday", "short_term", "long_term", "multibagger"]:
             exec_rules = self.get_execution_rules()
             gates = exec_rules.get("indian_market_gates", {})
 
@@ -1870,7 +1863,7 @@ class QueryOptimizedExtractor:
                         )
         
         # Expose fundamental category scores as buckets
-        fundamental_data = data.get("fundamental", {})
+        fundamental_data = data.get("fundamentals", data.get("fundamental", {}))
         if isinstance(fundamental_data, dict):
             if "score" in fundamental_data:
                 namespace["fundamentalScore"] = fundamental_data.get("score", 0.0)

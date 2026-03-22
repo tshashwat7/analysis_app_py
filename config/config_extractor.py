@@ -553,6 +553,22 @@ class ConfigExtractor:
             source=f"merged(global + {self.horizon}) rr_gates"
         )
 
+        # Deep merge regime adjustments (W13)
+        global_regime = risk_mgmt.get("rr_regime_adjustments", {})
+        horizon_regime = horizon_risk.get("rr_regime_adjustments", {})
+        
+        merged_regime = {}
+        for regime in set(global_regime.keys()).union(horizon_regime.keys()):
+            merged_regime[regime] = {
+                **global_regime.get(regime, {}),
+                **horizon_regime.get(regime, {})
+            }
+            
+        self.sections["rr_regime_adjustments"] = ConfigSection(
+            data=merged_regime,
+            source=f"merged(global + {self.horizon}) rr_regime_adjustments"
+        )
+
         # ✅ FIXED: Multipliers and Overrides consolidated here
         # Priority overrides (moved from extract_setup_sections)
         calc_engine = global_cfg.get("calculation_engine", {})
@@ -824,25 +840,36 @@ class ConfigExtractor:
             )
 
     def extract_strategy_sections(self):
-        """Extract strategy configurations."""
-        try:
-            from config.strategy_matrix_config import STRATEGY_MATRIX
+        """Extract strategy configurations.
 
-            # Full strategy matrix
-            self.sections["strategy_matrix"] = ConfigSection(
-                data=STRATEGY_MATRIX,
-                source="strategy_matrix.STRATEGY_MATRIX"
-            )
+        C8 FIX: This method used to unconditionally overwrite self.sections["strategy_matrix"]
+        with a stripped-down version missing fit_indicators / scoring_rules / market_cap_requirements.
+        extract_matrix_sections() already populates the full rich version. Skip the overwrite
+        if the section was already populated by that call.
+        """
+        if "strategy_matrix" not in self.sections or not self.sections["strategy_matrix"].is_valid:
+            # Only load if extract_matrix_sections() did NOT already populate it
+            try:
+                from config.strategy_matrix_config import STRATEGY_MATRIX
 
-            # Individual strategies
-            for strat_name, strat_config in STRATEGY_MATRIX.items():
-                self.sections[f"strategy_{strat_name}"] = ConfigSection(
-                    data=strat_config,
-                    source=f"strategy_matrix.{strat_name}"
+                self.sections["strategy_matrix"] = ConfigSection(
+                    data=STRATEGY_MATRIX,
+                    source="strategy_matrix.STRATEGY_MATRIX"
                 )
 
-        except (ImportError, Exception) as e:
-            self.logger.warning(f"Could not load strategy_matrix_config: {e}")
+                for strat_name, strat_config in STRATEGY_MATRIX.items():
+                    self.sections[f"strategy_{strat_name}"] = ConfigSection(
+                        data=strat_config,
+                        source=f"strategy_matrix.{strat_name}"
+                    )
+
+            except (ImportError, Exception) as e:
+                self.logger.warning(f"Could not load strategy_matrix_config: {e}")
+        else:
+            self.logger.debug(
+                "extract_strategy_sections: strategy_matrix already loaded by "
+                "extract_matrix_sections() — skipping overwrite (C8 fix)"
+            )
 
         # Horizon strategy preferences
         horizon_cfg = self.master_config.get("horizons", {}).get(self.horizon, {})

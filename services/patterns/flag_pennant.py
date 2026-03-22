@@ -51,9 +51,9 @@ class FlagPennantPattern(BasePattern):
         # FIX 2: Trend Check (Flag must be in uptrend)
         # Dynamic lookup for "Fast MA" based on horizon
         trend_ma_val = self._get_val(indicators, "maFast")
-        is_uptrend = True
-        if trend_ma_val and closes.iloc[-1] < trend_ma_val:
-            is_uptrend = False # Price below fast MA = Weak flag
+        is_uptrend = False
+        if trend_ma_val and closes.iloc[-1] >= trend_ma_val:
+            is_uptrend = True # Price at or above fast MA = Strong flag
         
         # Volume Check
         vols = df["Volume"]
@@ -96,10 +96,12 @@ class FlagPennantPattern(BasePattern):
 
             result["meta"] = {
                 "age_candles": len(df) - formation_index,
+                "formation_time": float(df.index[formation_index].timestamp()),
                 "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
                 "pole_length": self.pole_days,
                 "flag_length": self.flag_days,
                 "bar_index": len(df),
+                "type": "bullish",
                 # Entry/Exit Levels
                 "flag_low": round(flag_low, 2),
                 "flag_high": round(flag_high, 2),

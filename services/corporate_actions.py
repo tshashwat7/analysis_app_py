@@ -623,8 +623,8 @@ def get_corp_actions_summary(tickers: List[str]) -> Dict[str, str]:
 if __name__ == "__main__":
     import sys
     ticker = sys.argv[1] if len(sys.argv) > 1 else "INFY.NS"
-    print(f"=== Upcoming actions for {ticker} ===")
-    print(json.dumps(get_corporate_actions([ticker], mode="upcoming"), indent=2, default=str))
-    print(f"\n=== Past actions (YF) for {ticker} ===")
-    print(json.dumps(get_corporate_actions([ticker], mode="single"), indent=2, default=str))
-    print(f"\n=== Library available: {_LIB_AVAILABLE} ===")
+    logger.info(f"=== Upcoming actions for {ticker} ===")
+    logger.info(json.dumps(get_corporate_actions([ticker], mode="upcoming"), indent=2, default=str))
+    logger.info(f"\n=== Past actions (YF) for {ticker} ===")
+    logger.info(json.dumps(get_corporate_actions([ticker], mode="single"), indent=2, default=str))
+    logger.info(f"\n=== Library available: {_LIB_AVAILABLE} ===")

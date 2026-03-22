@@ -444,9 +444,13 @@ class ConfigResolver:
         #   strong_trend: adx.min = 35
         #   normal_trend: adx.min = 20
         #   weak_trend:   adx.max = 20
-        if adx >= 35:
+        risk_cfg = self.extractor.get_risk_management_config()
+        strong_adx = risk_cfg.get("rr_regime_adjustments", {}).get("strong_trend", {}).get("adx", {}).get("min", 35)
+        normal_adx = risk_cfg.get("rr_regime_adjustments", {}).get("normal_trend", {}).get("adx", {}).get("min", 20)
+        
+        if adx >= strong_adx:
             regime = "strong"
-        elif adx >= 20:
+        elif adx >= normal_adx:
             regime = "normal"
         else:
             regime = "weak"
@@ -636,7 +640,7 @@ class ConfigResolver:
         # Calculation mapping
         math_results = {
             "volatilityAdjustedRoe": (roe / atr_pct) if (roe and atr_pct and atr_pct > 0) else None,
-            "priceToIntrinsicValue": (price / (price * (1 / (pe / eps_5y)))) if (price and pe and eps_5y and eps_5y > 0) else None,
+            "priceToIntrinsicValue": (pe / (8.5 + 2 * eps_5y)) if (pe is not None and eps_5y is not None and (8.5 + 2 * eps_5y) > 0) else None,
             "fcfYieldVsVolatility": (fcf_yield / max(atr_pct, 0.1)) if (fcf_yield and atr_pct) else None,
             "trendConsistency": adx,
             "priceVsPrimaryTrendPct": ((price / ma_slow) - 1) if (price and ma_slow) else None,
@@ -863,7 +867,8 @@ class ConfigResolver:
                     f"fit={c['fit_score']:.1f} | composite={c['composite_score']:.1f}"
                 )
 
-        TOP_K = 2
+        # ✅ S13 FIX: Increased discovery depth to 3
+        TOP_K = 3
         top = ranked[:TOP_K]
 
         # Best setup
@@ -2019,7 +2024,10 @@ class ConfigResolver:
 
         # Inject pattern_count (Bug 4 Fix)
         pv = ctx.get("pattern_validation", {}).get("by_setup", {}).get(setup_type, {})
-        flat_data["pattern_count"] = len(pv.get("confirming_found", []))
+        # ✅ S14 FIX: Include primary pattern in the confluence count
+        primary_found = pv.get("primary_found", [])
+        confirming_found = pv.get("confirming_found", [])
+        flat_data["pattern_count"] = len(primary_found) + len(confirming_found)
 
         # ✅ PATCH A: Inject divergence_type for pre-computation check
         divergence_ctx = ctx.get("divergence", {})
@@ -2178,32 +2186,30 @@ class ConfigResolver:
         violations = execution.get("violations", [])
         risk_score = execution.get("execution_risk_score", 0)
 
+        # C15 FIX: Execution penalties are NOT scaled by divergence_multiplier.
+        # That multiplier belongs only to structural signal-quality modifiers.
         for rule in warnings:
-            exec_adjustment += warning_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
-            exec_breakdown.append(
-                f"execution_warning.{rule}: {warning_pen * divergence_multiplier:+.1f}"
-            )
+            exec_adjustment += warning_pen
+            exec_breakdown.append(f"execution_warning.{rule}: {warning_pen:+.1f}")
 
         for rule in violations:
-            exec_adjustment += violation_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
-            exec_breakdown.append(
-                f"execution_violation.{rule}: {violation_pen * divergence_multiplier:+.1f}"
-            )
+            exec_adjustment += violation_pen
+            exec_breakdown.append(f"execution_violation.{rule}: {violation_pen:+.1f}")
 
         if risk_score >= risk_thresh.get("high", 80):
-            exec_adjustment += risk_high_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_adjustment += risk_high_pen
             exec_breakdown.append(
-                f"execution_risk_score >= {risk_thresh.get('high', 80)}: {risk_high_pen * divergence_multiplier:+.1f}"
+                f"execution_risk_score >= {risk_thresh.get('high', 80)}: {risk_high_pen:+.1f}"
             )
         elif risk_score >= risk_thresh.get("moderate", 60):
-            exec_adjustment += risk_mod_pen * divergence_multiplier  # ✅ APPLY MULTIPLIER
+            exec_adjustment += risk_mod_pen
             exec_breakdown.append(
-                f"execution_risk_score >= {risk_thresh.get('moderate', 60)}: {risk_mod_pen * divergence_multiplier:+.1f}"
+                f"execution_risk_score >= {risk_thresh.get('moderate', 60)}: {risk_mod_pen:+.1f}"
             )
         elif risk_score <= risk_thresh.get("low", 40) and risk_score > 0:
-            exec_adjustment += risk_low_bonus * divergence_multiplier  # Bonus for very clean execution
+            exec_adjustment += risk_low_bonus
             exec_breakdown.append(
-                f"execution_risk_score <= {risk_thresh.get('low', 40)}: {risk_low_bonus * divergence_multiplier:+.1f}"
+                f"execution_risk_score <= {risk_thresh.get('low', 40)}: {risk_low_bonus:+.1f}"
             )
 
         if exec_adjustment != 0:
@@ -2244,13 +2250,22 @@ class ConfigResolver:
         clamp = self.extractor.get_confidence_clamp()
         clamped = max(clamp[0], min(clamp[1], final))
 
-        # ✅ B8 FIX (Refined): Structural Score Ceiling
-        # Restrict confidence to 90 unless there is extreme volume confirmation (rvol > 2.0)
-        # Prevents high-confidence scores for momentum setups lacking strong institutional push.
-        if "BREAKOUT" in setup_type or "MOMENTUM" in setup_type:
+        # C16 FIX: B8 ceiling scoped to BULLISH BREAKOUT/MOMENTUM only.
+        # Excludes BREAKDOWN, BEAR_TREND, FLOW_BREAKDOWN (bearish/SHORT setups).
+        trend_dir = ctx.get("trend", {}).get("classification", {}).get("direction", "neutral")
+        _is_bullish_momentum = (
+            ("BREAKOUT" in setup_type and "BREAKDOWN" not in setup_type)
+            or ("MOMENTUM" in setup_type
+                and "BREAKDOWN" not in setup_type
+                and "FLOW_BREAKDOWN" not in setup_type)
+        ) and trend_dir != "bearish"
+        if _is_bullish_momentum:
             rvol = flat_data.get("rvol", 1.0)
             if rvol <= 2.0 and clamped > 90:
-                self.logger.info(f"[{ctx['meta']['symbol']}] 🛡️ B8 CEILING: Capping {clamped} -> 90 (rvol={rvol:.2f})")
+                self.logger.info(
+                    f"[{ctx['meta']['symbol']}] B8 CEILING: Capping {clamped} -> 90"
+                    f" (rvol={rvol:.2f}, setup={setup_type})"
+                )
                 clamped = 90
                 breakdown.append(f"score_ceiling: capped at 90 (rvol {rvol:.2f} <= 2.0)")
 
@@ -2567,8 +2582,8 @@ class ConfigResolver:
             sl_distance_pct = ensure_numeric(ctx["indicators"].get("slDistance"))
         
         # Get thresholds from config
-        min_sl = sl_config.get("min_sl_distance_pct", 0.5)
-        max_sl = sl_config.get("max_sl_distance_pct", 10.0)
+        min_sl = sl_config.get("min_atr_multiplier", 0.5)
+        max_sl = sl_config.get("max_atr_multiplier", 5.0)
         
         # Validate
         if sl_distance_pct == 0:
@@ -2678,7 +2693,7 @@ class ConfigResolver:
         # --------------------------------------------------
         # 1️⃣ Structural ATR-based RR + SL 
         # --------------------------------------------------
-        if atr > 0 and price > 0:
+        if atr is not None and atr > 0 and price is not None and price > 0:
             # ✅ ARCHITECTURAL FIX: Resolver only provides structural baseline.
             # Pattern-specific geometry belongs in Stage 2 (enhance_execution_context).
             
@@ -3107,13 +3122,31 @@ class ConfigResolver:
         price = ensure_numeric(flat_indicators.get("price", 0))
         prev_price = ensure_numeric(flat_indicators.get("prevclose", price))
         
+        # ✅ W30 FIX: Multi-candle Lookback Guard
+        # If we have price_hist in indicators, use it for a more robust check
+        price_hist = indicators.get("price_hist", [])
+        rsi_hist = indicators.get("rsi_hist", [])
+        lookback = physics.get("lookback", 15)  # Default 15 from config
+        
+        price_slope = (price - prev_price) / prev_price if prev_price > 0 else 0
+        
+        if len(price_hist) >= lookback and len(rsi_hist) >= lookback:
+            # Calculate slope over lookback window
+            p_window = price_hist[-lookback:]
+            r_window = rsi_hist[-lookback:]
+            p_slope_window = (p_window[-1] - p_window[0]) / p_window[0] if p_window[0] > 0 else 0
+            r_slope_window = (r_window[-1] - r_window[0]) / 100.0 # RSI is 0-100
+            
+            # Use window slopes if available
+            price_slope = p_slope_window
+            rsi_slope = r_slope_window
+
         # Physics Triggers
         bear_trigger = physics.get("slope_diff_min", -0.05)
         bull_trigger = physics.get("bullish_slope_min", 0.05)
-        price_slope = (price - prev_price) / prev_price if prev_price > 0 else 0
 
         # 3. Detect BEARISH Divergence (Price ↑, RSI ↓)
-        if price_slope > 0 and rsi_slope < bear_trigger:
+        if price_slope > 0.01 and rsi_slope < bear_trigger:
             
             severe_thresh = div_penalties.get("severe", {}).get("gates", {}).get("rsislope", {}).get("max", -0.08)
             moderate_thresh = div_penalties.get("moderate", {}).get("gates", {}).get("rsislope", {}).get("max", -0.03)
@@ -3297,14 +3330,18 @@ class ConfigResolver:
         confidence_block = eval_ctx["confidence"].get("block_entry", False)
 
         # ✅ ALL CHECKS MUST PASS
+        # ✅ B4 FIX: Patterns that have broken down MUST block entry
+        any_invalidated = self._has_invalidated_patterns(pattern_validation, setup_type)
+        
         allowed = (
-            structural  # ✅ FIXED: Include structural gates validation
-            and execution_rules  # ✅ FIXED: Include execution rules validation
+            structural
+            and execution_rules
             and opportunity["passed"]
             and pattern_entry_ok
-            and divergence_ok  # ✅ RESTORED
-            and vol_ok  # ✅ RESTORED
-            and not confidence_block  # ✅ NEW: Enforce confidence modifier block
+            and divergence_ok
+            and vol_ok
+            and not confidence_block
+            and not any_invalidated  # ❗ CRITICAL: Block if primary pattern is broken
         )
 
         reason = None
@@ -3326,6 +3363,8 @@ class ConfigResolver:
                 reason = vol_warning
             elif confidence_block:  # ✅ NEW: Reason for confidence block
                 reason = "Confidence modifier: Entry blocked"
+            elif any_invalidated:
+                reason = f"Pattern invalidated: {self._get_invalidated_patterns(pattern_validation, setup_type)}"
 
         return {
             "allowed": allowed,
@@ -3343,7 +3382,7 @@ class ConfigResolver:
             "pattern_status": {
                 "any_invalidated": self._has_invalidated_patterns(pattern_validation, setup_type),
                 "invalidated_list": self._get_invalidated_patterns(pattern_validation, setup_type),
-                "affects_entry": False  # Currently doesn't block, but tracked
+                "affects_entry": True  # Currently doesn't block, but tracked
             },
 
             # Execution-facing transparency (UI / logs)
@@ -3446,6 +3485,7 @@ class ConfigResolver:
         """
         FINALIZE risk model with DUAL CONSTRAINTS (Risk vs. Capital).
         """
+        symbol = eval_ctx.get("meta", {}).get("symbol", "UNKNOWN")
         risk_data = eval_ctx.get("risk_candidates", {})
         price = ensure_numeric(eval_ctx["price_data"].get("price"))
         confidence = eval_ctx["confidence"]["clamped"]
@@ -3618,7 +3658,7 @@ class ConfigResolver:
                     return round(sl_atr, 2), "slAtrDynamic"
                 direction = meta.get("type", "bullish")
                 atr = _safe_float(price_data.get("atrDynamic") or ind.get("atrDynamic"))
-                if atr and atr > 0:
+                if atr is not None and atr > 0:
                     if direction == "bearish":
                         return round(entry + (atr * mult), 2), f"atrDynamic*{mult}"
                     else:
@@ -3960,17 +4000,30 @@ class ConfigResolver:
                 strike_low  = _safe_float(meta.get("strike_low"))
                 strike_high = _safe_float(meta.get("strike_high"))
                 prior_range = _safe_float(meta.get("prior_range"))
+                direction = str(meta.get("type", "bullish")).lower()
 
-                if strike_low and strike_low < entry:
-                    sl = round(strike_low * 0.998, 2)
-                    sl_src = "strike_low"
+                if direction == "bearish":
+                    if strike_high and strike_high > entry:
+                        sl = round(strike_high * 1.002, 2)
+                        sl_src = "strike_high"
+                    else:
+                        sl, sl_src = _sl_from_atr(1.5)
+
+                    risk = sl - entry
+                    depth = prior_range or (risk * 1.5)
+                    t1 = round(entry - depth * 0.5, 2)
+                    t2 = round(entry - depth, 2)
                 else:
-                    sl, sl_src = _sl_from_atr(1.5)
+                    if strike_low and strike_low < entry:
+                        sl = round(strike_low * 0.998, 2)
+                        sl_src = "strike_low"
+                    else:
+                        sl, sl_src = _sl_from_atr(1.5)
 
-                risk = entry - sl
-                depth = prior_range or (risk * 1.5)
-                t1 = round(entry + depth * 0.5, 2)
-                t2 = round(entry + depth, 2)
+                    risk = entry - sl
+                    depth = prior_range or (risk * 1.5)
+                    t1 = round(entry + depth * 0.5, 2)
+                    t2 = round(entry + depth, 2)
 
                 result = _validate_and_build(sl, t1, t2, depth,
                     source="structural", sl_source=sl_src, t_source="reversal_range")
@@ -4132,20 +4185,20 @@ class ConfigResolver:
     def _can_execute(self, exec_ctx: Dict, eval_ctx: Dict) -> Dict[str, Any]:
         """Final execution decision combining all checks."""
         checks = {
-            "entry_permission": exec_ctx["entry_permission"]["allowed"],
-            "time_allowed": exec_ctx["time_constraints"]["allowed"],
-            "risk_valid": exec_ctx["risk"]["valid"],
-            "capital_available": exec_ctx["position_sizing"]["capital"],
-            "quantity_available": exec_ctx["risk"]["quantity"] not in (None, 0)
+            "entry_permission": exec_ctx.get("entry_permission", {}).get("allowed", False),
+            "time_allowed": exec_ctx.get("time_constraints", {}).get("allowed", False),
+            "risk_valid": exec_ctx.get("risk", {}).get("valid", False),
+            "capital_available": exec_ctx.get("position_sizing", {}).get("capital"),
+            "quantity_available": exec_ctx.get("risk", {}).get("quantity") not in (None, 0)
         }
 
         all_passed = all(checks.values())
         failures = []
         
         if not checks["entry_permission"]:
-            failures.append(exec_ctx["entry_permission"]["reason"])
+            failures.append(exec_ctx.get("entry_permission", {}).get("reason", "Entry not permitted"))
         if not checks["time_allowed"]:
-            failures.append(exec_ctx["time_constraints"].get("reason"))
+            failures.append(exec_ctx.get("time_constraints", {}).get("reason", "Time constraint failed"))
         if not checks["capital_available"]:
             failures.append("Capital not provided")
         if not checks["risk_valid"]:

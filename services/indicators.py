@@ -601,6 +601,9 @@ def compute_price_action(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     def _inner():
         _Validator.require(df, ["High", "Low", "Close"], min_rows=2, indicator="priceAction")
         high = df["High"].iloc[-1]
+        # ✅ W57 FIX: Corrected logic flip (Support must be min of Lows, Resistance must be max of Highs)
+        support1 = df["Low"].rolling(window=20).min()
+        resistance1 = df["High"].rolling(window=20).max()
         low = df["Low"].iloc[-1]
         close = df["Close"].iloc[-1]
         

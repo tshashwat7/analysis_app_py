@@ -1,17 +1,19 @@
 # services/db.py
 
 import os
+from datetime import datetime as _dt
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, Text, JSON, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import text
 import logging
+from config.config_utility.market_utils import get_current_utc
 logger = logging.getLogger(__name__)
 
 def utc_now():
     """Returns timezone-aware UTC datetime."""
-    return datetime.now(timezone.utc)
+    return get_current_utc()
 
 # 1. Setup SQLite
 DB_DIR = "data"
@@ -67,6 +69,7 @@ class SignalCache(Base):
     rr_ratio = Column(Float, nullable=True)
     entry_price = Column(Float, nullable=True)
     stop_loss = Column(Float, nullable=True)
+    direction = Column(String, nullable=True, index=True)
     horizon_scores = Column(JSON)
     
     # Timezone-aware UTC timestamp
@@ -120,11 +123,30 @@ class PatternBreakdownState(Base):
     started_at = Column(DateTime, nullable=False)
     last_updated = Column(DateTime, nullable=False)
     candle_count = Column(Integer, default=1)
+    status = Column(String, default="active", index=True)
+    resolved_at = Column(DateTime, nullable=True)
+    resolution_reason = Column(String, nullable=True)
     
     price_at_breakdown = Column(Float, nullable=True)
     threshold_level = Column(Float, nullable=True)
     condition = Column(String, nullable=True)
     meta = Column(JSON, nullable=True)
+
+class PatternBreakdownEvent(Base):
+    """Append-only audit trail for breakdown state transitions."""
+    __tablename__ = "pattern_breakdown_event"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, index=True, nullable=False)
+    pattern_name = Column(String, index=True, nullable=False)
+    horizon = Column(String, index=True, nullable=False)
+    event_type = Column(String, index=True, nullable=False)
+    event_time = Column(DateTime, default=utc_now, index=True, nullable=False)
+    candle_count = Column(Integer, nullable=True)
+    price_at_breakdown = Column(Float, nullable=True)
+    threshold_level = Column(Float, nullable=True)
+    condition = Column(String, nullable=True)
+    details = Column(JSON, nullable=True)
 
 # ✅ Add event listener for timezone enforcement
 @event.listens_for(PatternBreakdownState, 'load')
@@ -135,6 +157,12 @@ def enforce_timezone_on_pattern_state(target, context):
     
     if target.last_updated and target.last_updated.tzinfo is None:
         target.last_updated = target.last_updated.replace(tzinfo=timezone.utc)
+
+@event.listens_for(PatternBreakdownEvent, 'load')
+def enforce_timezone_on_breakdown_event(target, context):
+    """Ensure event_time stays UTC-aware on read."""
+    if target.event_time and target.event_time.tzinfo is None:
+        target.event_time = target.event_time.replace(tzinfo=timezone.utc)
 
 # 2. New Pattern Performance History
 class PatternPerformanceHistory(Base):
@@ -226,6 +254,16 @@ def enforce_timezone_on_paper_trade(target, context):
         target.created_at = target.created_at.replace(tzinfo=timezone.utc)
     if target.updated_at and target.updated_at.tzinfo is None:
         target.updated_at = target.updated_at.replace(tzinfo=timezone.utc)
+# -----------------------------------------------------------------------
+# V15.0: Schema Migrations table (Architecture Decision #2)
+# Tracks which raw-SQL ALTER migrations have been applied so that
+# run_migrations() is idempotent and auditable — no Alembic required.
+# -----------------------------------------------------------------------
+class SchemaMigration(Base):
+    """One row per applied migration. migration_name is the primary key."""
+    __tablename__ = "schema_migrations"
+    migration_name = Column(String, primary_key=True)
+    applied_at = Column(DateTime, default=utc_now, nullable=False)
 
 
 # 4. Create Tables
@@ -233,28 +271,128 @@ def init_db():
     # Lazy import — avoids circular import (mb_db_model imports Base from db.py)
     from config.multibagger.mb_db_model import MultibaggerCandidate  # noqa: F401
     Base.metadata.create_all(bind=engine)
-    migrate_add_selected_horizon()
+    run_migrations()
 
-def migrate_add_selected_horizon():
-    """Add selected_horizon column if it doesn't exist."""
+
+def _migration_applied(conn, name: str) -> bool:
+    """Return True if this migration has already been recorded."""
     try:
-        conn = engine.connect()
-        # Check if column exists
-        result = conn.execute(text("PRAGMA table_info(signal_cache)"))
-        columns = [row[1] for row in result.fetchall()]
-        
-        if "selected_horizon" not in columns:
-            logger.info("Running migration: Adding selected_horizon column...")
-            conn.execute(text("ALTER TABLE signal_cache ADD COLUMN selected_horizon VARCHAR"))
-            conn.execute(text("UPDATE signal_cache SET selected_horizon = best_horizon WHERE selected_horizon IS NULL"))
-            conn.commit()
-            logger.info("✅ Migration complete: selected_horizon column added")
-        else:
-            logger.info("ℹ️  selected_horizon column already exists")
-        
-        conn.close()
+        row = conn.execute(
+            text("SELECT 1 FROM schema_migrations WHERE migration_name = :n"),
+            {"n": name}
+        ).fetchone()
+        return row is not None
+    except Exception:
+        # schema_migrations table may not exist yet on the very first run;
+        # create_all() runs before run_migrations() so this should not happen,
+        # but be defensive.
+        return False
+
+
+def _record_migration(conn, name: str) -> None:
+    """Insert a row recording that `name` has been successfully applied."""
+    conn.execute(
+        text("INSERT INTO schema_migrations (migration_name, applied_at) VALUES (:n, :ts)"),
+        {"n": name, "ts": utc_now()}
+    )
+
+
+def run_migrations():
+    """
+    V15.0 idempotent migration runner.
+    Each migration is registered by name; already-applied ones are skipped.
+    C31 fix: every migration always releases its connection via engine.begin()
+    context manager, and the log level is WARNING so PROD deployments see it.
+    """
+    registry = {
+        "add_selected_horizon": migrate_add_selected_horizon,
+        "add_direction_column": migrate_add_direction_column,
+        "add_pattern_breakdown_lifecycle": migrate_add_pattern_breakdown_lifecycle,
+    }
+    for name, fn in registry.items():
+        fn(name)
+
+
+def migrate_add_selected_horizon(migration_name: str = "add_selected_horizon"):
+    """Add selected_horizon column if it doesn't exist."""
+    # C31 fix: engine.begin() is a context manager — connection is always
+    # released on block exit (success or exception).
+    try:
+        with engine.begin() as conn:
+            if _migration_applied(conn, migration_name):
+                logger.debug(f"Migration already applied, skipping: {migration_name}")
+                return
+            result = conn.execute(text("PRAGMA table_info(signal_cache)"))
+            columns = [row[1] for row in result.fetchall()]
+            if "selected_horizon" not in columns:
+                logger.warning(f"[MIGRATION] Running: {migration_name}")
+                conn.execute(text("ALTER TABLE signal_cache ADD COLUMN selected_horizon VARCHAR"))
+                conn.execute(
+                    text("UPDATE signal_cache SET selected_horizon = best_horizon WHERE selected_horizon IS NULL")
+                )
+            _record_migration(conn, migration_name)
+            logger.warning(f"[MIGRATION] ✅ Applied: {migration_name}")
     except Exception as e:
-        logger.info(f"❌ Migration failed: {e}")
+        logger.error(f"[MIGRATION] ❌ Failed: {migration_name} — {e}")
+        raise
+
+
+def migrate_add_direction_column(migration_name: str = "add_direction_column"):
+    """Add direction column if it doesn't exist and backfill from horizon_scores JSON."""
+    try:
+        with engine.begin() as conn:
+            if _migration_applied(conn, migration_name):
+                logger.debug(f"Migration already applied, skipping: {migration_name}")
+                return
+            result = conn.execute(text("PRAGMA table_info(signal_cache)"))
+            columns = [row[1] for row in result.fetchall()]
+            if "direction" not in columns:
+                logger.warning(f"[MIGRATION] Running: {migration_name}")
+                conn.execute(text("ALTER TABLE signal_cache ADD COLUMN direction VARCHAR"))
+                conn.execute(text("""
+                    UPDATE signal_cache
+                    SET direction = COALESCE(json_extract(horizon_scores, '$.direction'), 'neutral')
+                    WHERE direction IS NULL
+                """))
+            else:
+                # Backfill only NULLs even if column already exists
+                conn.execute(text("""
+                    UPDATE signal_cache
+                    SET direction = COALESCE(direction, json_extract(horizon_scores, '$.direction'), 'neutral')
+                    WHERE direction IS NULL
+                """))
+            _record_migration(conn, migration_name)
+            logger.warning(f"[MIGRATION] ✅ Applied: {migration_name}")
+    except Exception as e:
+        logger.error(f"[MIGRATION] ❌ Failed: {migration_name} — {e}")
+        raise
+
+
+def migrate_add_pattern_breakdown_lifecycle(migration_name: str = "add_pattern_breakdown_lifecycle"):
+    """Add lifecycle columns to pattern_breakdown_state for auditability."""
+    try:
+        with engine.begin() as conn:
+            if _migration_applied(conn, migration_name):
+                logger.debug(f"Migration already applied, skipping: {migration_name}")
+                return
+            result = conn.execute(text("PRAGMA table_info(pattern_breakdown_state)"))
+            columns = [row[1] for row in result.fetchall()]
+            logger.warning(f"[MIGRATION] Running: {migration_name}")
+            if "status" not in columns:
+                conn.execute(text("ALTER TABLE pattern_breakdown_state ADD COLUMN status VARCHAR"))
+                conn.execute(
+                    text("UPDATE pattern_breakdown_state SET status = 'active' WHERE status IS NULL")
+                )
+            if "resolved_at" not in columns:
+                conn.execute(text("ALTER TABLE pattern_breakdown_state ADD COLUMN resolved_at DATETIME"))
+            if "resolution_reason" not in columns:
+                conn.execute(
+                    text("ALTER TABLE pattern_breakdown_state ADD COLUMN resolution_reason VARCHAR")
+                )
+            _record_migration(conn, migration_name)
+            logger.warning(f"[MIGRATION] ✅ Applied: {migration_name}")
+    except Exception as e:
+        logger.error(f"[MIGRATION] ❌ Failed: {migration_name} — {e}")
         raise
 
 # 4. Helper to get DB session
@@ -267,4 +405,4 @@ def get_db():
 
 if __name__ == "__main__":
     init_db()
-    migrate_add_selected_horizon()
+    # migrate_add_selected_horizon()

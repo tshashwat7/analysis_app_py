@@ -300,7 +300,7 @@ MB_MASTER_CONFIG = {
                 "penalties": {
                     "weak_weekly_trend": {
                         "gates": {"trendStrength": {"max": 2.0}},
-                        "confidence_penalty": 15,
+                        "confidence_penalty": -15,
                         "reason": "Trend too weak for accumulation thesis",
                     }
                 },

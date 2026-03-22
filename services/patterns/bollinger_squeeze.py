@@ -64,15 +64,15 @@ class BollingerSqueeze(BasePattern):
             result["score"]   = self._normalize_score(95)
             result["desc"]    = "Vol Squeeze + Breakout"
             state             = "SQUEEZE_BREAKOUT"
+            result["found"]   = True  # ✅ S19 FIX: Trigger found ONLY on breakout
         elif is_squeezing:
             result["quality"] = 6.0
             result["score"]   = self._normalize_score(55)
             result["desc"]    = "Volatility Squeeze (Waiting)"
             state             = "SQUEEZE_ON"
+            result["found"]   = False # ✅ S19 FIX: Don't trigger during wait phase
         else:
             return result
-
-        result["found"] = True
 
         bbLow      = self._get_val(indicators, "bbLow")
         bbHigh_val = self._get_val(indicators, "bbHigh")
@@ -82,7 +82,27 @@ class BollingerSqueeze(BasePattern):
         has_volume           = bool(rvol and rvol >= 1.3)
         entry_conditions_met = is_breakout and has_volume
         # Approximate formation age: how long bb has been tight
-        estimated_age = 7
+        estimated_age = 1
+        try:
+            # Calculate historical bbWidth to find true squeeze duration
+            closes = df['Close']
+            ma20 = closes.rolling(window=20).mean()
+            std20 = closes.rolling(window=20).std(ddof=0)
+            upper = ma20 + (std20 * 2)
+            lower = ma20 - (std20 * 2)
+            # bbWidth is (upper - lower) / middle percentage
+            historical_widths = ((upper - lower) / ma20) * 100
+            
+            thresh = self.squeeze_threshold * 100
+            hist_vals = historical_widths.values
+            
+            # Start from the candle before the current one
+            for i in range(len(hist_vals)-2, -1, -1):
+                if pd.isna(hist_vals[i]) or hist_vals[i] > thresh:
+                    break
+                estimated_age += 1
+        except Exception:
+            estimated_age = 7  # Fallback if calculation fails
 
         if horizon == "intraday":
             invalidation_level = bbLow if bbLow else None

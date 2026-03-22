@@ -136,7 +136,7 @@ CONFIDENCE_CONFIG = {
                 },
                 "strong": {
                     "gates": {
-                        "trendStrength": {"min": 6.0, "max": 8.0}
+                        "trendStrength": {"min": 6.0, "max": 7.99}
                     },
                     "confidence_boost": 15,
                     "exclude_setups": ["MOMENTUM_BREAKDOWN", "BEAR_TREND_FOLLOWING"],
@@ -144,14 +144,14 @@ CONFIDENCE_CONFIG = {
                 },
                 "moderate": {
                     "gates": {
-                        "trendStrength": {"min": 4.0, "max": 6.0}
+                        "trendStrength": {"min": 4.0, "max": 5.99}
                     },
                     "confidence_boost": 5,
                     "reason": "Moderate trend support"
                 },
                 "weak": {
                     "gates": {
-                        "trendStrength": {"max": 3.9}  # Fixed: was 4.0, caused double-hit with moderate min:4.0
+                        "trendStrength": {"max": 3.99}  # Fixed W3: closed dead zone
                     },
                     "confidence_penalty": -10,
                     "reason": "Weak trend - sideways risk"
@@ -163,6 +163,8 @@ CONFIDENCE_CONFIG = {
         "setup_baseline_floors": {
             "MOMENTUM_BREAKOUT": 55,
             "MOMENTUM_BREAKDOWN": 48,
+            "MOMENTUM_FLOW_BREAKDOWN": 48,
+            "MOMENTUM_FLOW_CONTINUATION": 52,
             "VOLATILITY_SQUEEZE": 50,
             "QUALITY_ACCUMULATION": 45,
             "QUALITY_ACCUMULATION_DOWNTREND": 40,
@@ -305,8 +307,8 @@ CONFIDENCE_CONFIG = {
             
             "adx_confidence_bands": {
                 "explosive": {"gates": {"adx": {"min": 35}}, "confidence_boost": 20},
-                "strong": {"gates": {"adx": {"min": 25, "max": 35}}, "confidence_boost": 10},
-                "moderate": {"gates": {"adx": {"min": 20, "max": 25}}, "confidence_boost": 0}  # ✅ Raised from 18 to match structural gate
+                "strong": {"gates": {"adx": {"min": 25, "max": 34.9}}, "confidence_boost": 10},
+                "moderate": {"gates": {"adx": {"min": 20, "max": 24.9}}, "confidence_boost": 0}  # ✅ Raised from 18 to match structural gate
             },
             "adx_confidence_penalties": {
                 "weak": {
@@ -444,8 +446,8 @@ CONFIDENCE_CONFIG = {
             
             "adx_confidence_bands": {
                 "explosive": {"gates": {"adx": {"min": 30}}, "confidence_boost": 20},
-                "strong": {"gates": {"adx": {"min": 22, "max": 30}}, "confidence_boost": 12},
-                "moderate": {"gates": {"adx": {"min": 15, "max": 22}}, "confidence_boost": 0}
+                "strong": {"gates": {"adx": {"min": 22, "max": 29.9}}, "confidence_boost": 12},
+                "moderate": {"gates": {"adx": {"min": 15, "max": 21.9}}, "confidence_boost": 0}
             },
             "adx_confidence_penalties": {
                 "weak": {
@@ -634,8 +636,8 @@ CONFIDENCE_CONFIG = {
             
             "adx_confidence_bands": {
                 "explosive": {"gates": {"adx": {"min": 28}}, "confidence_boost": 20},
-                "strong": {"gates": {"adx": {"min": 18, "max": 28}}, "confidence_boost": 12},
-                "moderate": {"gates": {"adx": {"min": 12, "max": 18}}, "confidence_boost": 0}
+                "strong": {"gates": {"adx": {"min": 18, "max": 27.9}}, "confidence_boost": 12},
+                "moderate": {"gates": {"adx": {"min": 12, "max": 17.9}}, "confidence_boost": 0}
             },
             "adx_confidence_penalties": {
                 "weak": {

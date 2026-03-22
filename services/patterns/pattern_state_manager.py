@@ -13,14 +13,56 @@ from typing import Dict, Any, Optional
 from contextlib import contextmanager
 
 from sqlalchemy.orm import Session
-from services.db import PatternBreakdownState, SessionLocal
+from services.db import PatternBreakdownState, PatternBreakdownEvent, SessionLocal
 from config.config_utility.market_utils import get_current_utc
 
 logger = logging.getLogger(__name__)
 
+
+# ✅ W46: Centralized Horizon Window Definitions (Seconds per Candle)
+HORIZON_WINDOWS = {
+    "intraday": 15 * 60,   # 15 mins
+    "short_term": 86400,   # 1 day
+    "long_term": 604800,   # 1 week (approx)
+    "multibagger": 2592000 # 1 month (approx 30 days)
+}
+
+
+def _log_breakdown_event(
+    db: Session,
+    symbol: str,
+    pattern_name: str,
+    horizon: str,
+    event_type: str,
+    candle_count: Optional[int] = None,
+    price_at_breakdown: Optional[float] = None,
+    threshold_level: Optional[float] = None,
+    condition: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    db.add(
+        PatternBreakdownEvent(
+            symbol=symbol,
+            pattern_name=pattern_name,
+            horizon=horizon,
+            event_type=event_type,
+            event_time=get_current_utc(),
+            candle_count=candle_count,
+            price_at_breakdown=price_at_breakdown,
+            threshold_level=threshold_level,
+            condition=condition,
+            details=details or {},
+        )
+    )
+
 @contextmanager
-def get_db():
-    """Context manager for sharing a DB session across multiple pattern operations."""
+def _managed_db_session():
+    """Private context manager for sharing a DB session across multiple pattern operations.
+
+    W56 fix: renamed from get_db to _managed_db_session to avoid shadowing
+    services.db:get_db which is the canonical FastAPI dependency generator.
+    Use this only within pattern_state_manager for multi-operation atomic batches.
+    """
     db = SessionLocal()
     try:
         yield db
@@ -48,6 +90,7 @@ def get_breakdown_state(
             PatternBreakdownState.symbol       == symbol_str,
             PatternBreakdownState.pattern_name == pattern_name,
             PatternBreakdownState.horizon      == horizon,
+            PatternBreakdownState.status       == "active",
         ).first()
 
         if not state:
@@ -59,6 +102,7 @@ def get_breakdown_state(
             "price_at_breakdown": state.price_at_breakdown,
             "threshold_level":    state.threshold_level,
             "condition":          state.condition,
+            "status":             state.status,
         }
 
     except Exception as e:
@@ -93,8 +137,42 @@ def save_breakdown_state(
         ).first()
 
         if state:
-            state.candle_count += 1
-            state.last_updated  = now
+            if state.status != "active":
+                state.started_at = now
+                state.last_updated = now
+                state.candle_count = 1
+                state.status = "active"
+                state.resolved_at = None
+                state.resolution_reason = None
+                state.price_at_breakdown = price
+                state.threshold_level = threshold
+                state.condition = condition
+                _log_breakdown_event(
+                    db,
+                    symbol_str,
+                    pattern_name,
+                    horizon,
+                    "reactivated",
+                    candle_count=state.candle_count,
+                    price_at_breakdown=price,
+                    threshold_level=threshold,
+                    condition=condition,
+                    details={"previous_status": state.status},
+                )
+            else:
+                state.candle_count += 1
+                state.last_updated  = now
+                _log_breakdown_event(
+                    db,
+                    symbol_str,
+                    pattern_name,
+                    horizon,
+                    "reconfirmed",
+                    candle_count=state.candle_count,
+                    price_at_breakdown=state.price_at_breakdown,
+                    threshold_level=state.threshold_level,
+                    condition=state.condition,
+                )
         else:
             state = PatternBreakdownState(
                 symbol=symbol_str,
@@ -103,11 +181,23 @@ def save_breakdown_state(
                 started_at=now,
                 last_updated=now,
                 candle_count=1,
+                status="active",
                 price_at_breakdown=price,
                 threshold_level=threshold,
                 condition=condition,
             )
             db.add(state)
+            _log_breakdown_event(
+                db,
+                symbol_str,
+                pattern_name,
+                horizon,
+                "created",
+                candle_count=1,
+                price_at_breakdown=price,
+                threshold_level=threshold,
+                condition=condition,
+            )
 
         if _own_session:
             db.commit()
@@ -137,10 +227,12 @@ def update_breakdown_state(
         db = SessionLocal()
     try:
         now   = get_current_utc()
+        if isinstance(symbol, dict): symbol = symbol.get("value")
         state = db.query(PatternBreakdownState).filter(
             PatternBreakdownState.symbol       == symbol,
             PatternBreakdownState.pattern_name == pattern_name,
             PatternBreakdownState.horizon      == horizon,
+            PatternBreakdownState.status       == "active",
         ).first()
 
         if not state:
@@ -148,6 +240,17 @@ def update_breakdown_state(
 
         state.candle_count += 1
         state.last_updated  = now
+        _log_breakdown_event(
+            db,
+            symbol,
+            pattern_name,
+            horizon,
+            "updated",
+            candle_count=state.candle_count,
+            price_at_breakdown=state.price_at_breakdown,
+            threshold_level=state.threshold_level,
+            condition=state.condition,
+        )
 
         if _own_session:
             db.commit()
@@ -169,23 +272,46 @@ def delete_breakdown_state(
     symbol: str,
     pattern_name: str,
     horizon: str,
+    resolution_reason: str = "resolved",
     db: Optional[Session] = None
 ) -> bool:
-    """Deletes breakdown state."""
+    """Soft-resolve breakdown state for auditability."""
     _own_session = db is None
     if _own_session:
         db = SessionLocal()
     try:
-        db.query(PatternBreakdownState).filter(
+        if isinstance(symbol, dict): symbol = symbol.get("value")
+        
+        state = db.query(PatternBreakdownState).filter(
             PatternBreakdownState.symbol       == symbol,
             PatternBreakdownState.pattern_name == pattern_name,
             PatternBreakdownState.horizon      == horizon,
-        ).delete()
+        ).first()
+
+        if not state:
+            return True
+
+        state.status = "resolved"
+        state.resolved_at = get_current_utc()
+        state.resolution_reason = resolution_reason
+        state.last_updated = get_current_utc()
+        _log_breakdown_event(
+            db,
+            symbol,
+            pattern_name,
+            horizon,
+            "resolved",
+            candle_count=state.candle_count,
+            price_at_breakdown=state.price_at_breakdown,
+            threshold_level=state.threshold_level,
+            condition=state.condition,
+            details={"resolution_reason": resolution_reason},
+        )
 
         if _own_session:
             db.commit()
 
-        logger.debug(f"Breakdown state deleted: {pattern_name} on {symbol}")
+        logger.debug(f"Breakdown state resolved: {pattern_name} on {symbol}")
         return True
 
     except Exception as e:
@@ -199,20 +325,89 @@ def delete_breakdown_state(
             db.close()
 
 def cleanup_old_breakdown_states(days_old: int = 7) -> int:
-    """Background cleanup job."""
+    """
+    Two-stage background cleanup (V15.0 hybrid retention model).
+
+    Stage 1 – Expire stale-actives:
+        Any row still "active" but not updated in `days_old` days is soft-marked
+        as "expired" (so it feeds the ML audit trail).
+
+    Stage 2 – Hard-purge old resolved rows:
+        Any row with status "resolved" or "expired" whose resolved_at
+        (falling back to started_at when resolved_at is NULL) is older than 90 days
+        is permanently deleted per the V15.0 90-day retention SLA.
+
+    C22/C23 fix: db is initialised to None before the try block so that the
+    finally clause never raises an UnboundLocalError on SessionLocal() failure.
+    """
+    db = None  # C22/C23: guard against UnboundLocalError in finally
     try:
         db = SessionLocal()
-        cutoff = get_current_utc() - timedelta(days=days_old)
-        count = db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.last_updated < cutoff
-        ).delete()
+        now = get_current_utc()
+        cutoff_active = now - timedelta(days=days_old)
+        cutoff_purge  = now - timedelta(days=90)
+
+        # ---------------------------------------------------------------
+        # Stage 1: Soft-expire stale active rows
+        # ---------------------------------------------------------------
+        stale_rows = db.query(PatternBreakdownState).filter(
+            PatternBreakdownState.status == "active",
+            PatternBreakdownState.last_updated < cutoff_active
+        ).all()
+
+        expired_at = now
+        for row in stale_rows:
+            row.status            = "expired"
+            row.resolved_at       = expired_at
+            row.resolution_reason = "cleanup_expired"
+            _log_breakdown_event(
+                db,
+                row.symbol,
+                row.pattern_name,
+                row.horizon,
+                "expired",
+                candle_count=row.candle_count,
+                price_at_breakdown=row.price_at_breakdown,
+                threshold_level=row.threshold_level,
+                condition=row.condition,
+                details={"cutoff_days": days_old},
+            )
+        db.flush()  # write stage-1 status updates before stage-2 DELETE
+
+        # ---------------------------------------------------------------
+        # Stage 2: Hard-purge rows past the 90-day retention window
+        #
+        # Use COALESCE(resolved_at, started_at) so rows where resolved_at
+        # was never written (legacy data) are still purged once started_at
+        # crosses the 90-day boundary.
+        # ---------------------------------------------------------------
+        purge_count = db.query(PatternBreakdownState).filter(
+            PatternBreakdownState.status.in_(["resolved", "expired"]),
+            PatternBreakdownState.resolved_at < cutoff_purge
+        ).delete(synchronize_session=False)
+
+        # Fallback purge: rows where resolved_at is NULL (legacy) but started_at
+        # is beyond the 90-day window.
+        purge_count += db.query(PatternBreakdownState).filter(
+            PatternBreakdownState.status.in_(["resolved", "expired"]),
+            PatternBreakdownState.resolved_at == None,   # noqa: E711
+            PatternBreakdownState.started_at  < cutoff_purge
+        ).delete(synchronize_session=False)
+
         db.commit()
-        if count > 0:
-            logger.info(f"Cleaned up {count} old breakdown states (older than {days_old} days)")
-        return count
+
+        if len(stale_rows) > 0 or purge_count > 0:
+            logger.info(
+                f"Breakdown cleanup: expired {len(stale_rows)} active rows (>{days_old}d stale), "
+                f"purged {purge_count} resolved rows (>90d old)"
+            )
+        return purge_count
+
     except Exception as e:
         logger.error(f"cleanup_old_breakdown_states failed: {e}", exc_info=True)
-        db.rollback()
+        if db is not None:
+            db.rollback()
         return 0
     finally:
-        db.close()
+        if db is not None:   # C22/C23: safe even if SessionLocal() itself raised
+            db.close()

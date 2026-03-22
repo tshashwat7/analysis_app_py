@@ -118,9 +118,20 @@ class IchimokuSignals(BasePattern):
             if "CROSS" in signal_type: base_score += 10
             
             result["score"] = self._normalize_score(base_score)
-            # Signal is fresh if cross just happened, otherwise established
-            is_fresh_cross = tk_cross_bull or tk_cross_bear
-            signal_age = 1 if is_fresh_cross else 5  # Fresh cross = 1 bar old, established = 5 bars
+            # Calculate exact signal age by looking back at TK series
+            signal_age = 1
+            if not is_fresh_cross:
+                try:
+                    t_vals = tenkan_series.values
+                    k_vals = kijun_series.values
+                    is_bull = t_curr > k_curr
+                    for i in range(len(t_vals)-2, -1, -1):
+                        if pd.isna(t_vals[i]) or pd.isna(k_vals[i]): break
+                        if is_bull and t_vals[i] <= k_vals[i]: break
+                        if not is_bull and t_vals[i] >= k_vals[i]: break
+                        signal_age += 1
+                except Exception:
+                    signal_age = 5  # Fallback
 
             # Calculate cloud thickness
             cloud_thickness = abs(span_a - span_b) / price if price else 0
@@ -152,6 +163,7 @@ class IchimokuSignals(BasePattern):
                 "tenkan": round(float(t_curr), 2),
                 "kijun": round(float(k_curr), 2),
                 "age_candles": signal_age,
+                "formation_time": float(df.index[-1].timestamp()),
                 "formation_timestamp": df.index[-signal_age].isoformat() if len(df) > signal_age else None,
                 "signal_freshness": "fresh" if is_fresh_cross else "established",
                  # Ichimoku Metrics (Critical for entry conditions)

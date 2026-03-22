@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
@@ -33,7 +34,7 @@ class ThreeLineStrikePattern(BasePattern):
             
             if is_strike_green and is_engulfing:
                 result["found"] = True
-                result["score"] = 90
+                result["score"] = self._normalize_score(90)
                 result["quality"] = 9.0
                 result["desc"] = "Bullish 3-Line Strike"
 
@@ -44,6 +45,7 @@ class ThreeLineStrikePattern(BasePattern):
                 strike_close = closes[3]
                 pattern_low = lows.min()
                 pattern_high = highs.max()
+                prior_range = float(np.max(highs[:3]) - np.min(lows[:3]))
                 
                 # ✅ Calculate body ratio
                 strike_candle_body = abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1)
@@ -76,14 +78,16 @@ class ThreeLineStrikePattern(BasePattern):
                     "horizon": horizon,
                     "pattern_strength": pattern_strength,
                     "current_price": round(closes[3], 2),
-                    "type": "Bullish",
+                    "type": "bullish",
                     "strike_low": round(strike_low, 2),
                     "strike_high": round(strike_high, 2),
                     "strike_open": round(strike_open, 2),
                     "strike_close": round(strike_close, 2),
                     "pattern_low": round(pattern_low, 2),
                     "pattern_high": round(pattern_high, 2),
+                    "prior_range": round(prior_range, 2),
                     "age_candles": 1,
+                    "formation_time": float(df.index[-1].timestamp()),
                     "formation_timestamp": df.index[-1].isoformat(),
                     "strike_candle_body_pct": round(strike_candle_body, 3),
                     "velocity_tracking": {
@@ -107,7 +111,7 @@ class ThreeLineStrikePattern(BasePattern):
             
             if is_strike_red and is_engulfing:
                 result["found"] = True
-                result["score"] = 90
+                result["score"] = self._normalize_score(90)
                 result["quality"] = 9.0
                 result["desc"] = "Bearish 3-Line Strike"
                 
@@ -118,6 +122,7 @@ class ThreeLineStrikePattern(BasePattern):
                 strike_close = closes[3]
                 pattern_low = lows.min()
                 pattern_high = highs.max()
+                prior_range = float(np.max(highs[:3]) - np.min(lows[:3]))
                 
                 # ✅ Calculate body ratio
                 strike_candle_body = abs(closes[3] - opens[3]) / ((highs[3] - lows[3]) or 1)
@@ -149,14 +154,16 @@ class ThreeLineStrikePattern(BasePattern):
                     "horizon": horizon,
                     "pattern_strength": pattern_strength,
                     "current_price": round(closes[3], 2),
-                    "type": "Bearish",
+                    "type": "bearish",
                     "strike_low": round(strike_low, 2),
                     "strike_high": round(strike_high, 2),
                     "strike_open": round(strike_open, 2),
                     "strike_close": round(strike_close, 2),
                     "pattern_low": round(pattern_low, 2),
                     "pattern_high": round(pattern_high, 2),
+                    "prior_range": round(prior_range, 2),
                     "age_candles": 1,
+                    "formation_time": float(df.index[-1].timestamp()),
                     "formation_timestamp": df.index[-1].isoformat(),
                     "strike_candle_body_pct": round(strike_candle_body, 3),
                     "velocity_tracking": {

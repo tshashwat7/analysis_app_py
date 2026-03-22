@@ -1,18 +1,5 @@
 # main.py
 import asyncio
-import os
-import json
-import time
-import datetime
-import math
-import threading
-import concurrent.futures
-import pytz
-from typing import Dict, Any, List, Tuple
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Request, Form, Query
-from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import pandas as pd
@@ -43,6 +30,7 @@ from services.corporate_actions import (
 from services.world_bank_provider import get_macro_metrics
 from services.summaries import build_all_summaries
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import OperationalError
 from services.db import SessionLocal, SignalCache, init_db, PaperTrade, FundamentalCache
 from config.multibagger.mb_routes import mb_router
 from config.multibagger.mb_scheduler import start_mb_scheduler
@@ -69,14 +57,8 @@ WARMER_BATCH_SLEEP_MARKET = float(os.getenv("WARMER_BATCH_SLEEP_MARKET", "5"))
 WARMER_BATCH_SLEEP_OFFPEAK = float(os.getenv("WARMER_BATCH_SLEEP_OFFPEAK", "2"))
 WARMER_BATCH_TIMEOUT_SEC = int(os.getenv("WARMER_BATCH_TIMEOUT_SEC", str(5 * 60)))
 WARMER_RATE_LIMIT_COOLDOWN_SEC = int(os.getenv("WARMER_RATE_LIMIT_COOLDOWN_SEC", "300"))
+CORP_ACTIONS_STARTUP_TIMEOUT_SEC = int(os.getenv("CORP_ACTIONS_STARTUP_TIMEOUT_SEC", "120"))
 IST = pytz.timezone("Asia/Kolkata")
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # --- CACHE WARMER HELPER ---
 def run_analysis_for_cache(symbol: str):
@@ -265,10 +247,17 @@ async def periodic_warmer():
                     else:
                         # Successful warm; log minimal info to avoid too-verbose logs
                         logger.debug(
-                            "[WARMER] Warmed %s (result type=%s)",
-                            sym,
-                            type(res).__name__,
+                            "[WARMER] Warmed %s (result type=%s)", sym, type(res).__name__
                         )
+                        # ✅ FIX W59: Hydrate FULL_HORIZON_SCORES from worker results
+                        if isinstance(res, dict) and "full_report" in res:
+                            profiles = res.get("full_report", {}).get("profiles", {})
+                            if sym not in FULL_HORIZON_SCORES:
+                                FULL_HORIZON_SCORES[sym] = {}
+                            for h, profile_data in profiles.items():
+                                score = profile_data.get("final_score")
+                                if score is not None:
+                                    FULL_HORIZON_SCORES[sym][h] = score
 
                 if rate_limited:
                     logger.warning( "[WARMER] Rate-limited; cooling down for %d seconds before resuming.", WARMER_RATE_LIMIT_COOLDOWN_SEC, )
@@ -339,7 +328,33 @@ async def lifespan(app: FastAPI):
                     logger.warning("[STARTUP] No tickers found in data files, skipping corp actions cache.")
                     return
                 logger.info("[STARTUP] Building corp actions summary for %d tickers...", len(all_tickers))
-                build_corp_actions_summary_cache(all_tickers)
+
+                result_holder = {}
+                error_holder = {}
+
+                def _build_summary():
+                    try:
+                        result_holder["summary"] = build_corp_actions_summary_cache(all_tickers)
+                    except Exception as inner_err:
+                        error_holder["error"] = inner_err
+
+                worker = threading.Thread(
+                    target=_build_summary,
+                    daemon=True,
+                    name="CorpActionsBuildWorker",
+                )
+                worker.start()
+                worker.join(CORP_ACTIONS_STARTUP_TIMEOUT_SEC)
+
+                if worker.is_alive():
+                    logger.warning(
+                        "[STARTUP] Corp actions cache build timed out after %d seconds; continuing startup.",
+                        CORP_ACTIONS_STARTUP_TIMEOUT_SEC,
+                    )
+                    return
+                if "error" in error_holder:
+                    raise error_holder["error"]
+
                 _CORP_ACTIONS_CACHE_READY = True
                 _LAST_CORP_FETCH_TIME = time.time()
                 logger.info("[STARTUP] Corp actions summary cache ready.")
@@ -492,7 +507,9 @@ _CORP_ACTIONS_CACHE_READY = False  # True once startup warmer finishes
 _LAST_CORP_FETCH_TIME = 0.0        # epoch timestamp of last successful corp actions fetch
 _CORP_FETCH_COOLDOWN_SEC = 3600    # 1 hour cooldown between fetches
 CACHE_TTL = 60 * 60
-CACHE_LOCK = threading.Lock()
+CACHE_LOCK = multiprocessing.Lock()  # ✅ W57 FIX: Cross-process lock
+SIGNAL_CACHE_WRITE_RETRIES = int(os.getenv("SIGNAL_CACHE_WRITE_RETRIES", "3"))
+SIGNAL_CACHE_RETRY_SLEEP_SEC = float(os.getenv("SIGNAL_CACHE_RETRY_SLEEP_SEC", "0.2"))
 STOCK_TO_INDEX_MAP: Dict[str, str] = {}
 
 # --- STOCK LOADING HELPERS ---
@@ -591,12 +608,15 @@ def get_cached(symbol: str):
             "rr_ratio": entry.rr_ratio,
             "entry_trigger": entry.entry_price,
             "stop_loss": entry.stop_loss,
+            "direction": entry.direction or "neutral",
             "cached": True,
         }
 
         # 2. Merge the flexible JSON fields (horizon scores, errors, macros)
         if entry.horizon_scores:
             flat_data.update(entry.horizon_scores)
+        # Prefer the dedicated DB column over legacy JSON shadow data.
+        flat_data["direction"] = entry.direction or flat_data.get("direction", "neutral")
         return flat_data
     except Exception as e:
         logger.error(f"DB Read Error {symbol}: {e}")
@@ -605,22 +625,58 @@ def get_cached(symbol: str):
         db.close()
 
 
-def set_cached(symbol: str, value: Dict[str, Any]):
+def _is_retryable_sqlite_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "database is locked" in msg or "database table is locked" in msg or "busy" in msg
+
+
+def _write_signal_cache_with_retry(symbol: str, writer_fn):
     """
-    Update analysis cache in SQLite.
-    Preserves existing multibagger score if not provided in 'value'.
+    Execute a SignalCache write with a fresh DB session per attempt.
+    This is safer under SQLite write contention than retrying a failed session.
     """
-    db: Session = SessionLocal()
-    try:
-        with CACHE_LOCK:
+    last_exc = None
+    for attempt in range(1, SIGNAL_CACHE_WRITE_RETRIES + 1):
+        db: Session = SessionLocal()
+        try:
             entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
             if not entry:
                 entry = SignalCache(symbol=symbol)
                 db.add(entry)
 
-            # Preserve multi_score written by mb_scheduler
-            existing_multi = (entry.horizon_scores or {}).get("multi_score") if entry else None
+            writer_fn(db, entry)
+            db.commit()
+            return True
+        except OperationalError as e:
+            db.rollback()
+            last_exc = e
+            if attempt >= SIGNAL_CACHE_WRITE_RETRIES or not _is_retryable_sqlite_error(e):
+                raise
+            sleep_for = SIGNAL_CACHE_RETRY_SLEEP_SEC * attempt
+            logger.warning(
+                "[%s] Signal cache write retry %d/%d after SQLite contention: %s",
+                symbol, attempt, SIGNAL_CACHE_WRITE_RETRIES, e,
+            )
+            time.sleep(sleep_for)
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
+    if last_exc:
+        raise last_exc
+    return False
+
+
+def set_cached(symbol: str, value: Dict[str, Any]):
+    """
+    Update analysis cache in SQLite.
+    Preserves existing multibagger score if not provided in 'value'.
+    """
+    try:
+        def _writer(db: Session, entry: SignalCache):
+            existing_multi = (entry.horizon_scores or {}).get("multi_score") if entry else None
             horizon_data = {
                 "intra_score":  value.get("intra_score"),
                 "short_score":  value.get("short_score"),
@@ -628,7 +684,7 @@ def set_cached(symbol: str, value: Dict[str, Any]):
                 "multi_score":  value.get("multi_score") or existing_multi,
                 "best_fit_score": value.get("best_fit_score"),
                 "sl_dist":      value.get("sl_dist"),
-                "direction":    value.get("direction", "bullish"),
+                "direction":    value.get("direction", "neutral"),
             }
 
             entry.best_horizon = value.get("best_horizon")
@@ -640,15 +696,35 @@ def set_cached(symbol: str, value: Dict[str, Any]):
             entry.rr_ratio = value.get("rr_ratio")
             entry.entry_price = value.get("entry_trigger")
             entry.stop_loss = value.get("stop_loss")
+            entry.direction = value.get("direction", "neutral")
             entry.horizon_scores = horizon_data
             entry.updated_at = get_current_utc()
 
-            db.commit()
+        _write_signal_cache_with_retry(symbol, _writer)
     except Exception as e:
         logger.error(f"DB Write Error {symbol}: {e}")
-        db.rollback()
-    finally:
-        db.close()
+
+
+def _has_usable_fundamentals(fundamentals: Dict[str, Any]) -> bool:
+    """
+    Guard against truthy-but-empty fundamental payloads.
+    We require at least one core metric or identity field beyond a metadata shell.
+    """
+    if not isinstance(fundamentals, dict) or not fundamentals:
+        return False
+
+    core_fields = [
+        "marketCap", "peRatio", "pbRatio", "deRatio", "roe", "roce",
+        "current_price", "name", "symbol"
+    ]
+    for key in core_fields:
+        val = fundamentals.get(key)
+        if isinstance(val, dict):
+            if val.get("raw") is not None or val.get("value") not in (None, "", "N/A"):
+                return True
+        elif val not in (None, "", [], {}):
+            return True
+    return False
 
 
 # --- WORKER ---
@@ -676,15 +752,12 @@ def run_analysis(
         - mode="full": ~4.9s (4 horizons × indicators + scoring)
         - mode="single": ~2.1s (1 horizon × indicators + scoring)
     """
-    db = None
     enrichment_info = None
     
     try:
         global STOCK_TO_INDEX_MAP
         if not STOCK_TO_INDEX_MAP:
             build_smart_index_map()
-        
-        db = SessionLocal()
         
         # =====================================================================
         # DETERMINE HORIZONS TO COMPUTE
@@ -790,7 +863,7 @@ def run_analysis(
         # =====================================================================
         # STEP 5: PROFILE SCORING (WITH HORIZON FILTER)
         # =====================================================================
-        if not (analysis_data["fundamentals"] and analysis_data["raw_indicators_by_horizon"]):
+        if not (_has_usable_fundamentals(analysis_data["fundamentals"]) and analysis_data["raw_indicators_by_horizon"]):
             logger.error(f"[{symbol}] Missing data for profile scoring")
             return analysis_data
         
@@ -903,15 +976,37 @@ def run_analysis(
         # =====================================================================
         # STEP 9: DATABASE PERSISTENCE (WITH BOTH HORIZONS)
         # =====================================================================
-        if "full_report" in analysis_data and analysis_data["trade_recommendation"].get("status") != "ERROR":
-            _save_analysis_to_db(
-                db, 
-                symbol, 
-                analysis_data, 
-                index_name,
-                best_fit_horizon=best_fit,          # ✅ NEW: System optimal
-                selected_horizon=display_horizon     # ✅ NEW: User choice
-            )
+        if "full_report" in analysis_data:
+            # ✅ C30 FIX: Always save to cache, even on ERROR, to prevent stale data being served.
+            # The status will be captured in final_context.
+            db = None
+            # ✅ C30 FIX: Always save to cache, even on ERROR
+            db = None
+            try:
+                db = SessionLocal()
+                # If the trade plan had an error, we mark it specially in DB
+                if analysis_data.get("trade_recommendation", {}).get("status") != "ERROR":
+                    _save_analysis_to_db(
+                        symbol,
+                        analysis_data,
+                        index_name,
+                        best_fit_horizon=best_fit,
+                        selected_horizon=display_horizon
+                    )
+                else:
+                    _mark_analysis_error_in_db(
+                        db,  # Pass the session
+                        symbol,
+                        analysis_data,
+                        index_name,
+                        best_fit_horizon=best_fit,
+                        selected_horizon=display_horizon,
+                    )
+                    logger.warning(f"[{symbol}] Persisted ERROR state to cache.")
+            except Exception as db_err:
+                logger.error(f"[{symbol}] Cache Persistence Failed: {db_err}")
+            finally:
+                if db: db.close()
         
         # =====================================================================
         # STEP 10: ENRICHMENT METADATA
@@ -925,11 +1020,6 @@ def run_analysis(
         logger.error(f"[{symbol}] Analysis Error: {e}", exc_info=True)
         return {"symbol": symbol, "error": str(e)}
     
-    finally:
-        if db:
-            db.close()
-
-
 # ✅ BACKWARD COMPATIBLE WRAPPERS
 def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any]:
     """Legacy wrapper for full analysis."""
@@ -944,7 +1034,6 @@ def run_single_horizon_analysis(symbol: str, horizon: str, index_name: str = "ni
 # DATABASE PERSISTENCE (Aligned with New Trade Plan Structure)
 # =========================================================================
 def _save_analysis_to_db(
-    db: Session,
     symbol: str,
     data: Dict[str, Any],
     index_name: str,
@@ -992,76 +1081,118 @@ def _save_analysis_to_db(
         
         indicators = data.get("indicators", {})
         final_score = selected_profile.get("final_score", 0)
-        
-        # Build horizon scores JSON
-        existing_entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
-        existing_multi = (
-            (existing_entry.horizon_scores or {}).get("multi_score")
-            if existing_entry else None
-        )
-        
-        horizon_data = {
-            "intra_score": profiles.get("intraday", {}).get("final_score"),
-            "short_score": profiles.get("short_term", {}).get("final_score"),
-            "long_score": profiles.get("long_term", {}).get("final_score"),
-            "multi_score": profiles.get("multibagger", {}).get("final_score") or existing_multi,
-            "macro_index_name": index_name.upper(),
-            "error_details": "; ".join(data.get("error_details", [])),
-            "best_fit_score": best_fit_score,  # ✅ NEW: For comparison
-            "direction": trade_plan.get("metadata", {}).get("direction", "bullish"),
-        }
-        
-        # Calculate SL distance
-        entry_val = trade_plan.get("entry")
-        current_price = indicators.get("price", {}).get("value") or entry_val
-        sl_val = trade_plan.get("stop_loss")
-        
-        sl_dist_str = "-"
-        if current_price and sl_val:
-            dist = abs(current_price - sl_val) / current_price * 100
-            sl_dist_str = f"{dist:.1f}%"
-        horizon_data["sl_dist"] = sl_dist_str
-        
-        # Upsert database entry
-        entry_row = db.query(SignalCache).filter(
-            SignalCache.symbol == symbol
-        ).first()
-        
-        if not entry_row:
-            entry_row = SignalCache(symbol=symbol)
-            db.add(entry_row)
-        
-        # Save BOTH horizons
-        entry_row.best_horizon = best_fit_horizon        # System optimal
-        entry_row.selected_horizon = selected_horizon    # User choice
-        
-        # Trade data is from SELECTED horizon
-        entry_row.score = int(final_score * 10) if final_score else 0
-        entry_row.recommendation = (
-            selected_profile.get("category", "HOLD") + 
-            "--" + 
-            selected_horizon
-        )
-        entry_row.signal_text = trade_plan.get("trade_signal", "N/A")
-        entry_row.conf_score = trade_plan.get("final_confidence", 0)  # ✅ FIXED
-        entry_row.rr_ratio = trade_plan.get("rr_ratio")
-        entry_row.entry_price = entry_val
-        entry_row.stop_loss = sl_val
-        entry_row.horizon_scores = horizon_data
-        entry_row.updated_at = get_current_utc()
-        
-        db.commit()
-        
+
+        def _writer_retry(db: Session, entry_row: SignalCache):
+            existing_multi_retry = (
+                (entry_row.horizon_scores or {}).get("multi_score")
+                if entry_row else None
+            )
+            horizon_data_retry = {
+                "intra_score": profiles.get("intraday", {}).get("final_score"),
+                "short_score": profiles.get("short_term", {}).get("final_score"),
+                "long_score": profiles.get("long_term", {}).get("final_score"),
+                "multi_score": profiles.get("multibagger", {}).get("final_score") or existing_multi_retry,
+                "macro_index_name": index_name.upper(),
+                "error_details": "; ".join(data.get("error_details", [])),
+                "best_fit_score": best_fit_score,
+                "direction": trade_plan.get("metadata", {}).get("direction", "bullish"),
+            }
+
+            entry_val_retry = trade_plan.get("entry")
+            current_price_retry = indicators.get("price", {}).get("value") or entry_val_retry
+            sl_val_retry = trade_plan.get("stop_loss")
+            sl_dist_str_retry = "-"
+            if current_price_retry and sl_val_retry:
+                dist = abs(current_price_retry - sl_val_retry) / current_price_retry * 100
+                sl_dist_str_retry = f"{dist:.1f}%"
+            horizon_data_retry["sl_dist"] = sl_dist_str_retry
+
+            entry_row.best_horizon = best_fit_horizon
+            entry_row.selected_horizon = selected_horizon
+            entry_row.score = int(final_score * 10) if final_score else 0
+            entry_row.recommendation = selected_profile.get("category", "HOLD") + "--" + selected_horizon
+            entry_row.signal_text = trade_plan.get("trade_signal", "N/A")
+            entry_row.conf_score = trade_plan.get("final_confidence", 0)
+            entry_row.rr_ratio = trade_plan.get("rr_ratio")
+            entry_row.entry_price = entry_val_retry
+            entry_row.stop_loss = sl_val_retry
+            entry_row.direction = trade_plan.get("metadata", {}).get("direction", "neutral")
+            entry_row.horizon_scores = horizon_data_retry
+            entry_row.updated_at = get_current_utc()
+
+        _write_signal_cache_with_retry(symbol, _writer_retry)
         logger.debug(
             f"[{symbol}] Saved to DB | "
             f"Best: {best_fit_horizon} | "
             f"Selected: {selected_horizon} | "
-            f"Score: {entry_row.score}"
+            f"Score: {int(final_score * 10) if final_score else 0}"
         )
-        
+        return
+
     except Exception as e:
         logger.error(f"[{symbol}] DB Save Failed: {e}")
-        db.rollback()
+
+
+def _mark_analysis_error_in_db(
+    db: Session,  # ✅ Added Session
+    symbol: str,
+    data: Dict[str, Any],
+    index_name: str,
+    best_fit_horizon: str = None,
+    selected_horizon: str = None,
+):
+    """
+    Persist an explicit error-state cache row so stale trade data is not served as fresh.
+    Keeps horizon scores and metadata, but clears executable trade fields.
+    """
+    try:
+        full_rep = data.get("full_report", {})
+        profiles = full_rep.get("profiles", {})
+
+        if not best_fit_horizon:
+            best_fit_horizon = full_rep.get("best_fit", "short_term")
+        if not selected_horizon:
+            selected_horizon = best_fit_horizon
+
+        selected_profile = profiles.get(selected_horizon, {})
+        best_fit_profile = profiles.get(best_fit_horizon, {})
+
+        def _writer_retry(db: Session, entry_row: SignalCache):
+            existing_multi_retry = (
+                (entry_row.horizon_scores or {}).get("multi_score")
+                if entry_row else None
+            )
+            horizon_data_retry = {
+                "intra_score": profiles.get("intraday", {}).get("final_score"),
+                "short_score": profiles.get("short_term", {}).get("final_score"),
+                "long_score": profiles.get("long_term", {}).get("final_score"),
+                "multi_score": profiles.get("multibagger", {}).get("final_score") or existing_multi_retry,
+                "macro_index_name": index_name.upper(),
+                "error_details": "; ".join(data.get("error_details", [])),
+                "best_fit_score": best_fit_profile.get("final_score", 0),
+                "direction": "neutral",
+                "sl_dist": "-",
+                "analysis_status": "ERROR",
+            }
+
+            entry_row.best_horizon = best_fit_horizon
+            entry_row.selected_horizon = selected_horizon
+            entry_row.score = int(selected_profile.get("final_score", 0) * 10) if selected_profile.get("final_score") else 0
+            entry_row.recommendation = selected_profile.get("category", "ERROR") + "--" + selected_horizon
+            entry_row.signal_text = "ERROR"
+            entry_row.conf_score = 0
+            entry_row.rr_ratio = None
+            entry_row.entry_price = None
+            entry_row.stop_loss = None
+            entry_row.direction = "neutral"
+            entry_row.horizon_scores = horizon_data_retry
+            entry_row.updated_at = get_current_utc()
+
+        _write_signal_cache_with_retry(symbol, _writer_retry)
+        return
+
+    except Exception as e:
+        logger.error(f"[{symbol}] DB Error-State Save Failed: {e}")
 
 # --- ENDPOINTS ---
 
@@ -1760,8 +1891,8 @@ async def macro_metrics_api():
 
 @app.post("/api/paper_trade/add")
 async def add_paper_trade(req: PaperTradeRequest):
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         trade = PaperTrade(
             symbol=req.symbol,
             entry_price=req.entry_price,
@@ -1776,8 +1907,8 @@ async def add_paper_trade(req: PaperTradeRequest):
         db.commit()
         db.refresh(trade)
         return {"status": "success", "id": trade.id}
-        return {"status": "success", "id": trade.id}
     except Exception as e:
+        db.rollback()
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         db.close()
@@ -1788,8 +1919,8 @@ class PaperTradeRemoveRequest(BaseModel):
 
 @app.post("/api/paper_trade/remove")
 async def remove_paper_trade(req: PaperTradeRemoveRequest):
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         # Remove ALL open paper trades matching symbol and horizon
         trades = db.query(PaperTrade).filter(
             PaperTrade.symbol == req.symbol,
@@ -1801,14 +1932,15 @@ async def remove_paper_trade(req: PaperTradeRemoveRequest):
         db.commit()
         return {"status": "success", "deleted": len(trades)}
     except Exception as e:
+        db.rollback()
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         db.close()
 
 @app.get("/api/paper_trade/status")
 async def get_paper_trade_status(symbol: str = Query(...), horizon: str = Query(...)):
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         trade = db.query(PaperTrade).filter(
             PaperTrade.symbol == symbol,
             PaperTrade.horizon == horizon,
@@ -1823,9 +1955,11 @@ async def get_paper_trade_status(symbol: str = Query(...), horizon: str = Query(
 @app.get("/paper_trades", response_class=HTMLResponse)
 async def view_paper_trades(request: Request):
     db: Session = SessionLocal()
-    trades = db.query(PaperTrade).order_by(PaperTrade.created_at.desc()).all()
-    db.close()
-    return templates.TemplateResponse("paper_trades.html", {"request": request, "trades": trades})
+    try:
+        trades = db.query(PaperTrade).order_by(PaperTrade.created_at.desc()).all()
+        return templates.TemplateResponse("paper_trades.html", {"request": request, "trades": trades})
+    finally:
+        db.close()
 
 @app.get("/api/paper_trade/cmp")
 async def get_paper_trade_cmp(symbols: str = Query("")):

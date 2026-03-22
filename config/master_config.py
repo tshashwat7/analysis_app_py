@@ -147,6 +147,13 @@ GATE_METRIC_REGISTRY = {
         "description": "Moving Average trend alignment signal (1=Strong Up, 0.5=Developing, -1=Down)",
         "context_paths": [("indicators", "maTrendSignal")]
     },
+    "prev_supertrend": {
+        "type": "text",
+        "category": "trend",
+        "validation_type": "threshold",
+        "description": "Previous Supertrend direction",
+        "context_paths": [("indicators", "prev_supertrend")]
+    },
     "trendStrength": {
         "type": "numeric",
         "category": "trend",
@@ -340,6 +347,7 @@ GATE_METRIC_REGISTRY = {
         "type": "numeric",
         "category": "quality",
         "validation_type": "threshold",
+        "optional": True,
         "description": "Piotroski F-Score",
         "context_paths": [("fundamentals", "piotroskiF")]
     },
@@ -487,12 +495,11 @@ GATE_METRIC_REGISTRY = {
 
 MASTER_CONFIG = {
     "hybrid_composition": {
-        "multi_score":  ["technical_score", "fundamental_score"],
-            "multibagger": [
-                "fundamentalMomentum", "earningsConsistencyIndex", "trendConsistency",
-                "priceToIntrinsicValue", "volatilityAdjustedRoe", "fcfYieldVsVolatility",
-                "priceVsPrimaryTrendPct"
-            ],
+        "multibagger": [
+            "fundamentalMomentum", "earningsConsistencyIndex", "trendConsistency",
+            "priceToIntrinsicValue", "volatilityAdjustedRoe", "fcfYieldVsVolatility",
+            "priceVsPrimaryTrendPct"
+        ],
     },
     # ============================================================================
     # GLOBAL CONSTANTS (Universal Physics & Logic)
@@ -791,7 +798,28 @@ MASTER_CONFIG = {
                 "normal_trend": {"adx": {"min": 20}, "t1_mult": 1.5, "t2_mult": 3.0},
                 "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.2, "t2_mult": 2.5}
             },
-            "rr_gates": {"min_t1": 1.5,"min_t2": 2.0,"min_structural": 2.0,"execution_floor": 1.0}
+            "rr_gates": {"min_t1": 1.5,"min_t2": 2.0,"min_structural": 2.0,"execution_floor": 1.0},
+            
+            # ✅ NEW: Execution Policy Constants (Migrated from trade_enhancer.py)
+            "volatility_buffer_factors": {
+                'low': 0.0, 'normal': 0.25, 'high': 0.5, 'extreme': 1.0
+            },
+            "min_sl_atr_multiples": {
+                'intraday': 2.0, 'short_term': 2.0, 'long_term': 2.5
+            },
+            "target_adjustment_factors": {
+                'low': 0.85, 'normal': 1.0, 'high': 1.15, 'extreme': 1.3
+            },
+            "min_rr_by_trend": {
+                "explosive": {"strength": 8.5, "min_rr": 1.0},
+                "strong": {"strength": 6.5, "min_rr": 1.3}, 
+                "normal": {"strength": 4.5, "min_rr": 1.5},
+                "weak": {"strength": 0.0, "min_rr": 2.0}
+            },
+            "base_spread_pct": {
+                'intraday': 0.0015, 'short_term': 0.001, 'long_term': 0.0008
+            },
+            "expiry_penalty": -20.0
         },
         
         "execution": {
@@ -799,7 +827,6 @@ MASTER_CONFIG = {
             "target_atr_mult": 3.0,
             "max_hold_candles": 20,
             "dip_buy_reference": "maMid",
-            "risk_reward_min": 2.0,
             "stop_loss": {
                 "vol_qual_high_mult": 1.5,
                 "vol_qual_normal_mult": 2.0,
@@ -930,7 +957,6 @@ MASTER_CONFIG = {
                 "stop_loss_atr_mult": 1.5,
                 "target_atr_mult": 2.5,
                 "max_hold_candles": 25,
-                "risk_reward_min": 1.5,
                 "base_hold_days": 1,
                 "proximity_rejection": {
                     "resistance_mult": 1.003,
@@ -1022,20 +1048,37 @@ MASTER_CONFIG = {
                 "atr_sl_limits": {"max_percent": 0.05, "min_percent": 0.01},  # ✅ Extended for overnight gap risk
                 "rrRatio": {"min": 1.4},
                 "horizon_t2_cap": 0.10,
-                "rr_gates": { "min_t1": 1.6, "min_t2": 2.5, "min_structural": 3.0, "execution_floor": 1.4 }
+                "rr_gates": { "min_t1": 2.0, "min_t2": 2.5, "min_structural": 3.0, "execution_floor": 1.4 }
             },
             "execution": {
                 "stop_loss_atr_mult": 2.0,
                 "target_atr_mult": 3.0,
                 "max_hold_candles": 15,
                 "dip_buy_reference": "maMid",
-                "risk_reward_min": 2.0,
                 "base_hold_days": 10,
                 "proximity_rejection": {
                     "resistance_mult": 1.005,
                     "support_mult": 0.995
                 },
-                "min_profit_pct": 0.5
+                "min_profit_pct": 0.5,
+                
+                "indian_market_gates": {
+                    "min_avg_volume": 500000,
+                    "max_spread_pct": 0.003,
+                    "min_delivery_pct": 40,
+                    "avoid_gsm": True,
+                    "time_filters": {
+                        "avoid_first_15_min": True,
+                        "avoid_last_15_min": False,
+                        "reduce_size_lunch": 1.0,
+                        "optimal_windows": []
+                    },
+                    "risk_controls": {
+                        "max_position_pct": 0.02,
+                        "mandatory_stop_loss": True,
+                        "max_trades_per_day": 5
+                    }
+                }
             },
             "lookback": {"python_data": 600},
             "entry_gates": {
@@ -1060,7 +1103,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 60},
-                    "rrRatio": {"min": 1.6},  # ✅ Aligned with rr_gates.min_t1
+                    "rrRatio": {"min": 1.6},  # ✅ Entrance Gate (must be >= execution_floor)
                     "fundamentalScore": {"min": 3.0}
                 },
             },
@@ -1150,7 +1193,7 @@ MASTER_CONFIG = {
                     "normal_trend": {"adx": {"min": 20}, "t1_mult": 2.0, "t2_mult": 4.0},
                     "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.5, "t2_mult": 3.0}
                 },
-                "rr_gates": { "min_t1": 2.0, "min_t2": 3.0, "min_structural": 4.0, "execution_floor": 1.4 }
+                "rr_gates": { "min_t1": 2.5, "min_t2": 3.5, "min_structural": 4.0, "execution_floor": 1.6 }
             },
             
             "execution": {
@@ -1158,13 +1201,30 @@ MASTER_CONFIG = {
                 "target_atr_mult": 5.0,
                 "max_hold_candles": 52,
                 "dip_buy_reference": "maMid",
-                "risk_reward_min": 2.5,
                 "base_hold_days": 60,
                 "proximity_rejection": {
                     "resistance_mult": 1.01,
                     "support_mult": 0.99
                 },
-                "min_profit_pct": 1.0
+                "min_profit_pct": 1.0,
+                
+                "indian_market_gates": {
+                    "min_avg_volume": 500000,
+                    "max_spread_pct": 0.005,
+                    "min_delivery_pct": 50,
+                    "avoid_gsm": True,
+                    "time_filters": {
+                        "avoid_first_15_min": False,
+                        "avoid_last_15_min": False,
+                        "reduce_size_lunch": 1.0,
+                        "optimal_windows": []
+                    },
+                    "risk_controls": {
+                        "max_position_pct": 0.03,
+                        "mandatory_stop_loss": True,
+                        "max_trades_per_day": 5
+                    }
+                }
             },
             
             "lookback": {"python_data": 800},
@@ -1189,7 +1249,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 55},
-                    "rrRatio": {"min": 2.0},  # ✅ Aligned with rr_gates.min_t1
+                    "rrRatio": {"min": 2.0},  # ✅ Entrance Gate (Short Term Swing Target)
                     "fundamentalScore": {"min": 6.0},
                     "technicalScore": {"min": None}
                 },

@@ -83,7 +83,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "weak_volume": {
                     "gates": {"rvol": {"max": 1.2990000000000002}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Darvas breakout needs strong volume"
                 }
             },
@@ -232,12 +232,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "weak_breakout_volume": {
                     "gates": {"rvol": {"max": 1.199}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Cup & Handle breakout requires strong volume confirmation"
                 },
                 "weak_momentum": {
                     "gates": {"rsi": {"max": 54.999}},
-                    "confidence_penalty": 10,
+                    "confidence_penalty": -10,
                     "reason": "Lacking momentum for sustained breakout"
                 }
             },
@@ -321,12 +321,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "exhausted_trend": {
                     "gates": {"rsi": {"min": 85}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Trend is too overextended, risk of failed breakout"
                 },
                 "low_volume_push": {
                     "gates": {"rvol": {"max": 0.999}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Flag breakout without volume is a bull trap"
                 }
             },
@@ -413,12 +413,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "weak_reversal_volume": {
                     "gates": {"rvol": {"max": 0.999}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Reversals without volume usually fail"
                 },
                 "fighting_strong_trend": {
                     "gates": {"trendStrength": {"min": 5.0}, "adx": {"min": 25}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Attempting to reverse a very strong trend"
                 }
             },
@@ -502,7 +502,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "chop_zone_cross": {
                     "gates": {"adx": {"max": 14.999}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Golden cross in a flat/choppy market is unreliable"
                 }
             },
@@ -635,12 +635,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "low_breakout_volume": {
                     "gates": {"rvol": {"max": 1.999}},
-                    "confidence_penalty": 10,
+                    "confidence_penalty": -10,
                     "reason": "Breakout needs volume confirmation"
                 },
                 "weak_trend": {
                     "gates": {"trendStrength": {"max": 4.999}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Momentum breakout needs strong trend"
                 }
             },
@@ -691,7 +691,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "low_breakout_volume": {
                     "gates": {"rvol": {"max": 1.999}},
-                    "confidence_penalty": 12,
+                    "confidence_penalty": -12,
                     "reason": "Breakdown volume weak relative to confirmation threshold"
                 }
             },
@@ -850,12 +850,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "lost_momentum": {
                     "gates": {"rsi": {"max": 51.999}},
-                    "confidence_penalty": 10,
+                    "confidence_penalty": -10,
                     "reason": "Pullback cut too deep, momentum is broken"
                 },
                 "high_volume_selling": {
                     "gates": {"rvol": {"min": 2.0}, "price": {"max_metric": "prev_close"}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Pullback has too much selling volume"
                 }
             },
@@ -941,12 +941,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "lost_momentum": {
                     "gates": {"rsi": {"max": 34.999}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Pullback cut too deep, momentum structurally broken"
                 },
                 "high_volume_selling": {
                     "gates": {"rvol": {"min": 2.5}, "price": {"max_metric": "prev_close"}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Heavy distribution — not a healthy retracement"
                 }
             },
@@ -1067,12 +1067,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "decelerating_momentum": {
                     "gates": {"rsislope": {"max": -0.05}, "macdhistogram": {"max": 0}},
-                    "confidence_penalty": 12,
+                    "confidence_penalty": -12,
                     "reason": "Both RSI and MACD momentum decelerating in trend setup"
                 },
                 "overextended": {
                     "gates": {"rsi": {"min": 80.001}},
-                    "confidence_penalty": 10,
+                    "confidence_penalty": -10,
                     "reason": "Overbought — elevated mean-reversion risk"
                 }
             },
@@ -1119,7 +1119,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "low_volume_drop": {
                     "gates": {"rvol": {"max": 0.999}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Price drifting lower without selling pressure"
                 }
             },
@@ -1190,7 +1190,9 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 "rsi": {"min": 40, "max": 60}
             },
             "fundamental_gates": {
-                # TODO: roe >= 20 or roe3yAvg >= 18,
+                "roe": {"min": 20},
+                "epsGrowth5y": {"min": 20},
+                "revenueGrowth5y": {"min": 20},
                 "roce": {"min": 25},
                 "deRatio": {"max": 0.5}
             }
@@ -1257,12 +1259,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "poor_fundamentals": {
                     "gates": {"fundamentalScore": {"max": 4.999}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Value play requires strong underlying fundamentals"
                 },
                 "tight_consolidation_breaking": {
                     "gates": {"bbWidth": {"min": 4.001}},
-                    "confidence_penalty": 12,
+                    "confidence_penalty": -12,
                     "reason": "Accumulation pattern invalidated by expanding volatility"
                 }
             },
@@ -1362,12 +1364,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "poor_fundamentals": {
                     "gates": {"fundamentalScore": {"max": 4.999}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Value play requires strong underlying fundamentals"
                 },
                 "high_debt": {
                     "gates": {"deRatio": {"min": 2.0}},
-                    "confidence_penalty": 10,
+                    "confidence_penalty": -10,
                     "reason": "Company is overleveraged for a safe accumulation"
                 }
             },
@@ -1474,12 +1476,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "weak_fundamentals": {
                     "gates": {"_logic": "OR", "roe": {"max": 19.999}, "roce": {"max": 21.999}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Turnaround story needs minimum earnings quality floor"
                 },
                 "momentum_stalling": {
                     "gates": {"rsislope": {"max": 0}, "macdhistogram": {"max": 0}},
-                    "confidence_penalty": 10,
+                    "confidence_penalty": -10,
                     "reason": "Both momentum indicators still falling — too early for entry"
                 }
             },
@@ -1512,7 +1514,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 "bbWidth": {"max": 0.499},
                 "volatilityQuality": {"min": 7.0},
                 "adx": {"min": 15},
-                # TODO: ttmSqueeze == 'Squeeze On'
+                "ttmSqueeze": {"equals": True}
             },
             "require_fundamentals": False
         },
@@ -1559,7 +1561,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "lacking_direction": {
                     "gates": {"macdhistogram": {"max": -0.501}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Squeeze present but no bullish MACD momentum to fire it"
                 }
             },
@@ -1618,12 +1620,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "weak_volume_reversal": {
                     "gates": {"rvol": {"max": 0.999}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Indicator cross without volume commitment"
                 },
                 "crushing_downtrend": {
                     "gates": {"trendStrength": {"max": 1.5}, "adx": {"min": 30}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Attempting to catch a falling knife in a violent downtrend"
                 }
             },
@@ -1705,17 +1707,17 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "weak_volume_reversal": {
                     "gates": {"rvol": {"max": 0.999}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Indicator cross without volume commitment"
                 },
                 "crushing_downtrend": {
                     "gates": {"trendStrength": {"max": 1.5}, "adx": {"min": 30}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Attempting to catch a falling knife in a violent downtrend"
                 },
                 "rsi_not_oversold": {
                     "gates": {"rsi": {"min": 40.001}},
-                    "confidence_penalty": 12,
+                    "confidence_penalty": -12,
                     "reason": "RSI swing-up requires genuine oversold conditions to be meaningful"
                 }
             },
@@ -1870,7 +1872,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "penalties": {
                 "weak_fundamentals": {
                     "gates": {"_logic": "OR", "roe": {"max": 17.999}, "roce": {"max": 21.999}},
-                    "confidence_penalty": 20,
+                    "confidence_penalty": -20,
                     "reason": "Quality accumulation needs strong fundamentals"
                 }
             },
@@ -2090,24 +2092,24 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 # Technical extremes (beyond global modifiers)
                 "critically_weak_trend": {
                     "gates": {"adx": {"max": 10}, "trendStrength": {"max": 2.0}},
-                    "confidence_penalty": 12,
+                    "confidence_penalty": -12,
                     "reason": "Critically weak directional movement - GENERIC setup needs minimum trend"
                 },
                 "extreme_technical_weakness": {
                     "gates": {"technicalScore": {"max": 2.499}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Extreme technical weakness - even GENERIC needs basic technical merit"
                 },
                 "extreme_overbought_no_setup": {
                     "gates": {"rsi": {"min": 85.001}},
-                    "confidence_penalty": 12,
+                    "confidence_penalty": -12,
                     "reason": "Extreme overbought without specific setup pattern - high reversal risk"
                 },
 
                 # Fundamental extremes (filter complete garbage)
                 "fundamentally_broken": {
                     "gates": {"fundamentalScore": {"max": 2.999}},
-                    "confidence_penalty": 15,
+                    "confidence_penalty": -15,
                     "reason": "Fundamentally broken - GENERIC fallback doesn't excuse garbage quality"
                 }
             },
@@ -2409,285 +2411,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             }
         }
     }
-}
-
-
-# ============================================================
-# PATTERN METADATA (Complete Pattern Properties)
-# ============================================================
-
-PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
-    "bollingerSqueeze": {
-        "type": "continuation",
-        "timeframe_agnostic": True,
-        "direction": "neutral",
-        "typical_duration": {"min": 5, "max": 20},
-        "failure_rate": 0.25,
-        "best_horizons": ["intraday", "short_term"],
-        "physics": {
-            "target_ratio": 1.0,
-            "duration_multiplier": 0.5,
-            "max_stop_pct": 4.0,
-            "horizons_supported": ["intraday", "short_term"]
-        },
-        "entry_rules": {
-            "intraday": {
-                "order_type": "stop_market",
-                "trigger": "upper_band",
-                "gates": {
-                    "rsi": {"min": 50.0},
-                    "macdhistogram": {"min": 0.0},
-                    "rvol": {"min": 1.5},
-                    "squeeze_duration": {"min": 5.0}
-                }
-            },
-            "short_term": {
-                "order_type": "limit",
-                "trigger": "close_above_band",
-                "gates": {
-                    "rsi": {"min": 50.0},
-                    "macdhistogram": {"min": 0.0},
-                    "rvol": {"min": 1.2},
-                    "squeeze_duration": {"min": 3.0}
-                }
-            },
-            "long_term": {
-                "order_type": "limit",
-                "trigger": "close_above_band",
-                "gates": {
-                    "rsi": {"min": 45.0},
-                    "macdhistogram": {"min": -0.2},
-                    "rvol": {"min": 1.0},
-                    "squeeze_duration": {"min": 4.0}
-                }
-            }
-        },
-        "invalidation": {
-            "breakdown_threshold": {
-                "metadata_keys": {
-                    "analytics": ["squeeze_duration", "squeeze_strength"]
-                },
-                "intraday": {
-                    "gates": {
-                        "price": {"max_metric": "bbLow", "duration": 2},
-                        "bbWidth": {"min": 10.0}
-                    },
-                    "_logic": "OR",
-                },
-                "short_term": {
-                    "gates": {
-                        "price": {"max_metric": "bbLow", "multiplier": 0.99},
-                        "bbWidth": {"min": 12.0}
-                    },
-                    "_logic": "OR",
-                },
-                "long_term": {
-                    "gates": {
-                        "price": {"max_metric": "bbLow", "duration": 2},
-                        "bbWidth": {"min": 15.0}
-                    },
-                    "_logic": "OR",
-                }
-            },
-            "action": {
-                "intraday": "EXIT_IMMEDIATELY",
-                "short_term": "EXIT_ON_CLOSE",
-                "long_term": "TIGHTEN_STOP"
-            }
-        }
-    },
-
-    "cupHandle": {
-        "type": "continuation",
-        "timeframe_agnostic": False,
-        "direction": "bullish",
-        "typical_duration": {"min": 20, "max": 60},
-        "failure_rate": 0.20,
-        "best_horizons": ["short_term", "long_term"],
-        "physics": {
-            "target_ratio": 0.618,
-            "duration_multiplier": 1.2,
-            "max_stop_pct": 8.0,
-            "min_cup_len": 20,
-            "max_cup_depth": 0.50,
-            "handle_len": 5,
-            "require_volume": False,
-            "horizons_supported": ["short_term", "long_term"]
-        },
-        "entry_rules": {
-            "short_term": {
-                "order_type": "stop_market",
-                "trigger": "rim_level",
-                "gates": {
-                    "price": {"min_metric": "rim_level", "multiplier": 0.995},
-                    "rvol": {"min": 1.2}
-                }
-            },
-            "long_term": {
-                "order_type": "limit",
-                "trigger": "rim_level",
-                "gates": {
-                    "price": {"min_metric": "rim_level", "multiplier": 0.99},
-                    "rvol": {"min": 1.1}
-                }
-            }
-        },
-        "invalidation": {
-            "metadata_keys": {
-                "analytics": ["cup_depth_pct", "handle_depth_pct"]
-            },
-            "breakdown_threshold": {
-                "short_term": {
-                    "gates": {
-                        "price": {"max_metric": "handle_low", "multiplier": 0.97, "duration": 2},
-                        "rvol": {"max": 0.8}
-                    },
-                    "_logic": "OR",
-                },
-                "long_term": {
-                    "gates": {
-                        "price": {"max_metric": "handle_low", "multiplier": 0.95, "duration": 3},
-                        "rvol": {"max": 0.7}
-                    },
-                    "_logic": "OR",
-                }
-            },
-            "action": {
-                "short_term": "EXIT_ON_CLOSE",
-                "long_term": "TIGHTEN_STOP"
-            },
-            "handle_failure": {
-                "max_handle_depth": 0.15,
-                "action": "INVALIDATE_PATTERN"
-            }
-        }
-    },
-
-    "darvasBox": {
-        "type": "breakout",
-        "timeframe_agnostic": True,
-        "direction": "bullish",
-        "typical_duration": {"min": 8, "max": 30},
-        "failure_rate": 0.30,
-        "best_horizons": ["intraday", "short_term"],
-        "physics": {
-            "target_ratio": 2.0,
-            "duration_multiplier": 1.3,
-            "max_stop_pct": 5.0,
-            "lookback": 50,
-            "box_length": 5,
-            "horizons_supported": ["intraday", "short_term"]
-        },
-        "entry_rules": {
-            "intraday": {
-                "order_type": "stop_market",
-                "trigger": "box_high",
-                "gates": {
-                    "price": {"min_metric": "box_high", "multiplier": 1.002},
-                    "rvol": {"min": 1.5},
-                    "box_age_candles": {"max": 50.0}
-                }
-            },
-            "short_term": {
-                "order_type": "stop_market",
-                "trigger": "box_high",
-                "gates": {
-                    "price": {"min_metric": "box_high", "multiplier": 1.005},
-                    "rvol": {"min": 1.3},
-                    "box_age_candles": {"max": 30.0}
-                }
-            }
-        },
-        "invalidation": {
-            "metadata_keys": {
-                "analytics": ["box_height_pct", "box_age_candles"] 
-            },
-            "breakdown_threshold": {
-                "intraday": {
-                    "gates": {
-                        "price": {"max_metric": "box_low", "multiplier": 0.998}
-                    }
-                },
-                "short_term": {
-                    "gates": {
-                        "price": {"max_metric": "box_low", "multiplier": 0.995}
-                    }
-                },
-                "long_term": {
-                    "gates": {
-                        "price": {"max_metric": "box_low", "multiplier": 0.99, "duration": 2}
-                    }
-                }
-            },
-            "action": {
-                "intraday": "EXIT_IMMEDIATELY",
-                "short_term": "EXIT_IMMEDIATELY",
-                "long_term": "EXIT_ON_CLOSE"
-            }
-        }
-    },
-
-    "minerviniStage2": {
-        "type": "accumulation",
-        "timeframe_agnostic": False,
-        "direction": "bullish",
-        "typical_duration": {"min": 10, "max": 40},
-        "failure_rate": 0.15,
-        "best_horizons": ["short_term", "long_term"],
-        "physics": {
-            "target_ratio": 1.0,
-            "duration_multiplier": 1.8,
-            "max_stop_pct": 7.0,
-            "min_contraction_pct": 1.5,
-            "horizons_supported": ["short_term", "long_term"]
-        },
-        "entry_rules": {
-            "short_term": {
-                "order_type": "limit",
-                "trigger": "pivot_point",
-                "gates": {
-                    "volatilityQuality": {"max": 1.5},
-                    "price": {"min_metric": "pivot_point", "multiplier": 1.01},
-                    "position52w": {"min": 80.0}
-                }
-            },
-            "long_term": {
-                "order_type": "limit",
-                "trigger": "pivot_point",
-                "gates": {
-                    "volatilityQuality": {"max": 2.0},
-                    "price": {"min_metric": "pivot_point", "multiplier": 1.005},
-                    "position52w": {"min": 70.0}
-                }
-            }
-        },
-        "invalidation": {
-            "metadata_keys": {
-                "analytics": ["contraction_pct", "volatility_quality"]
-            },
-            "breakdown_threshold": {
-                "short_term": {
-                    "gates": {
-                        "price": {"max_metric": "maFast", "multiplier": 0.95, "duration": 2},
-                        "volatilityQuality": {"max": 4.0}
-                    },
-                    "_logic": "OR"
-                }
-            },
-            "action": {
-                "short_term": "EXIT_ON_CLOSE",
-                "long_term": "TIGHTEN_STOP"
-            },
-            "stage_reversion": {
-                "gates": {
-                    "price": {"max_metric": "maFast", "duration": 5},
-                    "rvol": {"max": 0.8, "duration": 5}
-                },
-                "_logic": "AND",
-                "action": "EXIT_ON_CLOSE"
-            }
-        }
-    },
+,
 
     "flagPennant": {
         "type": "continuation",
@@ -3190,74 +2914,9 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
     }
 }
 
-# ============================================================
-# PATTERN INDICATOR KEY MAPPINGS (By Horizon)
-# ============================================================
-
-#obsolete patterns todo delete
-PATTERN_INDICATOR_MAPPINGS = {
-    "bollingerSqueeze": {
-        "intraday": "bollingerSqueezeIntraday",
-        "short_term": "bollingerSqueezeShortTerm",
-        "long_term": "bollingerSqueezeLongTerm"
-    },
-    "minerviniStage2": {
-        "intraday": "minerviniStage2Intraday",
-        "short_term": "minerviniStage2ShortTerm",
-        "long_term": "minerviniStage2LongTerm"
-    },
-    "ichimokuSignals": {
-        "intraday": "ichimokuSignalsIntraday",
-        "short_term": "ichimokuSignalsShortTerm",
-        "long_term": "ichimokuSignalsLongTerm"
-    },
-    "goldenCross": {
-        "intraday": "goldenCrossIntraday",
-        "short_term": "goldenCrossShortTerm",
-        "long_term": "goldenCrossLongTerm"
-    },
-    "bullishNecklinePattern": {
-        "intraday": "bullishNecklineIntraday",
-        "short_term": "bullishNecklineShortTerm",
-        "long_term": "bullishNecklineLongTerm"
-    },
-    "bearishNecklinePattern": {
-        "intraday": "bearishNecklineIntraday",
-        "short_term": "bearishNecklineShortTerm",
-        "long_term": "bearishNecklineLongTerm"
-    },
-    "cupHandle": {
-        "intraday": "cupHandleIntraday",
-        "short_term": "cupHandleShortTerm",
-        "long_term": "cupHandleLongTerm"
-    },
-    "flagPennant": {
-        "intraday": "flagPennantIntraday",
-        "short_term": "flagPennantShortTerm",
-        "long_term": "flagPennantLongTerm"
-    },
-    "darvasBox": {
-        "intraday": "darvasBoxIntraday",
-        "short_term": "darvasBoxShortTerm",
-        "long_term": "darvasBoxLongTerm"
-    },
-    "threeLineStrike": {
-        "intraday": "threeLineStrikeIntraday",
-        "short_term": "threeLineStrikeShortTerm",
-        "long_term": "threeLineStrikeLongTerm"
-    },
-    "momentumFlow": {
-        "intraday": "momentumFlowIntraday",
-        "short_term": "momentumFlowShortTerm",
-        "long_term": "momentumFlowLongTerm"
-    }
-}
-
-
 __all__ = [
-    SETUP_PATTERN_MATRIX,
-    PATTERN_METADATA,
-    DEFAULT_PHYSICS,
-    PATTERN_INDICATOR_MAPPINGS,
-    PATTERN_SCORING_THRESHOLDS
+    "SETUP_PATTERN_MATRIX",
+    "PATTERN_METADATA",
+    "DEFAULT_PHYSICS",
+    "PATTERN_SCORING_THRESHOLDS",
 ]
