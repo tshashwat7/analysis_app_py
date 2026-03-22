@@ -4031,7 +4031,7 @@ class ConfigResolver:
                     sl, sl_src = _sl_from_atr(1.5)
 
                 risk = entry - sl
-                if contraction_pct and contraction_pct > 0:
+                if contraction_pct is not None and contraction_pct > 0:
                     depth = entry * (contraction_pct / 100.0)
                 else:
                     atr = _safe_float(ind.get("atrDynamic") or price_data.get("atrDynamic", entry * 0.02))

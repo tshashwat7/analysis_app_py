@@ -15,17 +15,13 @@ from contextlib import contextmanager
 from sqlalchemy.orm import Session
 from services.db import PatternBreakdownState, PatternBreakdownEvent, SessionLocal
 from config.config_utility.market_utils import get_current_utc
+from services.patterns.horizon_constants import HORIZON_WINDOWS_SECONDS
 
 logger = logging.getLogger(__name__)
 
 
-# ✅ W46: Centralized Horizon Window Definitions (Seconds per Candle)
-HORIZON_WINDOWS = {
-    "intraday": 15 * 60,   # 15 mins
-    "short_term": 86400,   # 1 day
-    "long_term": 604800,   # 1 week (approx)
-    "multibagger": 2592000 # 1 month (approx 30 days)
-}
+# ✅ P2-1: Capacity gate for per-symbol-horizon tracking
+MAX_ACTIVE_STATES_PER_SYMBOL = 20
 
 
 def _log_breakdown_event(
@@ -129,6 +125,24 @@ def save_breakdown_state(
     try:
         now = get_current_utc()
         symbol_str = symbol.get("value") or "" if isinstance(symbol, dict) else symbol
+
+        # ✅ P2-1 FIX: Capacity eviction before starting a new state
+        active_count = db.query(PatternBreakdownState).filter(
+            PatternBreakdownState.symbol == symbol_str,
+            PatternBreakdownState.status == "active"
+        ).count()
+
+        if active_count >= MAX_ACTIVE_STATES_PER_SYMBOL:
+            # Resolve oldest active state to make room
+            oldest = db.query(PatternBreakdownState).filter(
+                PatternBreakdownState.symbol == symbol_str,
+                PatternBreakdownState.status == "active"
+            ).order_by(PatternBreakdownState.started_at).first()
+            if oldest:
+                oldest.status = "expired"
+                oldest.resolved_at = now
+                oldest.resolution_reason = "capacity_eviction"
+                db.flush()
 
         state = db.query(PatternBreakdownState).filter(
             PatternBreakdownState.symbol       == symbol_str,
@@ -344,35 +358,45 @@ def cleanup_old_breakdown_states(days_old: int = 7) -> int:
     try:
         db = SessionLocal()
         now = get_current_utc()
-        cutoff_active = now - timedelta(days=days_old)
+        
+        # ✅ P1-5 FIX: Horizon-aware expiry days
+        HORIZON_EXPIRY_DAYS = {
+            "intraday": 1,
+            "short_term": 7,
+            "long_term": 30,
+            "multibagger": 90,
+        }
+        
+        total_expired = 0
+        for horizon, days in HORIZON_EXPIRY_DAYS.items():
+            cutoff_active = now - timedelta(days=days)
+            
+            stale_rows = db.query(PatternBreakdownState).filter(
+                PatternBreakdownState.status == "active",
+                PatternBreakdownState.horizon == horizon,
+                PatternBreakdownState.last_updated < cutoff_active
+            ).all()
+
+            for row in stale_rows:
+                row.status            = "expired"
+                row.resolved_at       = now
+                row.resolution_reason = "cleanup_expired"
+                _log_breakdown_event(
+                    db,
+                    row.symbol,
+                    row.pattern_name,
+                    row.horizon,
+                    "expired",
+                    candle_count=row.candle_count,
+                    price_at_breakdown=row.price_at_breakdown,
+                    threshold_level=row.threshold_level,
+                    condition=row.condition,
+                    details={"cutoff_days": days},
+                )
+            total_expired += len(stale_rows)
+            db.flush()
+
         cutoff_purge  = now - timedelta(days=90)
-
-        # ---------------------------------------------------------------
-        # Stage 1: Soft-expire stale active rows
-        # ---------------------------------------------------------------
-        stale_rows = db.query(PatternBreakdownState).filter(
-            PatternBreakdownState.status == "active",
-            PatternBreakdownState.last_updated < cutoff_active
-        ).all()
-
-        expired_at = now
-        for row in stale_rows:
-            row.status            = "expired"
-            row.resolved_at       = expired_at
-            row.resolution_reason = "cleanup_expired"
-            _log_breakdown_event(
-                db,
-                row.symbol,
-                row.pattern_name,
-                row.horizon,
-                "expired",
-                candle_count=row.candle_count,
-                price_at_breakdown=row.price_at_breakdown,
-                threshold_level=row.threshold_level,
-                condition=row.condition,
-                details={"cutoff_days": days_old},
-            )
-        db.flush()  # write stage-1 status updates before stage-2 DELETE
 
         # ---------------------------------------------------------------
         # Stage 2: Hard-purge rows past the 90-day retention window
@@ -396,9 +420,9 @@ def cleanup_old_breakdown_states(days_old: int = 7) -> int:
 
         db.commit()
 
-        if len(stale_rows) > 0 or purge_count > 0:
+        if total_expired > 0 or purge_count > 0:
             logger.info(
-                f"Breakdown cleanup: expired {len(stale_rows)} active rows (>{days_old}d stale), "
+                f"Breakdown cleanup: expired {total_expired} active rows (horizon-aware), "
                 f"purged {purge_count} resolved rows (>90d old)"
             )
         return purge_count

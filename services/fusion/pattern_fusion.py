@@ -14,16 +14,20 @@ def merge_pattern_into_indicators(indicators: Dict[str, Any], pattern_results: D
             continue
             
         # Create a unique key if horizon is provided
-        key = f"{alias}_{horizon}" if horizon else alias
+        unique_key = f"{alias}_{horizon}" if horizon else alias
         
-        # Map pattern output to UI-friendly structure
-        indicators[alias] = {
-            "value": result.get("quality", 0),  # Display value (0-10)
-            "found":result.get("found", False),
+        # ✅ P3-1: Quality-check to prevent overwriting better patterns
+        existing = indicators.get(unique_key)
+        if existing and existing.get("value", 0) > result.get("quality", 0):
+            continue
+
+        indicators[unique_key] = {
+            "value": result.get("quality", 0),
+            "found": True,
             "ts": float(df.index[-1].timestamp()) if df is not None and not df.empty else None,
             "raw": result,                      # Full debug data
             "score": result.get("score", 0),    # For weighting
             "desc": result.get("desc", f"Pattern {alias.replace('_', ' ').title()} Detected"),
-            "alias": key,
+            "alias": alias,
             "source": "Pattern"
         }

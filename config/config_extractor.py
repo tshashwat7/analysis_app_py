@@ -954,6 +954,9 @@ class ConfigExtractor:
         # ✅ NEW: Validate confidence config
         if self.has_confidence_config:
             self.validate_confidence_structure()
+            
+        # ✅ P1-6 FIX: Validate pattern metadata completeness
+        self.validate_pattern_metadata()
 
     def validate_confidence_structure(self):
         """Validate confidence config structure."""
@@ -1008,6 +1011,27 @@ class ConfigExtractor:
             )
             self.logger.critical(msg)
             raise ConfigurationError(msg)
+
+    def validate_pattern_metadata(self):
+        """✅ P1-6 FIX: Ensure every active detector has required metadata."""
+        pattern_meta = self.sections.get("pattern_metadata", ConfigSection({}, "fallback")).data
+        
+        # This list should match PatternAnalyzer.detectors aliases
+        active_aliases = [
+            "bollinger_squeeze", "darvas_box", "flag_pennant", "minervini_vcp",
+            "cup_handle", "three_line_strike", "ichimoku_signals", "golden_cross",
+            "death_cross", "bullish_neckline", "bearish_neckline", "momentum_flow",
+            "engulfing"
+        ]
+        
+        missing = [alias for alias in active_aliases if alias not in pattern_meta]
+        if missing:
+            self.logger.warning(
+                f"Startup Validation: PATTERN_METADATA missing definitions for active detectors: {missing}. "
+                f"Targets/SL calculation for these patterns will use ATR fallbacks."
+            )
+        else:
+            self.logger.info("✅ PATTERN_METADATA completeness validation passed")
 
     def validate_gate_structure(self):
         """Validate gate structure is correct."""

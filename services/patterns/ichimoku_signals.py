@@ -79,6 +79,7 @@ class IchimokuSignals(BasePattern):
         # 4. Logic
         tk_cross_bull = (t_prev <= k_prev) and (t_curr > k_curr)
         tk_cross_bear = (t_prev >= k_prev) and (t_curr < k_curr)
+        is_fresh_cross = tk_cross_bull or tk_cross_bear
         
         # Scoring
         qual = 0.0

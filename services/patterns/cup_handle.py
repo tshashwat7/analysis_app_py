@@ -4,6 +4,7 @@ from typing import Dict, Any
 from services.data_fetch import _safe_float
 from services.patterns.base import BasePattern
 from services.patterns.utils import _build_formation_context
+from services.patterns.horizon_constants import HORIZON_WINDOWS_BARS
 
 class CupHandlePattern(BasePattern):
     """
@@ -27,11 +28,10 @@ class CupHandlePattern(BasePattern):
         if df is None or len(df) < min_history: return result
         
         # Working with numpy arrays for speed and positional accuracy
-        # ✅ W46 FIX: Use horizon-specific window instead of hardcoded 60
-        HORIZON_WINDOWS = {"intraday": 30, "short_term": 60, "long_term": 120}
-        window_size = HORIZON_WINDOWS.get(horizon, 60)
+        # ✅ W46 FIX: Use horizon-specific window from central constants
+        window_cfg = HORIZON_WINDOWS_BARS.get(horizon, HORIZON_WINDOWS_BARS["short_term"])
+        window_size = window_cfg["window"]
         window = df.tail(window_size)
-        # TODO: Link to HORIZON_WINDOWS.copy()
         highs = window["High"].values
         lows = window["Low"].values
         closes = window["Close"].values
@@ -139,7 +139,7 @@ class CupHandlePattern(BasePattern):
                     "bottom_idx": int(cup_bottom_idx),
                     "right_rim_idx": int(rim_right_idx)
                 },
-                "age_candles": 60 - rim_left_idx,
+                "age_candles": window_size - rim_left_idx,
                 "formation_time": float(window.index[rim_left_idx].timestamp()),
                 "formation_timestamp": window.index[rim_left_idx].isoformat(),
                 "cup_duration_candles": rim_right_idx - rim_left_idx,

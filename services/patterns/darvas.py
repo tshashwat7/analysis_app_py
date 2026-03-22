@@ -3,6 +3,7 @@ import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
 from services.patterns.utils import _build_formation_context, _classify_volatility
+from services.patterns.horizon_constants import HORIZON_WINDOWS_BARS
 
 class DarvasBoxPattern(BasePattern):
     def __init__(self, config: Dict[str, Any] = None):
@@ -70,14 +71,15 @@ class DarvasBoxPattern(BasePattern):
             formation_index = len(df) - (self.box_length * 2)  # Box started 2x box_length ago
             entry_conditions_met = has_volume and is_breakout
 
+            _fi = max(0, formation_index)  # ✅ P1-1 FIX: safe index fallback
             result["meta"] = {
                 "box_high": round(box_high, 2),
                 "box_low": round(box_low, 2),
                 "type": "bullish",
                 "breakout_vol": bool(has_volume),
                 "age_candles": len(df) - formation_index,
-                "formation_time": float(df.index[formation_index].timestamp()),
-                "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
+                "formation_time": float(df.index[_fi].timestamp()),
+                "formation_timestamp": df.index[_fi].isoformat(),
                 "box_duration_candles": self.box_length * 2,
                 # 🆕 Pattern-Specific Velocity Tracking
                 "velocity_tracking": {

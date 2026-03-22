@@ -5,7 +5,7 @@ from services.patterns.base import BasePattern
 class EngulfingPattern(BasePattern):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
-        self.alias = "engulfing_pattern"
+        self.alias = "engulfing"
 
     def detect(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
         result = {"found": False, "score": 0, "quality": 0, "meta": {}}

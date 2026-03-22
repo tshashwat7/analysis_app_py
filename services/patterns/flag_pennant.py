@@ -94,10 +94,11 @@ class FlagPennantPattern(BasePattern):
             # Pattern strength
             pattern_strength = "strong" if result["quality"] >= 8.5 else "moderate" if result["quality"] >= 6.5 else "weak"
 
+            _fi = max(0, formation_index)  # ✅ P1-1 FIX: safe index fallback
             result["meta"] = {
                 "age_candles": len(df) - formation_index,
-                "formation_time": float(df.index[formation_index].timestamp()),
-                "formation_timestamp": df.index[formation_index].isoformat() if formation_index >= 0 else None,
+                "formation_time": float(df.index[_fi].timestamp()),
+                "formation_timestamp": df.index[_fi].isoformat(),
                 "pole_length": self.pole_days,
                 "flag_length": self.flag_days,
                 "bar_index": len(df),

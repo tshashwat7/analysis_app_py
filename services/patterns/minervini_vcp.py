@@ -27,17 +27,7 @@ import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
 from services.patterns.utils import _build_formation_context
-
-# Horizon-aware minimum history guard.
-# VCP contraction logic uses fixed 5 / 15 / 50 bar windows by design
-# (Minervini's original criteria).  HORIZON_WINDOWS controls the guard
-# threshold only — not the contraction measurement windows.
-HORIZON_WINDOWS = {
-    "intraday":    {"min_history": 50},
-    "short_term":  {"min_history": 50},
-    "long_term":   {"min_history": 50},
-    "multibagger": {"min_history": 50},
-}
+from services.patterns.horizon_constants import HORIZON_WINDOWS_BARS
 
 
 class MinerviniVCPPattern(BasePattern):
@@ -57,8 +47,8 @@ class MinerviniVCPPattern(BasePattern):
         if getattr(self, "coerce_numeric", False) and df is not None:
             df = self.ensure_numeric_df(df)
 
-        hw    = HORIZON_WINDOWS.get(horizon, HORIZON_WINDOWS["short_term"])
-        empty = self._guard(df, hw["min_history"])
+        hw_cfg = HORIZON_WINDOWS_BARS.get(horizon, HORIZON_WINDOWS_BARS["short_term"])
+        empty = self._guard(df, hw_cfg["min_history"])
         if empty is not None:
             return empty
 
@@ -123,10 +113,7 @@ class MinerviniVCPPattern(BasePattern):
         result["meta"] = {
             # ── Fields read by trade_enhancer ────────────────────────────────
             "age_candles":    len(df) - formation_index,
-            "formation_time": (                       # key read by enhancer L374/946
-                df.index[formation_index].timestamp()
-                if formation_index >= 0 else None
-            ),
+            "formation_time": float(df.index[formation_index].timestamp()),
             # ── Fields read by resolver _calculate_pattern_targets L3825 ─────
             "contraction_pct": round(range_recent * 100, 2),   # depth = entry * (contraction_pct/100)
             # ── Fields in PATTERN_METADATA invalidation metadata_keys analytics ─
@@ -135,10 +122,7 @@ class MinerviniVCPPattern(BasePattern):
             "bar_index":          len(df),
             "tightness":          f"{range_recent * 100:.1f}%",
             "vol_dry":            vol_dry,
-            "formation_timestamp": (                            # ISO for logging/UI
-                df.index[formation_index].isoformat()
-                if formation_index >= 0 else None
-            ),
+            "formation_timestamp": df.index[formation_index].isoformat(),
             "invalidation_level":   round(invalidation_level, 2) if invalidation_level else None,
             "pivot_point":          round(pivot_point, 2)         if pivot_point         else None,
             "maFast":               round(maMid,  2)              if maMid               else None,
