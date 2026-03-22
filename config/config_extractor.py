@@ -186,6 +186,27 @@ class ConfigExtractor:
                 ),
                 source="confidence_config.global.universal_adjustments"
             )
+            
+            # ✅ Phase 3 P3-2 FIX: Validate penalty signs at startup
+            uni_adj = self.sections["universal_adjustments"].data
+            for cat in ["divergence_penalties", "trend_strength_bands"]:
+                 for name, cfg in uni_adj.get(cat, {}).items():
+                      penalty = cfg.get("confidence_penalty")
+                      if penalty is not None and float(penalty) > 0:
+                           self.logger.warning(
+                               f"Startup Validation: {cat}.{name} penalty {penalty} is positive. "
+                               f"Should be negative. Auto-correction will apply at runtime."
+                           )
+
+            # Also check volume modifiers
+            vol_mods = self.sections["volume_modifiers"].data
+            for cat in ["dry_volume", "climax_volume"]:
+                 penalty = vol_mods.get(cat, {}).get("confidence_penalty")
+                 if penalty is not None and float(penalty) > 0:
+                      self.logger.warning(
+                          f"Startup Validation: volume_modifiers.{cat} penalty {penalty} is positive. "
+                          f"Should be negative."
+                      )
 
             self.sections["setup_baseline_floors"] = ConfigSection(
                 data=self._extract_required(
@@ -953,6 +974,16 @@ class ConfigExtractor:
         if missing_global:
             self.logger.error(f"Missing confidence config sections: {missing_global}")
             raise ValueError(f"Missing confidence config sections: {missing_global}")
+            
+        # ✅ Phase 3 P1-3 FIX: Validate execution confidence adjustments
+        exec_cfg = self.sections.get("execution")
+        if exec_cfg and exec_cfg.is_valid:
+            conf_adj = exec_cfg.data.get("confidence_adjustments", {})
+            required_adj_keys = ["warning_penalty", "violation_penalty", "risk_score_thresholds"]
+            missing_adj = [k for k in required_adj_keys if k not in conf_adj]
+            if missing_adj:
+                 self.logger.error(f"execution.confidence_adjustments missing keys: {missing_adj}")
+                 raise ValueError(f"execution.confidence_adjustments missing keys: {missing_adj}")
         
         # Validate horizon-specific (REQUIRED sections)
         required_horizon = [

@@ -74,8 +74,13 @@ class QueryOptimizedExtractor:
         self._gate_cache: OrderedDict[str, Tuple[str, ResolvedGate]] = OrderedDict()  # ✅ P1-4 FIX
         self._pattern_cache: OrderedDict[str, Tuple[str, PatternContext]] = OrderedDict()  # ✅ P1-4 FIX
         
-        # ❌ REMOVED: Dead confidence_cache
-        # self._confidence_cache: Dict[str, Any] = {}
+    def get(self, key: str, default: Any = None) -> Any:
+        """Proxy to base_extractor.get() to protect layer boundary."""
+        return self.base_extractor.get(key, default)
+
+    def get_strict(self, key: str) -> Any:
+        """Proxy to base_extractor.get_strict() to protect layer boundary."""
+        return self.base_extractor.get_strict(key)
         
 
     def _compute_config_hash(self, config: Dict) -> str:
@@ -413,7 +418,8 @@ class QueryOptimizedExtractor:
             if key in modifier_config:
                 adjustment = modifier_config[key]
                 if key == "confidence_penalty" and adjustment is not None and float(adjustment) > 0:
-                    self.logger.error(
+                    # ✅ Phase 3 P3-2 FIX: Demote to WARNING to prevent log spam
+                    self.logger.warning(
                         f"[CONFIG BUG] confidence_penalty={adjustment} is positive — "
                         f"must be negative in confidence_config.py. Auto-correcting. "
                         f"Check: {modifier_config.get('reason', 'unknown')}"

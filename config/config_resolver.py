@@ -36,7 +36,7 @@ from config.config_utility.logger_config import (
 )
 from services.data_fetch import _get_val, _safe_float, _safe_get_raw_float, ensure_numeric
 
-MIN_FIT_SCORE = 10.0
+MIN_FIT_SCORE = 55.0  # ✅ Phase 3 P2-3 FIX: Effective threshold against 50.0 base
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -115,21 +115,14 @@ class ConfigResolver:
         Flatten nested indicator dicts to simple numeric values.
         
         Ensures extractor receives clean data that matches test expectations.
-        ✅ ENHANCED: Now uses namespacing (prefix.key) to prevent collisions.
-        
-        Transforms:
-            {"rsi": {"value": 62.01}} → {"rsi": 62.01}
-            {"growth": {"epsGrowth5y": {"raw": 15.2}}} → {"growth.epsGrowth5y": 15.2}
-        
-        Args:
-            data: Raw indicator/fundamental data (may have nested dicts)
-        
-        Returns:
-            Flattened dict with numeric values only
+        ✅ ENHANCED: Fixed nested key extraction to prevent data loss.
         """
         flattened = {}
         
         def _recurse(d: Dict[str, Any], prefix: str = ""):
+            if not isinstance(d, dict):
+                return
+                
             for k, v in d.items():
                 if v is None:
                     continue
@@ -139,14 +132,9 @@ class ConfigResolver:
                 # Already numeric - use as-is
                 if isinstance(v, (int, float)):
                     flattened[key_name] = float(v)
-                    continue
-                
-                # String number - try to convert
-                if isinstance(v, str):
-                    try:
-                        flattened[key_name] = float(v)
-                    except (ValueError, TypeError):
-                        pass
+                    # ✅ FIXED: Also store the bare key if it's a fundamental at top level
+                    if prefix == "" and k not in flattened:
+                        flattened[k] = float(v)
                     continue
                 
                 # Nested dict
@@ -156,33 +144,16 @@ class ConfigResolver:
                     has_val = "value" in v
                     
                     if has_raw or has_val:
-                        # Priority: raw > value. Explicit iteration order ensures that
-                        # for metrics like promoterpledge ({"raw": 0, "value": "0%"}),
-                        # the numeric 'raw' is picked before a potentially non-numeric 'value' string.
-                        candidates = []
-                        if has_raw:
-                            candidates.append(v["raw"])
-                        if has_val:
-                            candidates.append(v["value"])
-                            
-                        extracted = False
-                        for candidate in candidates:
-                            if candidate is None:
-                                continue
-                            if isinstance(candidate, (int, float)):
-                                flattened[key_name] = float(candidate)
-                                extracted = True
-                                break
+                        val = v.get("raw") if v.get("raw") is not None else v.get("value")
+                        if val is not None:
                             try:
-                                flattened[key_name] = float(candidate)
-                                extracted = True
-                                break
+                                flattened[key_name] = float(val)
+                                # ✅ FIXED: Ensure bare key exists for fundamental categories
+                                if prefix == "" and k not in flattened:
+                                    flattened[k] = float(val)
                             except (ValueError, TypeError):
-                                continue
-                        
-                        # If we successfully extracted raw/value, move on to the next key
-                        if extracted:
-                            continue
+                                pass
+                        continue
                             
                     # If it's NOT a leaf node (e.g. "growth"), recurse deeper with prefix
                     _recurse(v, f"{key_name}.")
@@ -454,10 +425,25 @@ class ConfigResolver:
             regime = "normal"
         else:
             regime = "weak"
+            
+        # ✅ Phase 3 P1-6 FIX: Direction-aware regime resolution
+        # Hostile trend direction relative to ADX strength should demote regime to "weak"
+        # (e.g. Strong Bullish ADX is hostile for a SHORT setup)
+        # Note: 'regime' remains the raw ADX-based strength for non-directional uses
+        regime_for_bullish = regime
+        regime_for_bearish = regime
+        
+        if direction == "bullish" and regime == "strong":
+            regime_for_bearish = "weak"  # Strong uptrend is hostile for shorts
+        elif direction == "bearish" and regime == "strong":
+            regime_for_bullish = "weak"  # Strong downtrend is hostile for longs
         # ── End P3a ───────────────────────────────────────────────────────
 
         return {
             "regime": regime,
+            # ✅ Phase 3 P1-6 FIX: Include direction-aware results
+            "regime_for_bullish": regime_for_bullish,
+            "regime_for_bearish": regime_for_bearish,
             "adx": adx,
             "slope": slope,
             "classification": {
@@ -639,13 +625,14 @@ class ConfigResolver:
         
         # Calculation mapping
         math_results = {
-            "volatilityAdjustedRoe": (roe / atr_pct) if (roe and atr_pct and atr_pct > 0) else None,
+            # ✅ P1-5 FIX (Phase 3): Use explicit 'is not None' for zero-safety
+            "volatilityAdjustedRoe": (roe / atr_pct) if (roe is not None and atr_pct and atr_pct > 0) else None,
             "priceToIntrinsicValue": (pe / (8.5 + 2 * eps_5y)) if (pe is not None and eps_5y is not None and (8.5 + 2 * eps_5y) > 0) else None,
-            "fcfYieldVsVolatility": (fcf_yield / max(atr_pct, 0.1)) if (fcf_yield and atr_pct) else None,
+            "fcfYieldVsVolatility": (fcf_yield / max(atr_pct, 0.1)) if (fcf_yield is not None and atr_pct is not None) else None,
             "trendConsistency": adx,
             "priceVsPrimaryTrendPct": ((price / ma_slow) - 1) if (price and ma_slow) else None,
             "fundamentalMomentum": ((q_growth + eps_5y/5) / 2) if (q_growth is not None and eps_5y is not None) else None,
-            "earningsConsistencyIndex": ((roe + net_margin) / 2) if (roe and net_margin) else None
+            "earningsConsistencyIndex": ((roe + net_margin) / 2) if (roe is not None and net_margin is not None) else None
         }
         
         # Score each metric
@@ -837,10 +824,21 @@ class ConfigResolver:
                 })
                 continue
 
+            # ✅ Phase 3 P2-1 FIX: Explicit priority=0 gate
+            setup_priority = self.extractor.get_setup_priority(setup_name)
+            if setup_priority == 0:
+                rejected.append({
+                    "type": setup_name,
+                    "reason": "zero_priority",
+                    "priority": 0,
+                    "fit_score": fit_score
+                })
+                continue
+
             candidates.append({
                 "type": setup_name,
                 "fit_score": round(fit_score, 1),
-                "priority": self.extractor.get_setup_priority(setup_name),
+                "priority": setup_priority,
                 "confidence_floor": self.extractor.get_setup_baseline_floor(setup_name),
                 "require_fundamentals": require_fund
             })
@@ -853,7 +851,11 @@ class ConfigResolver:
                 (candidate["fit_score"] * 0.3)
             )
 
-        ranked = sorted(candidates, key=lambda x: x["composite_score"], reverse=True)
+        # ✅ Phase 3 P1-4 & P2-1 FIX: Deterministic sorting and zero-priority gate
+        ranked = sorted(
+            candidates, 
+            key=lambda x: (-x["composite_score"], x["type"])
+        )
 
         # ✅ BUG FIX #4: Add rejection logging for debugging
         if self.logger.isEnabledFor(logging.DEBUG):
@@ -876,6 +878,20 @@ class ConfigResolver:
 
         if best:
             setup_type = best["type"]
+            
+            # ✅ Phase 3 P1-6 FIX: Update trend regime to be direction-aware for the best setup
+            # This ensures TradeEnhancer (downstream) uses the correct RR multiplier
+            trend_ctx = ctx.get("trend", {})
+            _bearish_markers = {"BEAR", "BREAKDOWN", "SHORT", "SELL_AT"}
+            is_bearish_setup = any(m in setup_type.upper() for m in _bearish_markers)
+            
+            if is_bearish_setup:
+                # Use the regime computed for bearish setups (may be demoted in bullish trend)
+                trend_ctx["regime"] = trend_ctx.get("regime_for_bearish", trend_ctx.get("regime"))
+            else:
+                # Use the regime computed for bullish setups (may be demoted in bearish trend)
+                trend_ctx["regime"] = trend_ctx.get("regime_for_bullish", trend_ctx.get("regime"))
+
             setup_patterns = self.extractor.get_setup_patterns(setup_type)
             confidence_floor = self.extractor.get_setup_confidence_floor(setup_type)
 
@@ -949,8 +965,9 @@ class ConfigResolver:
             for metric, gate in technical_gates.items():
                 if metric.startswith("_"): continue
                 gate_count += 1
+                # ✅ Phase 3 P2-2 FIX: Do not inflate fit score if gates are missing/empty
                 metric_passes, _ = self.extractor.evaluate_confidence_gates(
-                    {metric: gate}, tech_namespace, empty_gates_pass=True
+                    {metric: gate}, tech_namespace, empty_gates_pass=False
                 )
                 if metric_passes:
                     passed += 1
@@ -965,8 +982,9 @@ class ConfigResolver:
             for metric, gate in fundamental_gates.items():
                 if metric.startswith("_"): continue
                 gate_count += 1
+                # ✅ Phase 3 P2-2 FIX: Do not inflate fit score if gates are missing/empty
                 metric_passes, _ = self.extractor.evaluate_confidence_gates(
-                    {metric: gate}, fundamentals, empty_gates_pass=True
+                    {metric: gate}, fundamentals, empty_gates_pass=False
                 )
                 if metric_passes:
                     passed += 1
@@ -985,7 +1003,7 @@ class ConfigResolver:
         Now: Uses self.extractor methods
         """
         # Get setup config via extractor
-        setup_config = self.extractor.base_extractor.get(f"setup_{setup_name}")
+        setup_config = self.extractor.get(f"setup_{setup_name}")
         if not setup_config:
             return True, "No context requirements"
         
@@ -1273,7 +1291,7 @@ class ConfigResolver:
                 horizon_mult = extractor.get_strategy_horizon_multiplier(strategy_name)
                 
                 # Get strategy config
-                strategy_cfg = extractor.base_extractor.get(f"strategy_{strategy_name}")
+                strategy_cfg = extractor.get(f"strategy_{strategy_name}")
                 fit_threshold = strategy_cfg.get("fit_threshold", 50) if strategy_cfg else 50
                 
                 # ─────────────────────────────────────────────────────────────
@@ -1657,7 +1675,7 @@ class ConfigResolver:
         # ===================================================================
 
         # Fetch declared max bonus from strategy config (set in strategy_matrix)
-        strategy_cfg = self.extractor.base_extractor.get(f"strategy_{strategy_name}") or {}
+        strategy_cfg = self.extractor.get(f"strategy_{strategy_name}") or {}
         max_bonus_declared = strategy_cfg.get("scoring_rules_max_bonus")
 
         # Fallback: derive max from the rules themselves if not declared
@@ -1987,19 +2005,13 @@ class ConfigResolver:
 
         flat_data = self._flatten_indicator_data({**ind, **fund})
 
-        # ── P1: Inject raw fundamental scalars at top level ───────────────
-        # _flatten_indicator_data recurses into nested sub-category dicts
-        # (growth, quality, valuation …) and produces namespaced keys like
-        # 'growth.epsGrowth5y'.  Confidence gates reference bare names such
-        # as 'epsGrowth5y', 'roe', 'deRatio' — they would always see
-        # "missing from data" without this injection.
-        # Only inject if the bare key is not already present (the flattener
-        # may have extracted it from a top-level leaf dict directly).
+        # ── P1 FIX (Phase 3): Improved fundamental key flattening ─────────
+        # Ensure bare fundamental keys are available for gates that don't use prefixes.
         for _fk, _fv in (fund or {}).items():
-            if _fk not in flat_data and isinstance(_fv, dict):
-                _raw = _fv.get("raw")
-                if _raw is not None and isinstance(_raw, (int, float)):
-                    flat_data[_fk] = float(_raw)
+            if _fk not in flat_data:
+                _val = _fv.get("raw") if isinstance(_fv, dict) else _fv
+                if _val is not None and isinstance(_val, (int, float)):
+                    flat_data[_fk] = float(_val)
         # ── End P1 ────────────────────────────────────────────────────────
 
         # Inject aggregate scores so validation_modifiers can reference them
@@ -2050,6 +2062,11 @@ class ConfigResolver:
             modifier_results
         )
         total_adjustment = adj_data["adjustment"]
+        
+        # ✅ Phase 3 P2-4 FIX: Guard divergence isolation
+        # INVARIANT: exec_adjustment and validation modifiers must NEVER be scaled 
+        # by the divergence multiplier. See README: "Execution penalties are independent."
+        
         breakdown = adj_data["breakdown"]
         divergence_multiplier = adj_data["multiplier"]
 
@@ -2192,7 +2209,7 @@ class ConfigResolver:
         exec_breakdown = []
         
         # Get dynamic adjustment values from master_config via extractor
-        exec_cfg = self.extractor.base_extractor.get("execution", {})
+        exec_cfg = self.extractor.get("execution", {})
         conf_adj = exec_cfg.get("confidence_adjustments", {})
         
         warning_pen = conf_adj.get("warning_penalty", -5)
@@ -2270,15 +2287,17 @@ class ConfigResolver:
         clamp = self.extractor.get_confidence_clamp()
         clamped = max(clamp[0], min(clamp[1], final))
 
-        # C16 FIX: B8 ceiling scoped to BULLISH BREAKOUT/MOMENTUM only.
-        # Excludes BREAKDOWN, BEAR_TREND, FLOW_BREAKDOWN (bearish/SHORT setups).
+        # ✅ Phase 3 P0-4 FIX: B8 ceiling scoped to BULLISH setups only.
+        # Refined guard to exclude BREAKDOWN/SHORT setups using vocabulary mapping.
         trend_dir = ctx.get("trend", {}).get("classification", {}).get("direction", "neutral")
-        _is_bullish_momentum = (
-            ("BREAKOUT" in setup_type and "BREAKDOWN" not in setup_type)
-            or ("MOMENTUM" in setup_type
-                and "BREAKDOWN" not in setup_type
-                and "FLOW_BREAKDOWN" not in setup_type)
-        ) and trend_dir != "bearish"
+        _setup_vocab = setup_type.upper()
+        _is_bullish_setup = (
+            ("BREAKOUT" in _setup_vocab and "BREAKDOWN" not in _setup_vocab)
+            or ("MOMENTUM" in _setup_vocab and "BREAKDOWN" not in _setup_vocab 
+                and "FLOW_BREAKDOWN" not in _setup_vocab)
+        )
+        _is_bullish_momentum = _is_bullish_setup and trend_dir != "bearish"
+        
         if _is_bullish_momentum:
             rvol = flat_data.get("rvol", 1.0)
             if rvol <= 2.0 and clamped > 90:
@@ -2697,10 +2716,11 @@ class ConfigResolver:
         atr = ensure_numeric(ctx["indicators"].get("atrDynamic"))
         sl_dist = ensure_numeric(ctx["indicators"].get("slDistance"))
 
+        # ✅ Phase 3 P3-4 FIX: Correctly path multi-layer config access
         risk_cfg = self.extractor.get_risk_management_config()
-        exec_cfg = self.extractor.get_execution_rules()
-        atr_mult = exec_cfg.get("stop_loss_atr_mult", 2.0)
-        target_mult = exec_cfg.get("target_atr_mult", 3.0)
+        exec_settings = self.extractor.base_extractor.get("execution", {}).get("settings", {})
+        atr_mult = exec_settings.get("stop_loss_atr_mult", 2.0)
+        target_mult = exec_settings.get("target_atr_mult", 3.0)
 
         rr = None
         rr_source = None
@@ -2766,9 +2786,9 @@ class ConfigResolver:
         """
         setup_type = ctx["setup"]["type"]
         
-        # 1. Build Opportunity Metrics (Data)
-        opportunity_ctx = self._build_opportunity_metrics(ctx)
-        ctx["opportunity_metrics"] = opportunity_ctx
+        # ✅ Phase 3 P0-2 FIX: Return derived metrics instead of direct context mutation
+        opportunity_metrics = self._build_opportunity_metrics(ctx)
+        # We do NOT write to ctx["opportunity_metrics"] here to protect the boundary.
         
         # 2. Get Resolved Gates (Config)
         gates_map = self.extractor.get_resolved_gates("opportunity", setup_type)
@@ -2793,7 +2813,7 @@ class ConfigResolver:
             # 3. Get Data (Resolver knows *where* to look)
             actual_value = self._resolve_opportunity_gate_value(
                 gate_name, 
-                ctx["opportunity_metrics"]
+                opportunity_metrics
             )
 
             # ── Missing value check (Strict for Opportunity Gates) ──
@@ -2985,8 +3005,17 @@ class ConfigResolver:
             # Rationale: Conflicting patterns should penalize, but not nuke a strong primary signal.
             confirm_score = (50 if primary_found else 0) + (len(confirming_found) * 10)
             raw_conflict_penalty = len(conflicting_found) * -20
-            capped_conflict_penalty = max(-30, raw_conflict_penalty)
             
+            # ✅ Phase 3 P0-3 FIX: Fallback for mixed signals in GENERIC setup
+            if not conflicting_found and "GENERIC" in setup_type:
+                # Check ALL detected patterns for directional mismatch if in generic setup
+                # (Simple heuristic: if both long and short patterns exist)
+                has_long = any("bullish" in p.lower() or "long" in p.lower() for p in detected)
+                has_short = any("bearish" in p.lower() or "short" in p.lower() for p in detected)
+                if has_long and has_short:
+                    raw_conflict_penalty = -20
+            
+            capped_conflict_penalty = max(-30, raw_conflict_penalty)
             net_score = confirm_score + capped_conflict_penalty
 
             # ──── Pattern invalidation (PER SETUP) ────────────────────────

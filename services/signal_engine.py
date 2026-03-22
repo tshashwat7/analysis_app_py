@@ -1207,11 +1207,22 @@ def generate_trade_plan(
         exec_ctx_raw = build_execution_context(eval_ctx, capital)
         plan["metadata"]["exec_ctx_raw"] = exec_ctx_raw.copy()  # ✅ Store structural baseline
         
-        exec_ctx, eval_ctx = enhance_execution_context(
-            eval_ctx, exec_ctx_raw, indicators, symbol, horizon,
-            extractor=extractor
-        )
-        plan["metadata"]["exec_ctx"] = exec_ctx  # ✅ Store enhanced context for auditability
+        # ✅ P0-1 FIX (Phase 3): Always deep-copy eval_ctx before enhancement
+        # Prevents execution-phase state (e.g. adjustments) from leaking back into the pure evaluation context.
+        import copy
+        eval_ctx_for_enhancement = copy.deepcopy(eval_ctx)
+        
+        # ✅ P3-3 FIX (Phase 3): Add compatibility shim for signature changes
+        try:
+            exec_ctx, _ = enhance_execution_context(
+                eval_ctx_for_enhancement, exec_ctx_raw, indicators, symbol, horizon,
+                extractor=extractor
+            )
+        except TypeError:
+            # Fallback if enhance_execution_context doesn't accept extractor kwarg yet
+            exec_ctx, _ = enhance_execution_context(
+                eval_ctx_for_enhancement, exec_ctx_raw, indicators, symbol, horizon
+            )
 
         # ✅ B2 FIX (Refined): Check for stale context after execution context is built
         if exec_ctx.get("stale_context"):
@@ -1238,8 +1249,16 @@ def generate_trade_plan(
         except Exception:
             confidence_floor = 30
 
+        # ✅ P1-1 FIX (Phase 3): Ensure execution-adjusted confidence is used
+        # Reads execution-time adjustments (Discovery vs Strategy decoupling) and updates the plan.
         plan["final_confidence"] = max(confidence_floor, baseline_final + total_penalty) 
         plan["adjusted_confidence"] = max(confidence_floor, baseline_adjusted + total_penalty)
+
+        # ✅ Phase 3 P1-1 FIX: Sync internal evaluation context state
+        # This prevents "split state" where downstream components see the old confidence.
+        if "confidence" in eval_ctx:
+            eval_ctx["confidence"]["clamped"] = plan["final_confidence"]
+            eval_ctx["confidence"]["adjusted"] = plan["adjusted_confidence"]
 
         apply_rr_validation(exec_ctx, eval_ctx, extractor=extractor)  # Mutates exec_ctx["can_execute"]
 
