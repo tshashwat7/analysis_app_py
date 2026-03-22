@@ -20,6 +20,7 @@ import re
 from typing import Dict, Any, Optional, List, Tuple, Set
 from dataclasses import dataclass
 from functools import lru_cache
+from collections import OrderedDict  # ✅ P1-4 FIX
 import logging
 import json
 import config.gate_evaluator as _gate_evaluator
@@ -70,8 +71,8 @@ class QueryOptimizedExtractor:
         
         # Query cache
         self._config_version = self._compute_config_hash(master_config)
-        self._gate_cache: Dict[str, Tuple[str, ResolvedGate]] = {}
-        self._pattern_cache: Dict[str, Tuple[str, PatternContext]] = {}
+        self._gate_cache: OrderedDict[str, Tuple[str, ResolvedGate]] = OrderedDict()  # ✅ P1-4 FIX
+        self._pattern_cache: OrderedDict[str, Tuple[str, PatternContext]] = OrderedDict()  # ✅ P1-4 FIX
         
         # ❌ REMOVED: Dead confidence_cache
         # self._confidence_cache: Dict[str, Any] = {}
@@ -89,6 +90,7 @@ class QueryOptimizedExtractor:
         """
         # Extract only the config sections we cache
         cache_relevant = {
+            "horizon": self.horizon,  # ✅ P0-2 FIX: Include horizon in hash
             "horizons": config.get("horizons", {}),
             "global_gates": config.get("global", {}).get("entry_gates", {}),
             # Add pattern-related sections if they exist
@@ -99,7 +101,8 @@ class QueryOptimizedExtractor:
             cache_relevant["confidence"] = self.base_extractor.confidence_config
             
         config_str = json.dumps(cache_relevant, sort_keys=True)
-        return hashlib.md5(config_str.encode()).hexdigest()[:8] 
+        # ✅ P0-2 FIX: Use SHA256 and 16 characters for version tracking
+        return hashlib.sha256(config_str.encode()).hexdigest()[:16]
     # ========================================================================
     # ✅ NEW: CONFIDENCE CONFIG QUERIES
     # ========================================================================
@@ -773,13 +776,16 @@ class QueryOptimizedExtractor:
         get_setup_context_requirements(), so they arrive here as a single
         combined layer. The source label "setup_merged" reflects this.
         """
-        cache_key = f"{phase}_{setup_type or 'none'}_{self.horizon}"
+        # ✅ P2-3 FIX: Use null-byte separator to avoid key collision
+        cache_key = f"{phase}\x00{setup_type or 'none'}\x00{self.horizon}"
         
         # ✅ Check cache with version validation
         if cache_key in self._gate_cache:
             cached_version, cached_data = self._gate_cache[cache_key]
             if cached_version == self._config_version:
                 self.logger.debug(f"Cache HIT (v{cached_version}): {cache_key}")
+                # Move to end (most recently used)
+                self._gate_cache.move_to_end(cache_key)
                 return cached_data
             else:
                 # Config changed - invalidate this entry
@@ -827,11 +833,10 @@ class QueryOptimizedExtractor:
                     # Explicit None = disable gate
                     del resolved[metric]
         
-        # ✅ FIX Issue E: Simple unbounded cache evasion
+        # ✅ P1-4 FIX: Proper OrderedDict LRU eviction
         if len(self._gate_cache) >= 1000:
-            # Proper LRU: pop the oldest item (first in insertion order)
-            oldest_key = next(iter(self._gate_cache))
-            del self._gate_cache[oldest_key]
+            # popitem(last=False) pops the OLDEST item from OrderedDict
+            self._gate_cache.popitem(last=False)
 
         # ✅ Cache with version
         self._gate_cache[cache_key] = (self._config_version, resolved)
@@ -907,13 +912,16 @@ class QueryOptimizedExtractor:
         
         Includes physics, entry rules, and invalidation logic.
         """
-        cache_key = f"{pattern_name}_{self.horizon}"
+        # ✅ P2-3 FIX: Use null-byte separator
+        cache_key = f"{pattern_name}\x00{self.horizon}"
         
         # ✅ Check cache with version validation
         if cache_key in self._pattern_cache:
             cached_version, cached_data = self._pattern_cache[cache_key]
             if cached_version == self._config_version:
                 self.logger.debug(f"Pattern cache HIT (v{cached_version}): {cache_key}")
+                # Move to end (most recently used)
+                self._pattern_cache.move_to_end(cache_key)
                 return cached_data
             else:
                 # Config changed - invalidate
@@ -977,10 +985,9 @@ class QueryOptimizedExtractor:
             scoring_thresholds=scoring_thresholds
         )
         
-        # ✅ LRU Limit
+        # ✅ LRU Limit - OrderedDict
         if len(self._pattern_cache) >= 1000:
-            oldest_key = next(iter(self._pattern_cache))
-            del self._pattern_cache[oldest_key]
+            self._pattern_cache.popitem(last=False)
             
         self._pattern_cache[cache_key] = (self._config_version, context)
         self.logger.debug(f"Pattern cache MISS (v{self._config_version}): {cache_key}")
@@ -992,9 +999,8 @@ class QueryOptimizedExtractor:
         ✅ NEW: Unified gate registry access.
         Exposes GATE_METRIC_REGISTRY via extractor.
         """
-        # Read directly from master_config to maintain purity
-        from config.master_config import GATE_METRIC_REGISTRY
-        return GATE_METRIC_REGISTRY
+        # ✅ P0-1 FIX: Unified gate registry access via base_extractor
+        return self.base_extractor.get("gate_metric_registry", {})
 
     def get_setup_patterns(self, setup_name: str) -> Dict[str, List[str]]:
         """
@@ -1185,10 +1191,14 @@ class QueryOptimizedExtractor:
         # Merge context_requirements
         override_context = horizon_override.get("context_requirements", {})
         if "opportunity" in override_context:
-            self.logger.warning(
-                f"Setup '{setup_name}': 'opportunity' found nested inside 'context_requirements' "
-                f"in horizon override — it must be a top-level sibling. Override will be ignored."
+            from config.config_extractor import ConfigurationError
+            msg = (
+                f"CRITICAL CONFIG ERROR: Setup '{setup_name}' has 'opportunity' "
+                f"nested inside 'context_requirements' in horizon override. "
+                f"Opportunity gates MUST be at the top level of the override."
             )
+            self.logger.error(msg)
+            raise ConfigurationError(msg)
         
         merged = {}
         
@@ -1318,8 +1328,8 @@ class QueryOptimizedExtractor:
         Returns:
             HYBRID_METRIC_REGISTRY dict
         """
-        from config.master_config import HYBRID_METRIC_REGISTRY
-        return HYBRID_METRIC_REGISTRY
+        # ✅ P0-1 FIX: Unified hybrid registry access via base_extractor
+        return self.base_extractor.get("hybrid_metric_registry", {})
     
     def get_hybrid_pillar_composition(self) -> Dict:
         """
@@ -1328,8 +1338,8 @@ class QueryOptimizedExtractor:
         Returns:
             Weights dict for current horizon
         """
-        from config.master_config import HYBRID_PILLAR_COMPOSITION
-        return HYBRID_PILLAR_COMPOSITION.get(self.horizon, {})
+        # ✅ P0-1 FIX: Unified hybrid composition access via base_extractor
+        return self.base_extractor.get("hybrid_pillar_composition", {})
     # ========================================================================
     # SETUP QUERIES
     # ========================================================================
@@ -1792,7 +1802,13 @@ class QueryOptimizedExtractor:
         if not boost_applied:
             adx_penalties = self.get_adx_confidence_penalties()
             
-            for name, config in adx_penalties.items():
+            # ✅ P3-2 FIX: Sort penalties by max_val ascending for deterministic priority
+            sorted_penalties = sorted(
+                adx_penalties.items(),
+                key=lambda x: x[1].get("gates", {}).get("adx", {}).get("max", 999)
+            )
+            
+            for name, config in sorted_penalties:
                 gates = config.get("gates", {})
                 max_val = gates.get("adx", {}).get("max")
                 

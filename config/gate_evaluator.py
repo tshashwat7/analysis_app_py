@@ -19,6 +19,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# ✅ P2-5 FIX: Epsilon for floating point comparisons
+_FLOAT_EPSILON = 1e-9
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -65,7 +68,7 @@ def _check_single_metric(
             elif not isinstance(value, (int, float)):
                 passed = False
                 failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for min check")
-            elif value < min_val:
+            elif value < min_val - _FLOAT_EPSILON:  # ✅ P2-5 FIX
                 passed = False
                 failures.append(f"{metric}: {value} < min({min_val})")
 
@@ -79,14 +82,14 @@ def _check_single_metric(
             elif not isinstance(value, (int, float)):
                 passed = False
                 failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for max check")
-            elif value > max_val:
+            elif value > max_val + _FLOAT_EPSILON:  # ✅ P2-5 FIX
                 passed = False
                 failures.append(f"{metric}: {value} > max({max_val})")
 
     # equals
     if "equals" in thresholds:
         eq_val = thresholds["equals"]
-        if value != eq_val:
+        if abs(value - eq_val) > _FLOAT_EPSILON:  # ✅ P2-5 FIX
             passed = False
             failures.append(f"{metric}: {value} != {eq_val}")
 
@@ -106,7 +109,7 @@ def _check_single_metric(
             elif not isinstance(value, (int, float)):
                 passed = False
                 failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for min_metric check")
-            elif value < threshold:
+            elif value < threshold - _FLOAT_EPSILON:  # ✅ P2-5 FIX
                 passed = False
                 failures.append(f"{metric}: {value} < {ref_name}({ref_val}) * {mult}")
 
@@ -126,7 +129,7 @@ def _check_single_metric(
             elif not isinstance(value, (int, float)):
                 passed = False
                 failures.append(f"{metric}: non-numeric value ({type(value).__name__}) for max_metric check")
-            elif value > threshold:
+            elif value > threshold + _FLOAT_EPSILON:  # ✅ P2-5 FIX
                 passed = False
                 failures.append(f"{metric}: {value} > {ref_name}({ref_val}) * {mult}")
 
@@ -152,6 +155,10 @@ def evaluate_gates(
         - Nested metric dicts  (``{"value": x}`` or ``{"raw": x}``)
         - None threshold values are silently skipped (safe for config placeholders)
 
+    Evaluation Order (P3-3): 
+        Iterates in DICTIONARY INSERTION ORDER. Does NOT short-circuit 
+        for logging completeness; all metrics are checked before returning.
+
     Args:
         gates: Gate config dict.
             Example::
@@ -172,7 +179,11 @@ def evaluate_gates(
 
     Returns:
         ``(passes, failures)`` where *failures* is a list of human-readable
-        strings describing each failed check (empty when *passes* is True).
+        strings describing each failed check.
+        
+        ⚠️ NOTE (P1-2): If *passes* is True but metrics were missing, 
+        failures will contain "WARNING: missing metric" strings instead 
+        of being empty.
     """
     logic = gates.get("_logic", "AND").upper()
     results: List[bool] = []
@@ -204,7 +215,13 @@ def evaluate_gates(
         return (True, []) if empty_gates_pass else (False, ["No gates defined"])
 
     passes = any(results) if logic == "OR" else all(results)
-    return passes, failures if not passes else []
+    
+    # ✅ P1-2 FIX: Surface missing metrics as warnings even if gates pass
+    if passes:
+        warnings = [f for f in failures if "missing from data" in f or "missing value" in f]
+        return True, [f"WARNING: {w}" for w in warnings]
+    
+    return passes, failures
 
 
 def evaluate_invalidation_gates(

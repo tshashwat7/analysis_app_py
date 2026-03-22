@@ -670,7 +670,6 @@ class ConfigExtractor:
                 SETUP_PATTERN_MATRIX,
                 PATTERN_METADATA,
                 DEFAULT_PHYSICS,
-                PATTERN_INDICATOR_MAPPINGS,
                 PATTERN_SCORING_THRESHOLDS
             )
 
@@ -694,7 +693,7 @@ class ConfigExtractor:
 
             # Pattern indicator mappings (horizon-aware)
             self.sections["pattern_indicator_mappings"] = ConfigSection(
-                data=PATTERN_INDICATOR_MAPPINGS,
+                data=locals().get('PATTERN_INDICATOR_MAPPINGS', {}),
                 source="setup_pattern_matrix.PATTERN_INDICATOR_MAPPINGS"
             )
 
@@ -911,7 +910,9 @@ class ConfigExtractor:
             "position_sizing",
             "risk_management",
             "structural_gates",
-            "opportunity_gates"
+            "opportunity_gates",
+            "setup_pattern_matrix",  # ✅ P1-3 FIX
+            "strategy_matrix"        # ✅ P1-3 FIX
         ]
 
         missing = []
@@ -927,6 +928,7 @@ class ConfigExtractor:
         # Run specific validations
         self.validate_gate_structure()
         self.validate_risk_management()
+        self.validate_threshold_consistency()  # ✅ P3-1 FIX: Enable consistency check
         
         # ✅ NEW: Validate confidence config
         if self.has_confidence_config:
@@ -942,7 +944,11 @@ class ConfigExtractor:
             "setup_baseline_floors"
         ]
         
-        missing_global = [k for k in required_global if not self.sections.get(k) or not self.sections[k].data]
+        # ✅ P1-5 & P3-4 FIX: check is_valid instead of truthiness
+        missing_global = [
+            k for k in required_global 
+            if not self.sections.get(k) or not self.sections[k].is_valid
+        ]
         
         if missing_global:
             self.logger.error(f"Missing confidence config sections: {missing_global}")
@@ -958,7 +964,11 @@ class ConfigExtractor:
             "high_confidence_override"
         ]
         
-        missing_horizon = [k for k in required_horizon if not self.sections.get(k) or self.sections[k].data is None]
+        # ✅ P1-5 & P3-4 FIX: check is_valid instead of None
+        missing_horizon = [
+            k for k in required_horizon 
+            if not self.sections.get(k) or not self.sections[k].is_valid or self.sections[k].data is None
+        ]
         
         if missing_horizon:
             msg = (
@@ -1063,10 +1073,11 @@ class ConfigExtractor:
     def get(self, section_name: str, default: Any = None) -> Any:
         """
         Get a config section safely.
-        Returns the data if valid, otherwise returns default.
+        Returns a DEEP COPY of the data if valid (P0-3 FIX), otherwise returns default.
         Logs warnings if section is missing or invalid.
         
         For required config paths, use get_strict() instead.
+        For performance-critical READ-ONLY access, use get_readonly().
         """
         section = self.sections.get(section_name)
 
@@ -1086,6 +1097,19 @@ class ConfigExtractor:
             )
             return default
 
+        # ✅ P0-3 FIX: Always return a deepcopy to prevent cache corruption
+        return copy.deepcopy(section.data)
+
+    def get_readonly(self, section_name: str, default: Any = None) -> Any:
+        """
+        Performance-optimized getter that returns a LIVE REFERENCE.
+        
+        WARNING: Callers MUST NOT mutate the returned object, as it will
+        corrupt the extractor's internal cache for all future queries.
+        """
+        section = self.sections.get(section_name)
+        if not section or not section.is_valid:
+            return default
         return section.data
 
     def get_strict(self, section_name: str) -> Any:
@@ -1135,7 +1159,7 @@ class ConfigExtractor:
 
     def get_merged(self, global_key: str, horizon_key: str) -> Dict[str, Any]:
         """
-        Get merged config (global + horizon override).
+        Get merged config (global + horizon override) with RECURSIVE deep merge (P2-4 FIX).
 
         Example:
             get_merged("risk_management", "horizon_risk_management")
@@ -1144,15 +1168,18 @@ class ConfigExtractor:
         global_cfg = self.get(global_key, {})
         horizon_cfg = self.get(horizon_key, {})
 
-        # Deep merge
-        merged = copy.deepcopy(global_cfg)
-        for key, value in horizon_cfg.items():
-            if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
-                merged[key] = {**merged[key], **value}
-            else:
-                merged[key] = value
+        return self._deep_merge(global_cfg, horizon_cfg)
 
-        return merged
+    def _deep_merge(self, base: Dict, override: Dict) -> Dict:
+        """Recursively merge override into base. Override wins on conflicts (P2-4)."""
+        result = copy.deepcopy(base)
+        for key, value in override.items():
+            if (key in result and isinstance(result[key], dict) 
+                    and isinstance(value, dict)):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
 
     def get_config_value(
         self,

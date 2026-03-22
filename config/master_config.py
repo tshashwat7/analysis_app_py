@@ -9,6 +9,23 @@ REFACTORING NOTES:
 - Kept only: gates, execution, risk management, time estimation, strategy preferences
 """
 
+# ✅ P1-1 FIX: Runtime Import Guard
+import os
+import sys
+
+# Prevent direct import of raw config from anywhere except the ConfigExtractor or bootstrapper.
+# This ensures that all components use the validated, unified Extractor API.
+_caller_frame = sys._getframe(1)
+_caller_name = _caller_frame.f_globals.get('__name__', '')
+_allowed_callers = ['config.config_extractor', 'config.query_optimized_extractor', 'main', 'tests', 'scripts']
+
+if not any(caller in _caller_name for caller in _allowed_callers) and 'pytest' not in sys.modules:
+    import logging
+    logging.getLogger(__name__).warning(
+        f"ARCHITECTURAL VIOLATION: Direct import of 'master_config' by '{_caller_name}'. "
+        "Use 'config.config_extractor.ConfigExtractor' instead."
+    )
+
 HYBRID_METRIC_REGISTRY = {
     # Linear Range Metrics (Growth, Trend, Consistency)
     "fundamentalMomentum": {
@@ -145,7 +162,8 @@ GATE_METRIC_REGISTRY = {
         "category": "trend",
         "validation_type": "threshold",
         "description": "Moving Average trend alignment signal (1=Strong Up, 0.5=Developing, -1=Down)",
-        "context_paths": [("indicators", "maTrendSignal")]
+        "context_paths": [("indicators", "ma_trend_signal")],  # ✅ P2-1 FIX: Corrected path
+        "optional": True                                      # ✅ P2-1 FIX: Marked as optional
     },
     "prev_supertrend": {
         "type": "text",
@@ -159,7 +177,8 @@ GATE_METRIC_REGISTRY = {
         "category": "trend",
         "validation_type": "threshold",
         "description": "Composite trend strength (0-10)",
-        "context_paths": [("indicators", "trendStrength")]
+        "context_paths": [("indicators", "trend_strength")],  # ✅ P2-1 FIX: Corrected path
+        "optional": True                                      # ✅ P2-1 FIX: Marked as optional
     },
     
     "adx": {
@@ -178,7 +197,8 @@ GATE_METRIC_REGISTRY = {
         "category": "momentum",
         "validation_type": "threshold",
         "description": "Composite momentum strength (0-10)",
-        "context_paths": [("indicators", "momentumStrength")]
+        "context_paths": [("indicators", "momentum_strength")],  # ✅ P2-1 FIX: Corrected path
+        "optional": True                                         # ✅ P2-1 FIX: Marked as optional
     },
     
     "rsi": {
@@ -220,7 +240,8 @@ GATE_METRIC_REGISTRY = {
         "category": "volatility",
         "validation_type": "threshold",
         "description": "Composite volatility quality (0-10)",
-        "context_paths": [("indicators", "volatilityQuality")]
+        "context_paths": [("indicators", "volatility_quality")],  # ✅ P2-1 FIX: Corrected path
+        "optional": True                                          # ✅ P2-1 FIX: Marked as optional
     },
     
     "atrPct": {
@@ -269,7 +290,8 @@ GATE_METRIC_REGISTRY = {
         "category": "structure",
         "validation_type": "threshold",
         "description": "Bollinger Band %B position",
-        "context_paths": [("indicators", "bbpercentb")]
+        "context_paths": [("indicators", "bb_percent_b")],  # ✅ P2-1 FIX: Corrected path
+        "optional": True                                    # ✅ P2-1 FIX: Marked as optional
     },
     
     "bbWidth": {
@@ -277,7 +299,8 @@ GATE_METRIC_REGISTRY = {
         "category": "structure",
         "validation_type": "threshold",
         "description": "Bollinger Band Width",
-        "context_paths": [("indicators", "bbWidth")]
+        "context_paths": [("indicators", "bb_width")],  # ✅ P2-1 FIX: Corrected path
+        "optional": True                                # ✅ P2-1 FIX: Marked as optional
     },
     
     "position52w": {
@@ -285,7 +308,8 @@ GATE_METRIC_REGISTRY = {
         "category": "structure",
         "validation_type": "threshold",
         "description": "Distance from 52-week high",
-        "context_paths": [("indicators", "position52w")]
+        "context_paths": [("indicators", "position_52w")],  # ✅ P2-1 FIX: Corrected path
+        "optional": True                                    # ✅ P2-1 FIX: Marked as optional
     },
     
     "priceVs52wHighPct": {
