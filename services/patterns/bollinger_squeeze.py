@@ -143,6 +143,7 @@ class BollingerSqueeze(BasePattern):
             "bbMid":            round(bbMid, 2)      if bbMid      else None,
             "bb_upper_at_detection": float(bbHigh),
             "bb_lower_at_detection": float(bbLow)    if bbLow      else None,
+            "type":             "bullish" if is_breakout else "pending",
             "breakout_direction": "bullish" if is_breakout else "pending",
             "invalidation_level":  round(invalidation_level, 2)  if invalidation_level  else None,
             "entry_trigger_price": round(entry_trigger_price, 2) if entry_trigger_price else None,

@@ -25,7 +25,7 @@ ARCHITECTURE — Why a custom extractor stack?
 THREAD SAFETY:
     run_mb_resolver() creates a fresh MBConfigResolver per call.
     It calls resolver.build_evaluation_context_only() directly, bypassing
-    build_evaluation_context_v5() which internally calls get_resolver(horizon)
+    build_evaluation_context() which internally calls get_resolver(horizon)
     and would use the cached main-pipeline resolver.
     No global state is patched. Safe to run in a daemon thread.
 
@@ -498,7 +498,7 @@ def run_mb_resolver(
     Execute Phase 2 evaluation for a single MB candidate.
 
     Thread-safe: creates a fresh resolver per call, patches no globals.
-    Bypasses build_evaluation_context_v5() because that function calls
+    Bypasses build_evaluation_context() because that function calls
     get_resolver(horizon) internally and would use the cached main resolver.
     Instead, calls resolver.build_evaluation_context_only() directly with
     the MB resolver already in hand.
@@ -520,7 +520,7 @@ def run_mb_resolver(
         mb_resolver = MBConfigResolver(MB_MASTER_CONFIG, _HORIZON, logger)
         extractor   = mb_resolver.extractor
 
-        # Flatten inputs — same as build_evaluation_context_v5() does internally
+        # Flatten inputs — same as build_evaluation_context() does internally
         clean_ind   = flatten_market_data_mixed(indicators   or {})
         clean_fund  = flatten_market_data_mixed(fundamentals or {})
         price_data  = _extract_price_data(indicators, fundamentals)

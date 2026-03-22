@@ -2028,6 +2028,10 @@ class ConfigResolver:
         primary_found = pv.get("primary_found", [])
         confirming_found = pv.get("confirming_found", [])
         flat_data["pattern_count"] = len(primary_found) + len(confirming_found)
+        
+        # V15.0 Audit Fix: Inject conflict metrics for Step 8 modifier logic
+        conflict_penalty = pv.get("conflict_penalty", 0)
+        flat_data["conflict_penalty"] = conflict_penalty
 
         # ✅ PATCH A: Inject divergence_type for pre-computation check
         divergence_ctx = ctx.get("divergence", {})
@@ -2048,6 +2052,22 @@ class ConfigResolver:
         total_adjustment = adj_data["adjustment"]
         breakdown = adj_data["breakdown"]
         divergence_multiplier = adj_data["multiplier"]
+
+        # ==========================================================
+        # STEP 8: RESOLVER-LEVEL OVERRIDES (Audit Refinements)
+        # ==========================================================
+        # Inject Conflict Penalty from _validate_patterns results
+        # Rationale: These are setup-specific structural mismatches (e.g., Death Cross vs Golden Cross)
+        if conflict_penalty < 0:
+            total_adjustment += conflict_penalty
+            self.logger.info(
+                f"[{ctx.get('symbol', 'N/A')}] Conflict penalty applied: {conflict_penalty} for setup {setup_type}"
+            )
+            breakdown.append({
+                "name": "pattern_conflict_penalty",
+                "adjustment": conflict_penalty,
+                "reason": f"Conflicting patterns detected for {setup_type}"
+            })
         
         self.logger.info(
             f"[CONF_DIAG] {setup_type} ({self.horizon}): base={base}, "
@@ -2961,11 +2981,13 @@ class ConfigResolver:
             confirming_found = [p for p in detected if p in confirming]
             conflicting_found = [p for p in detected if p in conflicting]
 
-            score = 0
-            if primary_found:
-                score += 50
-            score += len(confirming_found) * 10
-            score -= len(conflicting_found) * 20
+            # V15.0 Audit Fix: Calculate net pattern score with capped conflict penalty
+            # Rationale: Conflicting patterns should penalize, but not nuke a strong primary signal.
+            confirm_score = (50 if primary_found else 0) + (len(confirming_found) * 10)
+            raw_conflict_penalty = len(conflicting_found) * -20
+            capped_conflict_penalty = max(-30, raw_conflict_penalty)
+            
+            net_score = confirm_score + capped_conflict_penalty
 
             # ──── Pattern invalidation (PER SETUP) ────────────────────────
             invalidation_status = {}
@@ -3031,7 +3053,8 @@ class ConfigResolver:
 
             results[setup_type] = {
                 "valid": bool(primary_found or confirming_found),
-                "score": max(0, score),
+                "score": net_score,
+                "conflict_penalty": capped_conflict_penalty, # For Step 8 injection
                 "primary_found": primary_found,
                 "confirming_found": confirming_found,
                 "conflicting_found": conflicting_found,

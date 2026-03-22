@@ -32,7 +32,23 @@ class EngulfingPattern(BasePattern):
                     result["quality"] = qual
                     result["score"] = self._normalize_score(qual * 10)
                     result["desc"] = "Bullish Engulfing"
-                    result["meta"] = {"type": "bullish", "vol_boost": vol_boost}
+                    result["meta"] = {
+                        "type": "bullish", 
+                        "vol_boost": vol_boost,
+                        "age_candles": 1,
+                        "formation_time": float(df.index[-1].timestamp()),
+                        "formation_timestamp": df.index[-1].isoformat(),
+                        "bar_index": len(df),
+                        "invalidation_level": round(float(prev["Low"]), 2),
+                        "pattern_strength": "strong" if vol_boost else "moderate",
+                        "current_price": round(float(curr["Close"]), 2),
+                        "horizon": horizon,
+                        "velocity_tracking": {
+                            "can_track": vol_boost,
+                            "entry_conditions_met": True,
+                            "quality_sufficient": True
+                        }
+                    }
                     return result
 
         # Bearish Engulfing
@@ -47,6 +63,22 @@ class EngulfingPattern(BasePattern):
                     result["quality"] = qual
                     result["score"] = self._normalize_score(qual * 10)
                     result["desc"] = "Bearish Engulfing"
-                    result["meta"] = {"type": "bearish", "vol_boost": vol_boost}
+                    result["meta"] = {
+                        "type": "bearish", 
+                        "vol_boost": vol_boost,
+                        "age_candles": 1,
+                        "formation_time": float(df.index[-1].timestamp()),
+                        "formation_timestamp": df.index[-1].isoformat(),
+                        "bar_index": len(df),
+                        "invalidation_level": round(float(prev["High"]), 2),
+                        "pattern_strength": "strong" if vol_boost else "moderate",
+                        "current_price": round(float(curr["Close"]), 2),
+                        "horizon": horizon,
+                        "velocity_tracking": {
+                            "can_track": vol_boost,
+                            "entry_conditions_met": True,
+                            "quality_sufficient": True
+                        }
+                    }
                     
         return result

@@ -43,8 +43,8 @@ from config.config_utility.logger_config import METRICS, track_performance, log_
 from config.config_helpers import (
     # Resolver Factory
     get_resolver,
-    build_evaluation_context_v5,
-    build_execution_context_v5,
+    build_evaluation_context,
+    build_execution_context,
     
     # Context Accessors
     get_setup_from_context,
@@ -268,7 +268,7 @@ def compute_opportunity_score(
         # 1. Build Evaluation Context (if not cached)
         if eval_ctx is None:
             ctx_start = datetime.now().timestamp()
-            eval_ctx = build_evaluation_context_v5(
+            eval_ctx = build_evaluation_context(
                 ticker=ticker,
                 indicators=indicators,
                 fundamentals=fundamentals,
@@ -533,7 +533,7 @@ def compute_all_profiles(
                 try:
                     with track_performance(f"build_eval_ctx_{horizon}"):
                         patterns = (patterns_by_horizon or {}).get(horizon, {})
-                        eval_ctx = build_evaluation_context_v5( ticker, indicators, fundamentals, horizon, patterns=patterns)
+                        eval_ctx = build_evaluation_context( ticker, indicators, fundamentals, horizon, patterns=patterns)
                     if not eval_ctx:
                         eval_ctx = {}
 
@@ -1173,7 +1173,7 @@ def generate_trade_plan(
             eval_ctx = winner_profile["eval_ctx"]
             plan["metadata"]["eval_ctx_source"] = "cached"
         else:
-            eval_ctx = build_evaluation_context_v5(
+            eval_ctx = build_evaluation_context(
                 symbol, indicators, fundamentals, horizon
             )
             plan["metadata"]["eval_ctx_source"] = "rebuilt"
@@ -1204,7 +1204,7 @@ def generate_trade_plan(
         # ======================================================
         # STAGE 2: Execution Context Evolution
         # ======================================================
-        exec_ctx_raw = build_execution_context_v5(eval_ctx, capital)
+        exec_ctx_raw = build_execution_context(eval_ctx, capital)
         plan["metadata"]["exec_ctx_raw"] = exec_ctx_raw.copy()  # ✅ Store structural baseline
         
         exec_ctx, eval_ctx = enhance_execution_context(

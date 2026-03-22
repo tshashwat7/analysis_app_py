@@ -66,7 +66,7 @@ class PatternAnalyzer:
 
         # Mutates indicators in-place (returns None by design).
         # Do NOT assign the return value — it is always None.
-        merge_pattern_into_indicators(indicators, raw_results, horizon=horizon)
+        merge_pattern_into_indicators(indicators, raw_results, horizon=horizon, df=df)
 
         # Return raw_results so callers that capture the return value get something
         # useful, without duplicating the full indicators dict.

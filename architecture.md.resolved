@@ -262,13 +262,13 @@ sequenceDiagram
     M->>D: Step 3: compute_indicators_cached() × N horizons
     M->>M: Step 4: Extract macro trend
     M->>SE: Step 5: compute_all_profiles()
-    SE->>CH: build_evaluation_context_v5()
+    SE->>CH: build_evaluation_context()
     CH->>CR: build_evaluation_context_only()
     CR-->>SE: eval_ctx (setup, strategy, confidence, gates)
     SE-->>M: profiles{} + best_fit
     M->>SE: Step 8: generate_trade_plan()
-    SE->>CH: build_evaluation_context_v5()
-    SE->>CH: build_execution_context_v5()
+    SE->>CH: build_evaluation_context()
+    SE->>CH: build_execution_context()
     CH->>CR: build_execution_context_from_evaluation()
     CR-->>SE: exec_ctx (entry permission, sizing, risk)
     SE->>TE: enhance_execution_context()
@@ -286,7 +286,7 @@ sequenceDiagram
 | 2 | Fetch fundamentals | `compute_fundamentals()` |
 | 3 | Compute indicators (per horizon) | `compute_indicators_cached()` |
 | 4 | Extract macro trend | `niftyTrendScore` from indicators |
-| 5 | Profile scoring | [compute_all_profiles()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#366-629) → [build_evaluation_context_v5()](file:///d:/stockviedeo/stock-analyzer-app/config/config_helpers.py#218-345) |
+| 5 | Profile scoring | [compute_all_profiles()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#366-629) → [build_evaluation_context()](file:///d:/stockviedeo/stock-analyzer-app/config/config_helpers.py#218-345) |
 | 6 | Meta scores (Value/Growth/Quality/Momentum) | `score_*_profile()` |
 | 7 | Flatten indicators for display horizon | Dictionary copy |
 | 8 | Generate trade plan | [generate_trade_plan()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#770-1114) → [enhance_execution_context()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#585-753) |

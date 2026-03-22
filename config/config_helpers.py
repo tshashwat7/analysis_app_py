@@ -218,7 +218,7 @@ def _is_nested_dict(value: Any) -> bool:
 # 3. CONTEXT BUILDERS (✅ Updated to use v6.0 resolver)
 # ==============================================================================
 @log_failures(return_on_error={}, critical=False)
-def build_evaluation_context_v5(
+def build_evaluation_context(
     ticker: str,
     indicators: Dict,
     fundamentals: Dict,
@@ -247,7 +247,7 @@ def build_evaluation_context_v5(
     
     Usage in signal_engine.py:
         # Build ONCE
-        eval_ctx = build_evaluation_context_v5(
+        eval_ctx = build_evaluation_context(
             ticker, indicators, fundamentals, horizon
         )
         
@@ -348,7 +348,7 @@ def build_evaluation_context_v5(
         
     except Exception as e:
         logger.error(f"[{ticker}] ❌ Context build failed: {e}", exc_info=True)
-        METRICS.log_failed_method("build_evaluation_context_v5", e, ticker)
+        METRICS.log_failed_method("build_evaluation_context", e, ticker)
         
         return {
             "error": str(e),
@@ -363,7 +363,7 @@ def build_evaluation_context_v5(
 
 
 @log_failures(return_on_error={}, critical=False)
-def build_execution_context_v5(
+def build_execution_context(
     eval_ctx: Dict,
     capital: float
 ) -> Dict[str, Any]:
@@ -373,7 +373,7 @@ def build_execution_context_v5(
     Takes existing evaluation context and adds execution details.
     
     Args:
-        eval_ctx: Output from build_evaluation_context_v5()
+        eval_ctx: Output from build_evaluation_context()
         capital: Available capital
     
     Returns:
@@ -419,7 +419,7 @@ def build_execution_context_v5(
     except Exception as e:
         ticker = eval_ctx.get("_meta", {}).get("ticker", "UNKNOWN")
         logger.error(f"[{ticker}] ❌ Execution context build failed: {e}", exc_info=True)
-        METRICS.log_failed_method("build_execution_context_v5", e, ticker)
+        METRICS.log_failed_method("build_execution_context", e, ticker)
         
         return {
             "error": str(e),

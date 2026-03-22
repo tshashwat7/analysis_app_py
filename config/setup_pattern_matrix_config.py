@@ -2165,11 +2165,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "rvol": {"min": 1.5},
                     "squeeze_duration": {"min": 5.0}  # ✅ RESTORED - prevents premature entry
                 }
-
-
-
-
-
             },
             "short_term": {
                 "order_type": "limit",
@@ -2180,11 +2175,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "rvol": {"min": 1.2},
                     "squeeze_duration": {"min": 3.0}  # ✅ RESTORED - lower for short_term
                 }
-
-
-
-
-
             },
             "long_term": {
                 "order_type": "limit",
@@ -2195,11 +2185,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "rvol": {"min": 1.0},
                     "squeeze_duration": {"min": 4.0}  # ✅ RESTORED
                 }
-
-
-
-
-
             }
         },
         "invalidation": {
@@ -2212,10 +2197,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                         "price": {"max_metric": "bbLow", "duration": 2},
                         "bbWidth": {"min": 10.0}  # ⬆️ Relaxed from 8.0
                     },
-
-
-
-
                     "_logic": "OR",
 
                 },
@@ -2224,24 +2205,14 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                         "price": {"max_metric": "bbLow", "multiplier": 0.99},
                         "bbWidth": {"min": 12.0}  # ⬆️ Relaxed from 10.0
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "long_term": {
                     "gates": {
                         "price": {"max_metric": "bbLow", "duration": 2},
                         "bbWidth": {"min": 15.0}  # ⬆️ Relaxed from 12.0
                     },
-
-
-
-
                     "_logic": "OR",
-
                 }
             },
             "action": {
@@ -2251,7 +2222,74 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             }
         }
     },
-
+    "minerviniStage2": {
+        "type": "accumulation",
+        "timeframe_agnostic": False,
+        "direction": "bullish",
+        "typical_duration": {"min": 10, "max": 60},   # widened for long_term
+        "failure_rate": 0.15,
+        "best_horizons": ["short_term", "long_term"],
+        "physics": {
+            "target_ratio": 1.8,                      # ✅ fixed from 1.0
+            "duration_multiplier": 1.8,
+            "max_stop_pct": 7.0,
+            "min_contraction_pct": 1.5,               # ⚠️ register in DEFAULT_PHYSICS
+            "horizons_supported": ["short_term", "long_term"]
+        },
+        "entry_rules": {
+            "short_term": {
+                "order_type": "stop_limit",           # ✅ fixed from "limit"
+                "trigger": "pivot_breakout",          # ✅ fixed from "pivot_point"
+                "gates": {
+                    "volatilityQuality": {"min": 6.0},# ✅ fixed from max: 1.5
+                    "price": {"min_metric": "pivot_point", "multiplier": 1.01},
+                    "position52w": {"min": 80.0}
+                }
+            },
+            "long_term": {
+                "order_type": "stop_limit",           # ✅ fixed
+                "trigger": "pivot_breakout",          # ✅ fixed
+                "gates": {
+                    "volatilityQuality": {"min": 5.0},# ✅ fixed from max: 2.0
+                    "price": {"min_metric": "pivot_point", "multiplier": 1.005},
+                    "position52w": {"min": 70.0}
+                }
+            }
+        },
+        "invalidation": {
+            "metadata_keys": {
+                "analytics": ["contraction_pct", "volatility_quality"]
+            },
+            "breakdown_threshold": {
+                "short_term": {
+                    "gates": {
+                        "price": {"max_metric": "maFast", "multiplier": 0.95, "duration": 2},
+                        "volatilityQuality": {"max": 4.0}
+                    },
+                    "_logic": "OR"
+                },
+                "long_term": {                        # ✅ added missing block
+                    "gates": {
+                        "price": {"max_metric": "maFast", "multiplier": 0.94, "duration": 3},
+                        "volatilityQuality": {"max": 3.5}
+                    },
+                    "_logic": "OR"
+                }
+            },
+            "action": {
+                "short_term": "EXIT_ON_CLOSE",
+                "long_term": "EXIT_ON_CLOSE"          # ⚠️ change to TIGHTEN_STOP only after resolver supports it
+            },
+            "stage_reversion": {                      # ⚠️ needs resolver handler to take effect
+                "gates": {
+                    "price": {"max_metric": "maFast", "duration": 5},
+                    "rvol": {"max": 0.8, "duration": 5}
+                },
+                "_logic": "AND",
+                "action": "EXIT_ON_CLOSE"
+            }
+        }
+    },
     "cupHandle": {
         "type": "continuation",
         "timeframe_agnostic": False,
@@ -2277,9 +2315,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "price": {"min_metric": "rim_level", "multiplier": 0.995},
                     "rvol": {"min": 1.2}
                 }
-
-
-
             },
             "long_term": {
                 "order_type": "limit",
@@ -2288,9 +2323,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "price": {"min_metric": "rim_level", "multiplier": 0.99},
                     "rvol": {"min": 1.1}
                 }
-
-
-
             }
         },
         "invalidation": {
@@ -2304,24 +2336,14 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                         "price": {"max_metric": "handle_low", "multiplier": 0.97, "duration": 2},  # ✅ Define handleLow in indicators
                         "rvol": {"max": 0.8}  # ✅ Volume drying up
                     },
-
-
-
-
                     "_logic": "OR",
-
                 },
                 "long_term": {
                     "gates": {
                         "price": {"max_metric": "handle_low", "multiplier": 0.95, "duration": 3},
                         "rvol": {"max": 0.7}
                     },
-
-
-
-
                     "_logic": "OR",
-
                 }
             },
             "action": {
@@ -2360,10 +2382,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "rvol": {"min": 1.5},  # ✅ Volume surge (simplified from volume_surge_required)
                     "box_age_candles": {"max": 50.0}  # ✅ RESTORED - prevents stale boxes
                 }
-
-
-
-
             },
             "short_term": {
                 "order_type": "stop_market",
@@ -2373,10 +2391,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "rvol": {"min": 1.3},
                     "box_age_candles": {"max": 30.0}  # ✅ RESTORED - tighter for short_term
                 }
-
-
-
-
             }
         },
         "invalidation": {
@@ -2389,13 +2403,11 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                     "gates": {
                         "price": {"max_metric": "box_low", "multiplier": 0.998}
                     },
-
                 },
                 "short_term": {
                     "gates": {
                         "price": {"max_metric": "box_low", "multiplier": 0.995}
                     },
-
                 },
                 "long_term": {
                     "gates": {
@@ -2412,7 +2424,6 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         }
     }
 ,
-
     "flagPennant": {
         "type": "continuation",
         "timeframe_agnostic": True,
