@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 # Optional (only used in single-stock mode)
 import yfinance as yf
 import pandas as pd
-
+import threading
 # Helpers from your codebase
 from services.data_fetch import _fmt_date, _retry, safe_float
 
@@ -69,14 +69,15 @@ SUMMARY_CACHE_TTL_HOURS = 24
 NSE_LIB_CACHE_PATH = "cache/nse_corp_actions_lib.json"
 NSE_LIB_CACHE_TTL_HOURS = 24
 
-# Lazy singleton — created once, reused across all bulk calls
-_lib_client = None
+_lib_lock = threading.Lock()
 
 def _get_lib_client():
-    """Return a cached IndiaCorpActions client instance."""
+    """Return a cached IndiaCorpActions client instance with thread-safety."""
     global _lib_client
-    if _lib_client is None and _LIB_AVAILABLE:
-        _lib_client = _IndiaCorpActions()
+    if _lib_client is None:
+        with _lib_lock:
+            if _lib_client is None and _LIB_AVAILABLE:
+                _lib_client = _IndiaCorpActions()
     return _lib_client
 
 # Equitymaster endpoints for different action types
@@ -175,7 +176,9 @@ def _fetch_equitymaster_data() -> List[Dict[str, Any]]:
         futures = [ex.submit(_fetch_action, t, url, headers) for t, url in _API_ENDPOINTS.items()]
         for f in futures:
             try:
-                all_data.extend(f.result() or [])
+                all_data.extend(f.result(timeout=20) or [])
+            except TimeoutError:
+                logger.warning("Equitymaster fetch timed out for one endpoint")
             except Exception as e:
                 logger.warning("Partial Equitymaster fetch failed: %s", e)
 
@@ -237,6 +240,10 @@ def _fetch_nse_via_lib(tickers: List[str]) -> Dict[str, List[Dict]]:
                     "action_type": a.action_type,
                     "details": a.details
                 })
+            
+            # P1-4: Filter BEFORE serializing to disk to prevent memory spike
+            actions_data = [a for a in actions_data if a.get("symbol","").upper() in ticker_map]
+
             try:
                 os.makedirs(os.path.dirname(NSE_LIB_CACHE_PATH), exist_ok=True)
                 with open(NSE_LIB_CACHE_PATH, "w", encoding="utf-8") as f:
@@ -327,15 +334,19 @@ def get_bulk_upcoming_actions(tickers: List[str]) -> List[Dict[str, Any]]:
                 nse_hits += 1
                 continue
 
-            # ── Equitymaster fallback (original name-match logic, preserved) ──
+            # ── Equitymaster fallback (improved name-match logic) ──
             key = ticker.replace(".NS", "").replace(".BSE", "").lower()
+            key_tokens = set(key.replace("-", " ").split())
             matches = []
             for item in em_data:
                 try:
                     norm_name = normalize_company_name(item["name"])
-                    if norm_name.startswith(key):
+                    name_tokens = set(norm_name.replace("-", " ").split())
+                    
+                    # Improved token-based matching
+                    if len(key_tokens & name_tokens) >= max(1, len(key_tokens) - 1):
                         matches.append(item)
-                    elif len(key) > 4 and key in norm_name:
+                    elif norm_name.startswith(key):
                         matches.append(item)
                 except Exception:
                     continue
@@ -436,8 +447,7 @@ def get_single_stock_history_yf(ticker: str, lookback_days: int = 365, force_ref
             if corp_df is None:
                 corp_df = pd.DataFrame()
 
-            if corp_df is not None and not getattr(corp_df, "empty", True):
-                corp_df = pd.to_datetime(corp_df.index, errors="coerce")
+            # P2-2: Removed dead code assignment that corrupted DatetimeIndex
             
             try:
                 splits = getattr(t, "splits", pd.Series(dtype="float64"))
@@ -522,11 +532,20 @@ def get_corporate_actions(tickers: List[str], mode: str = "past", lookback_days:
 # Summary cache — pre-built flat map for fast index page loads
 # -------------------------------
 def _action_to_display(action: Dict) -> str:
-    """Convert a single action dict to a short grid cell string."""
+    """Convert a single action dict to a short grid cell string (P2-3: Handle dates correctly)."""
     today = datetime.now().date()
     ex_str = action.get("ex_date", "")
+    if not ex_str:
+        return ""
+    
     try:
-        if ex_str and datetime.strptime(ex_str, "%Y-%m-%d").date() >= today:
+        # Normalize: handle both "2025-03-15" and date objects
+        if not isinstance(ex_str, str):
+            ex_date = ex_str if hasattr(ex_str, "year") else None
+        else:
+            ex_date = datetime.strptime(ex_str[:10], "%Y-%m-%d").date()
+            
+        if ex_date and ex_date >= today:
             typ = action.get("type", "").replace("Upcoming ", "")
             val = action.get("value")
             src = action.get("source", "")
@@ -541,12 +560,14 @@ def _action_to_display(action: Dict) -> str:
                 parts.append(f"Split {val}" if val else "Split")
             else:
                 parts.append(typ)
-            parts.append(f"(Ex:{ex_str})")
+            
+            ex_fmt = ex_date.strftime("%Y-%m-%d")
+            parts.append(f"(Ex:{ex_fmt})")
             if src:
                 parts.append(f"[{src}]")
             return " ".join(parts)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"_action_to_display parse failed for ex_date={ex_str!r}: {e}")
     return ""
 
 
@@ -585,6 +606,38 @@ def build_corp_actions_summary_cache(tickers: List[str], force: bool = False) ->
             if label:
                 summary[ticker] = label
                 break  # first valid upcoming action is enough for the grid cell
+
+    # P0-4: After building summary, invalidate affected OHLCV caches
+    if summary:
+        try:
+            from services.data_fetch import GLOBAL_OHLC_CACHE, CACHE_LOCK
+            from services.data_layer import ParquetStore
+            with CACHE_LOCK:
+                keys_to_evict = [
+                    k for k in list(GLOBAL_OHLC_CACHE.keys())
+                    if any(k.startswith(t.upper()) for t in summary.keys())
+                ]
+                for k in keys_to_evict:
+                    try: del GLOBAL_OHLC_CACHE[k]
+                    except KeyError: pass
+            
+            if keys_to_evict:
+                logger.info(f"Evicted {len(keys_to_evict)} OHLCV entries due to new corp actions")
+
+            # Also delete affected Parquet files to force adjustment redo
+            for ticker in summary.keys():
+                for interval in ["15m", "1d", "1wk"]:
+                    p = ParquetStore._get_path(ticker, interval)
+                    if os.path.exists(p):
+                        try:
+                            os.unlink(p)
+                            logger.info(f"Invalidated Parquet for {ticker}/{interval} due to corp action")
+                        except OSError as e:
+                            logger.warning(f"Could not delete Parquet for {ticker}: {e}")
+        except ImportError:
+            logger.debug("Could not import data_fetch/data_layer for cache invalidation")
+        except Exception as e:
+            logger.warning(f"Cache invalidation failed: {e}")
 
     try:
         os.makedirs(os.path.dirname(SUMMARY_CACHE_PATH), exist_ok=True)

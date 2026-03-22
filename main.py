@@ -1,13 +1,22 @@
-# main.py
 import asyncio
+import os
+import time
+import math
+import pytz
+import concurrent.futures
+import multiprocessing
+from typing import List, Tuple, Dict, Any, Optional
+from fastapi import FastAPI, Request, Form, Query
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
+from filelock import FileLock
+import random
 import pandas as pd
 from config.config_utility.logger_config import setup_logger
 from services.indicator_cache import compute_indicators_cached
 logger = setup_logger()
-
-# --- Modular services ---
 from config.config_utility.market_utils import is_market_open, get_current_ist, get_current_utc,ensure_utc
 from services.patterns.pattern_state_manager import cleanup_old_breakdown_states
 import threading
@@ -77,7 +86,15 @@ BACKGROUND_EXECUTOR = None
 _SHUTDOWN_IN_PROGRESS = False
 _SHUTDOWN_LOCK = threading.Lock()
 
-# Lazy Loaded Stock Lists
+# Lazy Loaded Stock Lists (P1-7: Moved loading logic to index_utils)
+from services.index_utils import (
+    load_or_create_index, 
+    load_or_create_global_stocks, 
+    build_smart_index_map,
+    get_cached_stocks,
+    STOCK_TO_INDEX_MAP
+)
+
 ALL_STOCKS_LIST = None
 ALL_STOCKS_MAP = None
 
@@ -149,17 +166,22 @@ def get_background_executor():
     return BACKGROUND_EXECUTOR
 
 # --- LAZY LOADER FOR STOCKS ---
-def _ensure_stocks_loaded():
-    global ALL_STOCKS_LIST, ALL_STOCKS_MAP
-    if ALL_STOCKS_LIST is not None:
-        return
-    
-    # Load logic
-    ALL_STOCKS_LIST = load_or_create_global_stocks()
-    if not ALL_STOCKS_LIST:
-        ALL_STOCKS_LIST = get_cached_stocks(NSE_STOCKS_FILE)
-    ALL_STOCKS_MAP = {s[0]: s[1] for s in ALL_STOCKS_LIST}
-    logger.info(f"Loaded {len(ALL_STOCKS_LIST)} stocks into memory.")
+
+def prewarm_parquet_cache(tickers: List[str], horizons: List[str]):
+    """
+    Ensures Parquet cache is populated before parallel workers start (P1-1).
+    This runs in the main process to prevent multiple workers from 
+    hammering Yahoo for the same file simultaneously.
+    """
+    from services.data_fetch import get_history_for_horizon
+    logger.info(f"Pre-warming Parquet cache for {len(tickers)} tickers across {horizons}...")
+    for t in tickers:
+        for h in horizons:
+            try:
+                # This will fetch from YF and save to Parquet if cache is stale/missing
+                get_history_for_horizon(t, h)
+            except Exception as e:
+                logger.warning(f"Pre-warm failed for {t} ({h}): {e}")
 
 async def periodic_warmer():
     """
@@ -206,6 +228,10 @@ async def periodic_warmer():
             for i in range(0, len(symbols_to_warm), WARMER_BATCH_SIZE):
                 if _SHUTDOWN_IN_PROGRESS: break         
                 batch = symbols_to_warm[i : i + WARMER_BATCH_SIZE]
+                
+                # P1-1: Pre-warm Parquet cache for the current batch (Non-blocking)
+                await asyncio.to_thread(prewarm_parquet_cache, batch, ["intraday", "short_term", "long_term"])
+
                 # Kick off analysis of the batch using the compute executor
                 futures = [
                     loop.run_in_executor(get_compute_executor(), run_full_analysis, symbol)
@@ -294,9 +320,16 @@ async def lifespan(app: FastAPI):
     # 1. Startup
     _SHUTDOWN_IN_PROGRESS = False
     
+    # Phase 6 P1-4: Initialize DB at the very beginning of startup
+    init_db()
+    
     # Pre-load data in main process
     build_smart_index_map()
     _ensure_stocks_loaded()
+    
+    # P1-1: Pre-warm Parquet cache barrier before executors start (Non-blocking)
+    if ALL_STOCKS_LIST:
+        await asyncio.to_thread(prewarm_parquet_cache, [s[0] for s in ALL_STOCKS_LIST], ["intraday", "short_term", "long_term"])
     
     safe_cpu_count = min(4, os.cpu_count() or 4)
     logger.info(f"Starting Executors (Compute Workers: {safe_cpu_count})...")
@@ -507,71 +540,12 @@ _CORP_ACTIONS_CACHE_READY = False  # True once startup warmer finishes
 _LAST_CORP_FETCH_TIME = 0.0        # epoch timestamp of last successful corp actions fetch
 _CORP_FETCH_COOLDOWN_SEC = 3600    # 1 hour cooldown between fetches
 CACHE_TTL = 60 * 60
-CACHE_LOCK = multiprocessing.Lock()  # ✅ W57 FIX: Cross-process lock
+# Phase 6 P0-1: Use FileLock for cross-process synchronization
+CACHE_LOCK = FileLock("cache/global_json.lock")
 SIGNAL_CACHE_WRITE_RETRIES = int(os.getenv("SIGNAL_CACHE_WRITE_RETRIES", "3"))
 SIGNAL_CACHE_RETRY_SLEEP_SEC = float(os.getenv("SIGNAL_CACHE_RETRY_SLEEP_SEC", "0.2"))
-STOCK_TO_INDEX_MAP: Dict[str, str] = {}
 
-# --- STOCK LOADING HELPERS ---
-
-def load_or_create_index(index_name: str):
-    json_file = os.path.join(DATA_DIR, f"{index_name}.json")
-    csv_file = os.path.join(DATA_DIR, f"{index_name}.csv")
-
-    # If JSON exists, load it
-    if os.path.exists(json_file):
-        stocks = get_cached_stocks(json_file)
-        if stocks: return stocks
-    # If JSON missing but CSV exists → build JSON
-    if os.path.exists(csv_file):
-        logger.info(f"Parsing CSV for index: {index_name}")
-        pairs = parse_index_csv(csv_file)
-        if pairs:
-            json_data = [{"symbol": s, "name": n} for s, n in pairs]
-            try:
-                with open(json_file, "w", encoding="utf-8") as f:
-                    json.dump(json_data, f, indent=2)
-            except Exception: pass
-            return pairs
-    return []
-
-def load_or_create_global_stocks():
-    """
-    Loads NSEStock.json (global stock universe).
-    If missing/corrupted -> rebuild from NSEStock.csv.
-    """
-    return load_or_create_index("NSEStock")
-
-def build_smart_index_map():
-    global STOCK_TO_INDEX_MAP
-    priority_files = ["NSEStock", "niftyauto", "niftybank", "niftyfmcg", "niftyinfra", 
-                      "niftyit", "niftypharma", "niftyrealty", "nifty500", "smallcap250", 
-                      "microcap250", "smallcap100", "midcap150", "niftynext50", "nifty100", "nifty50"]
-    for filename in priority_files:
-        # Ensure the file actually exists before trying to load
-        filepath = os.path.join(DATA_DIR, f"{filename}.json")
-        if os.path.exists(filepath):
-            stocks = get_cached_stocks(filepath)
-            for symbol, _ in stocks:
-                STOCK_TO_INDEX_MAP[symbol.strip().upper()] = filename
-    logger.info(f"[INIT] Smart Index Map built for {len(STOCK_TO_INDEX_MAP)} symbols.")
-
-def get_cached_stocks(index_file: str) -> List[Tuple[str, str]]:
-    if os.path.exists(index_file):
-        try:
-            with open(index_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                out = []
-                if isinstance(data, list):
-                    for item in data:
-                        if isinstance(item, dict) and "symbol" in item:
-                            out.append((item["symbol"], item.get("name", item["symbol"])))
-                        elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                            out.append((item[0], item[1]))
-                return out
-        except Exception:
-            return []
-    return []
+# (Moved index loading helpers to services/index_utils.py)
 
 # --- CACHE LOGIC ---
 
@@ -652,7 +626,10 @@ def _write_signal_cache_with_retry(symbol: str, writer_fn):
             last_exc = e
             if attempt >= SIGNAL_CACHE_WRITE_RETRIES or not _is_retryable_sqlite_error(e):
                 raise
-            sleep_for = SIGNAL_CACHE_RETRY_SLEEP_SEC * attempt
+            # Phase 6 P0-2: Exponential backoff with jitter
+            base_sleep = SIGNAL_CACHE_RETRY_SLEEP_SEC * (2 ** (attempt - 1))
+            jitter = random.uniform(0, base_sleep * 0.5)
+            sleep_for = base_sleep + jitter
             logger.warning(
                 "[%s] Signal cache write retry %d/%d after SQLite contention: %s",
                 symbol, attempt, SIGNAL_CACHE_WRITE_RETRIES, e,
@@ -977,10 +954,7 @@ def run_analysis(
         # STEP 9: DATABASE PERSISTENCE (WITH BOTH HORIZONS)
         # =====================================================================
         if "full_report" in analysis_data:
-            # ✅ C30 FIX: Always save to cache, even on ERROR, to prevent stale data being served.
-            # The status will be captured in final_context.
-            db = None
-            # ✅ C30 FIX: Always save to cache, even on ERROR
+            # ✅ C30 FIX: Always save to cache, even on ERROR (Phase 8 P2-6 cleaned)
             db = None
             try:
                 db = SessionLocal()
@@ -1212,6 +1186,9 @@ async def quick_scores(payload: QuickScoresRequest):
         else: to_fetch.append(s)
 
     if not to_fetch: return results
+
+    # P1-1: Pre-warm Parquet cache for to_fetch symbols (Non-blocking)
+    await asyncio.to_thread(prewarm_parquet_cache, to_fetch, ["intraday", "short_term", "long_term"])
 
     # Bug 2 Fix: Open session before loop and ensure closure
     from config.multibagger.mb_db_model import MultibaggerCandidate

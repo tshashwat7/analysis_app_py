@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from config.config_utility.logger_config import setup_logger
 from services.corporate_actions import build_corp_actions_summary_cache
 from config.constants import INDEX_TICKERS
-from main import load_or_create_index
+from services.index_utils import load_or_create_index
+from services.data_fetch import is_trading_day
 
 # Setup logging specific to the warmer
 logger = setup_logger()
@@ -22,6 +23,12 @@ CSV_OUT_PATH = os.path.join(OUTPUT_DIR, "upcoming_corp_actions_list.csv")
 
 def run_warmer():
     logger.info("Starting Daily Corporate Actions Warmer...")
+    
+    # P2-5: Holiday Guard — avoid unnecessary API calls and cache resets on holidays
+    if not is_trading_day(datetime.now()):
+        logger.info("Today is a market holiday. Skipping corporate actions warming.")
+        return
+
     start_time = datetime.now()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)

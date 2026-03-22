@@ -52,6 +52,19 @@ CACHE_LOCK = threading.Lock()
 SHORT_TTL = 15 * 60
 LONG_TTL = 6 * 60 * 60
 
+# --- Production Schema Enforcement ---
+REQUIRED_OHLCV_COLUMNS = {"Open", "High", "Low", "Close", "Volume"}
+
+def _validate_ohlcv_schema(df: pd.DataFrame, symbol: str, source: str) -> bool:
+    """Ensures DataFrame has all required columns before caching or processing."""
+    if df is None or df.empty:
+        return False
+    missing = REQUIRED_OHLCV_COLUMNS - set(df.columns)
+    if missing:
+        logger.error(f"[{symbol}] {source} returned DataFrame missing columns: {missing}")
+        return False
+    return True
+
 # -----------------------------
 # Utility helpers
 # -----------------------------
@@ -119,11 +132,17 @@ def _check_freshness(df: pd.DataFrame, interval: str) -> bool:
             return age_minutes < (18 * 60)       # Any data from last 18h is fine after close
 
         elif interval == "1d":
-            # Daily bar — stale after market hours next trading day
-            if now.weekday() >= 5:               # Weekend: last bar is Friday's
-                return age_minutes < (72 * 60)   # 3-day buffer
-            return age_minutes < (28 * 60)       # Weekday: allow a full session + 4h buffer
-                                                 # (28h instead of 24h avoids edge cases near open)
+            # IST-aware freshness for daily bars
+            IST = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.datetime.now(IST)
+            last_ist = last_ts.astimezone(IST)
+            
+            # Fresh if last bar is from the most recent trading session
+            if now_ist.weekday() >= 5:  # Weekend
+                return age_minutes < (72 * 60)
+            if now_ist.hour < 9:  # Pre-market: yesterday's close is fine
+                return age_minutes < (24 * 60)
+            return age_minutes < (28 * 60)  # Post-open: expect today's bars
 
         elif interval == "1wk":
             # Weekly bar — always stamped at week open (Monday)
@@ -527,21 +546,29 @@ def _wrap_calc(arg, name: Optional[str] = None):
 # Data fetchers
 # -----------------------------
 
+_YF_SEMAPHORE = threading.Semaphore(8)  # max 8 concurrent Yahoo requests globally
+
 def safe_history(sym: str, period: str = '2y', auto_adjust: bool = True, **kwargs):
     def _fetch():
-        time.sleep(random.uniform(0.5, 1.5)) 
-        t = yf.Ticker(sym)
-        return t.history(period=period, auto_adjust=auto_adjust, **kwargs)
+        with _YF_SEMAPHORE:
+            time.sleep(random.uniform(0.3, 0.8))  # small per-request jitter
+            t = yf.Ticker(sym)
+            return t.history(period=period, auto_adjust=auto_adjust, **kwargs)
     try:
         df = _retry(_fetch, retries=3, backoff=2.0)
-        if df is None or getattr(df, "empty", True): return pd.DataFrame()
+        if df is None or getattr(df, "empty", True): 
+            return pd.DataFrame()
         # Drop rows where Close is NaN (trailing empty rows from weekly/monthly fetches)
         return df.dropna(subset=["Close"])
-    except: return pd.DataFrame()
+    except Exception: 
+        return pd.DataFrame()
 
-@lru_cache(maxsize=1024)
+from services.cache import cached_result
+
+@cached_result(ttl=3600, key_fn=lambda sym: f"safe_info:{sym.upper()}")
 def safe_info(sym: str):
-    def _fetch(): return yf.Ticker(sym).info or {}
+    def _fetch(): 
+        return yf.Ticker(sym).info or {}
     return _retry(_fetch, retries=2, backoff=0.6)
 
 def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjust: bool = True) -> pd.DataFrame:
@@ -563,6 +590,7 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
                     except KeyError: pass
 
     # --- TIER 2: L2 PARQUET CACHE ---
+    stale_parquet_fallback = None
     if ENABLE_CACHE:
         max_age_mins = ttl / 60
         lookback_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
@@ -578,20 +606,32 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
                     cached_df = _enforce_cache_limits(df_parquet, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
                 return df_parquet
+            else:
+                stale_parquet_fallback = df_parquet  # Keep as emergency fallback
 
     # --- TIER 3: L3 YAHOO API ---
     try:
         df = safe_history(symbol, period=period, interval=interval, auto_adjust=auto_adjust)
         
         if df is not None and not df.empty:
-            ParquetStore.save_ohlcv(symbol, df, interval)
+            if _validate_ohlcv_schema(df, symbol, "yfinance"):
+                ParquetStore.save_ohlcv(symbol, df, interval)
+            
             if ENABLE_CACHE:
                 with CACHE_LOCK:
-                    # 🔥 FIX: Trim before caching
                     cached_df = _enforce_cache_limits(df, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-        return df
+            return df
+            
+        # Yahoo returned empty — degrade gracefully
+        if stale_parquet_fallback is not None:
+            logger.warning(f"[{symbol}] Yahoo returned empty, using stale Parquet fallback")
+            return stale_parquet_fallback
+        return pd.DataFrame()
     except Exception as e:
+        if stale_parquet_fallback is not None:
+            logger.warning(f"[{symbol}] Yahoo error ({e}), using stale Parquet fallback")
+            return stale_parquet_fallback
         logger.error(f"[{symbol}] Fetch error for {horizon}: {e}")
         return pd.DataFrame()
 
@@ -619,6 +659,7 @@ def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NS
                     except KeyError: pass
 
     # --- TIER 2: L2 PARQUET (Disk) ---
+    stale_benchmark_fallback = None
     if ENABLE_CACHE:
         max_age_mins = 720 
         lookback_map = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
@@ -632,19 +673,31 @@ def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NS
                     cached_df = _enforce_cache_limits(df_parquet, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
                 return df_parquet
+            else:
+                stale_benchmark_fallback = df_parquet
 
     # --- TIER 3: L3 YAHOO API (Source) ---
     try:
         df = safe_history(benchmark_symbol, period=period, interval=interval, auto_adjust=auto_adjust)
         if df is not None and not df.empty:
-            ParquetStore.save_ohlcv(benchmark_symbol, df, interval)
+            if _validate_ohlcv_schema(df, benchmark_symbol, "yfinance"):
+                ParquetStore.save_ohlcv(benchmark_symbol, df, interval)
+            
             if ENABLE_CACHE:
                 with CACHE_LOCK:
                     # 🔥 FIX: Trim benchmark too
                     cached_df = _enforce_cache_limits(df, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-        return df
+            return df
+            
+        if stale_benchmark_fallback is not None:
+            logger.warning(f"[{benchmark_symbol}] Yahoo returned empty benchmark, using stale fallback")
+            return stale_benchmark_fallback
+        return pd.DataFrame()
     except Exception as e:
+        if stale_benchmark_fallback is not None:
+            logger.warning(f"[{benchmark_symbol}] Yahoo benchmark fetch error ({e}), using stale fallback")
+            return stale_benchmark_fallback
         logger.error(f"[{benchmark_symbol}] Benchmark error: {e}")
         return pd.DataFrame()
 
@@ -660,7 +713,11 @@ def fetch_data(period: str = None, interval: str = None, auto_adjust: bool = Tru
     except: return pd.DataFrame()
 
 def get_price_history(symbol: str, period: str = "2y", auto_adjust: bool = True) -> pd.DataFrame:
-    return safe_history(symbol, period, auto_adjust)
+    try:
+        return safe_history(symbol, period, auto_adjust)
+    except Exception as e:
+        logger.error(f"[{symbol}] get_price_history failed: {e}")
+        return pd.DataFrame()
 
 def parse_index_csv(csv_path: str) -> List[Tuple[str, str]]:
     pairs = []

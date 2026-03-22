@@ -29,14 +29,15 @@ class ParquetStore:
     def save_ohlcv(symbol: str, df: pd.DataFrame, interval: str):
         """
         Writes Pandas DataFrame to Parquet via Polars engine (Fast).
+        Uses a PID-aware temporary file and atomic rename to prevent corruption (P0-1).
         """
         if df is None or df.empty: return
         
+        path = ParquetStore._get_path(symbol, interval)
+        # Use PID to prevent collision between parallel processes
+        temp_path = Path(str(path) + f".{os.getpid()}.tmp")
+        
         try:
-            path = ParquetStore._get_path(symbol, interval)
-            # Improvement A: Safer temp path creation
-            temp_path = Path(str(path) + ".tmp")
-            
             # 1. Prepare DataFrame
             df_to_save = df.copy()
             df_to_save.index.name = "Date"
@@ -49,11 +50,9 @@ class ParquetStore:
             # 3. Atomic rename
             os.replace(temp_path, path)
             
-            # logger.debug(f"[{symbol}] Saved {len(df)} rows to {path}")
-            
         except Exception as e:
-            logger.error(f"[{symbol}] Parquet Write Error: {e}")
-            if 'temp_path' in locals() and temp_path.exists():
+            logger.error(f"[{symbol}] Atomic Parquet Write Failed: {e}")
+            if temp_path.exists():
                 try: temp_path.unlink()
                 except: pass
 
