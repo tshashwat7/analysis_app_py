@@ -1,4 +1,4 @@
-# 📈 Pro Stock Analyzer v15.0
+# 📈 Pro Stock Analyzer v15.1
 
 > **Institutional-Grade Algorithmic Trading Signal Engine for NSE (India)**
 
@@ -110,6 +110,7 @@ The core philosophy distinguishes stock *quality* (structural eligibility — "i
        │  WEEKLY PIPELINE (Phase 7)       │
        │  mb_scheduler ──► screener       │
        │               └──► evaluator     │
+       │  services/scoring_utils.py       │
        │  [Separate extractor stack]      │
        └──────────────────────────────────┘
 
@@ -119,7 +120,34 @@ The core philosophy distinguishes stock *quality* (structural eligibility — "i
        │  {found, score, quality, meta}   │
        │  pattern_analyzer ──► fusion     │
        └──────────────────────────────────┘
+
+       ┌──────────────────────────────────┐
+       │  HORIZON CONSTANTS               │
+       │  services/patterns/              │
+       │  horizon_constants.py            │
+       │  WINDOWS_BARS · WINDOWS_SECONDS  │
+       │  HORIZON_MA_CONFIG per horizon   │
+       └──────────────────────────────────┘
 ```
+
+---
+
+## Modernization & Refactoring (v15.1 Wash)
+
+The codebase has undergone a significant architectural "wash" across 9 major audit phases. This modernization ensures maximum configuration purity, type safety, and system stability.
+
+| Phase | Component | Key Improvement | Resulting Benefit |
+| :--- | :--- | :--- | :--- |
+| **P1** | **Data Layer** | Centralized fetching + corp actions caching | 0% yfinance throttling in bulk runs |
+| **P2** | **Config Layer** | Deep merging + Stateless gate logic | symbol-neutral architecture; no hardcoded syms |
+| **P3** | **Signal Engine** | Immutable Context + Conflict resolving | 100% traceabilty of why a signal was rejected |
+| **P4** | **Pattern Library** | Shared Horizon Constants (Seconds/Bars) | Unified pattern math across all 12 detectors |
+| **P5** | **Execution** | Directional Normalization (Long/Short) | Single math path for BOTH buy and sell signals |
+| **P6** | **Hardening** | Concurrency Guards + Jittered Retries | ACID compliant DB writes; no lock contention |
+| **P7** | **Multibagger** | Isolate Pipeline + Scheduled Cycles | Passive scanning without impacting trade engine |
+| **P8** | **Security/UI** | XSS Protection + API Versioning (v1) | Production-ready web interface & endpoints |
+| **P9** | **Refinement** | Final naming alignment + Unit standard | 0 NameErrors; unified bar-vs-seconds units |
+| **v15.1**| **Modernization**| README/Artifact Auto-Sync | Real-time technical documentation for reviewers |
 
 ---
 
@@ -197,16 +225,63 @@ The horizon is passed into `indicators.py` at call time; the function selects th
 
 **Files:** `services/corporate_actions.py`, `daily_corp_action_warmer.py`
 
-Unadjusted OHLCV data is dangerous for algorithmic analysis. A 2-for-1 split produces a 50% price discontinuity that will fire every momentum and breakout signal incorrectly unless the data is adjusted.
+The corporate actions system uses a **3-tier data source hierarchy** to avoid inaccurate price adjustments and prevent false alarm signals from unadjusted splits or ex-dividend gaps.
 
-`corporate_actions.py` fetches split and dividend events from NSE/Yahoo Finance and applies backward price adjustment to the cached OHLCV series before it enters the analysis pipeline. The adjustment is idempotent — running it twice produces the same result.
+#### Data Source Hierarchy
 
-`daily_corp_action_warmer.py` is a scheduled background process that pre-fetches and applies corporate action adjustments for the full watchlist each morning before market open. This ensures that by the time the first intraday scan fires, the entire Parquet cache is already adjusted and stale-data signals are not generated at open.
+```
+Bulk Upcoming Mode  (called by index dashboard & summary cache)
+────────────────────────────────────────────────────────────────
+Tier 1 — india-corp-actions library (PRIMARY)
+          pip install india-corp-actions
+          → Queries NSE API directly → symbol-exact match
+          → Returns: Dividend, Bonus, Split events for all symbols
+          → 24h disk cache at cache/nse_corp_actions_lib.json
+          → Filtered to watchlist BEFORE serialization (prevents memory spike)
+          │
+          ├── If library not installed or fetch fails:
+          ▼
+Tier 2 — Equitymaster API (FALLBACK)
+          → 3 parallel HTTP calls: Dividend / Bonus / Split endpoints
+          → Name-based token matching (ticker ↔ company name normalization)
+          → 24h disk cache at cache/equitymaster_actions.json
+          → Marks actions with source="equitymaster_fallback"
 
-**Coverage:**
-- **Stock splits** — backward price and volume adjustment
-- **Bonus issues** — treated equivalently to splits for price series purposes
-- **Dividends** — ex-dividend price gap adjustment to prevent false breakdown signals
+Single-Stock Historical Mode  (called by /analyze detail view)
+────────────────────────────────────────────────────────────────
+Tier 3 — yfinance (per-stock, cached 7d at cache/yf_actions/{TICKER}.json)
+          → t.splits  + t.dividends  → sorted descending by date
+          → lookback_days filter applied (default 365)
+          → source="yfinance"
+```
+
+**Library install:**
+
+```bash
+pip install india-corp-actions
+```
+
+If the library is not available, the system emits a `WARNING` at startup and falls through entirely to Equitymaster for bulk mode.
+
+#### Summary Cache
+
+`build_corp_actions_summary_cache()` pre-builds a flat `{ticker: display_string}` map (e.g., `"INFY.NS": "Div Rs4.50 (Ex:2025-04-10) [NSE]"`) and persists it to `cache/corp_actions_summary.json` (24h TTL). This cache is pre-warmed by the lifespan startup background thread — so index page loads read from the flat map rather than calling any external API.
+
+**OHLCV Cache Invalidation:** When the summary cache is rebuilt and new actions are detected, `build_corp_actions_summary_cache()` automatically evicts the affected symbols from both the in-process RAM cache and the corresponding Parquet files. This forces adjusted price series to be re-fetched on the next analysis call.
+
+#### Action Coverage
+
+| Mode | Sources | Use Case |
+|---|---|---|
+| `mode="upcoming"` | NSE lib → Equitymaster | Index dashboard, corp actions column |
+| `mode="past"` / `"single"` | yfinance (7d cached) | `/analyze` detail view |
+
+- **Dividends** — ex-dividend price gap displayed with `Rs<amount>`
+- **Bonus issues** — displayed as `Bonus <ratio>`
+- **Stock splits** — displayed as `Split <ratio>`
+
+`daily_corp_action_warmer.py` is a scheduled background process that calls `build_corp_actions_summary_cache()` for the full watchlist each morning, ensuring the startup-built cache is always fresh before the first intraday scan fires.
+
 
 ---
 
@@ -251,6 +326,7 @@ Pre-extracts all config sections at initialization into typed `ConfigSection` ob
 | `extract_matrix_sections()` | Loads `SETUP_PATTERN_MATRIX` + `PATTERN_METADATA`; also extracts per-setup `context_requirements` and `horizon_overrides` as individual keyed sections |
 | `extract_gate_sections()` | Populates `structural_gates`, `horizon_structural_gates`, `execution_rules`, `opportunity_gates` — **no** setup-specific gate specs (those live in matrix) |
 | `validate_extracted_configs()` | Validates critical sections including confidence config structure; raises `ValueError` / `ConfigurationError` on failure |
+| `validate_pattern_metadata()` | **[Phase 9]** Checks every active detector alias (camelCase) against `PATTERN_METADATA`. Raises `ConfigurationError` (hard crash at startup) if any entry is missing — prevents ATR-fallback SL/T1/T2 from being silently used in production for patterns without physics entries |
 
 **Access pattern:**
 
@@ -709,7 +785,7 @@ market_utils.get_current_session()
 - **Executors:** `ProcessPoolExecutor` (CPU-bound compute) + `ThreadPoolExecutor` (API + background I/O)
 - **Cross-process safety:** `CACHE_LOCK = multiprocessing.Lock()` guards all JSON file writes
 - **Cache warmer:** Background `asyncio.Task` (`periodic_warmer`) warms symbols in batches with rate-limit detection and cooling
-- **`FULL_HORIZON_SCORES` dict:** In-memory store populated after each worker result (single-symbol) and after each warmer batch (bulk path). Feeds the horizon-toggle confluence dots in the UI
+- **`FULL_HORIZON_SCORES` dict:** In-memory store populated in three paths: (1) after each warmer batch in the main process (serialized, post-Phase 9), (2) after single-symbol analysis results, and (3) at server startup by restoring from `signal_cache.horizon_scores` (scores are marked `_stale: True` until refreshed by the first warmer cycle). Feeds the horizon-toggle confluence dots in the UI
 
 **`run_analysis()` modes:**
 
@@ -720,7 +796,9 @@ market_utils.get_current_session()
 
 #### `_write_signal_cache_with_retry()`
 
-Single-query upsert pattern: queries for existing row, calls `writer_fn(db, entry)`, commits. On `OperationalError` with SQLite lock contention (`"database is locked"` / `"busy"`), retries up to `SIGNAL_CACHE_WRITE_RETRIES` (default 3) with exponential backoff (`0.2s × attempt`). Each retry opens a fresh session.
+Single-query upsert pattern: queries for existing row, calls `writer_fn(db, entry)`, commits. On `OperationalError` with SQLite lock contention (`"database is locked"` / `"busy"`), retries up to `SIGNAL_CACHE_WRITE_RETRIES` (default 5) with jittered exponential backoff (`0.2s × 2^attempt + jitter`). Each retry opens a fresh session.
+
+**Critical architecture note (Phase 9):** DB writes originating from the cache warmer are now **serialized in the main asyncio event loop** after collecting all worker results. Workers never write directly to SQLite — they return results to the main process, which performs a single sequential write per symbol. This eliminates the multi-process write contention that previously caused frequent `database is locked` errors during full market scans.
 
 #### `_save_analysis_to_db()`
 
@@ -936,7 +1014,7 @@ Initialization fails hard (`RuntimeError`) if confidence config is missing or if
 | **Flag / Pennant** | `flagPennant` | Trend-aligned | `intraday`, `short_term` | `pole_gain_pct`, `flag_low`, `flag_high`, `flag_drift_pct`, `pole_strength` | `is_uptrend=False` default when `maFast` unavailable (safe-fail); pole vs flag window configurable |
 | **Golden Cross** | `goldenCross` | Bullish | `short_term`, `long_term`, `multibagger` | `maMid`, `maSlow`, `ma_type`, `cross_strength`, `crossover_fresh` | Split class from `DeathCross`; `GoldenDeathCross` kept as legacy alias; `invalidation_level = maMid` |
 | **Death Cross** | `deathCross` | Bearish | `short_term`, `long_term`, `multibagger` | `maMid`, `maSlow`, `ma_type`, `cross_strength` | Uses same `_detect_cross()` helper as `GoldenCross`; appears as `CONFLICTING` in bullish setups |
-| **Ichimoku Signals** | `ichimokuSignals` | Variable | `short_term`, `long_term` | `cloud_top`, `cloud_bottom`, `tenkan_kijun_spread`, `cloud_color`, `signal_age` | `signal_age` computed by walking TK series backward (not hardcoded); fresh cross always `age=1` (W50) |
+| **Ichimoku Signals** | `ichimokuSignals` | Variable | `short_term`, `long_term` | `cloud_top`, `cloud_bottom`, `tenkan_kijun_spread`, `cloud_color`, `signal_age`, `is_boundary_default` | `signal_age` computed by walking TK series backward (not hardcoded); fresh cross always `age=1`; `is_boundary_default=True` added when age hits the series lookback limit (W50 sentinel — prevents fresh-cross ambiguity in the trade enhancer) |
 | **Minervini VCP** | `minerviniStage2` | Bullish | `short_term`, `long_term`, `multibagger` | `contraction_pct`, `volatility_quality`, `stage_quality`, `contraction_strength` | `contraction_pct` required by resolver `_calculate_pattern_targets` for `depth = entry × (contraction_pct/100)` |
 | **Momentum Flow** | `momentumFlow` | Neutral | `intraday`, `short_term`, `long_term` | `bar_index`, `invalidation_level`, `velocity_tracking`, `pattern_strength`, `current_price` | Full meta schema identical to other patterns for uniform resolver treatment |
 | **Three-Line Strike** | `threeLineStrike` | Bull/Bear | `intraday`, `short_term`, `long_term` | `strike_low`, `strike_high`, `prior_range`, `strike_candle_body`, `reversal_confidence` | `type` always lowercase `"bullish"` / `"bearish"`; bearish invalidation anchored to `strike_high` (not `strike_low`) |
@@ -1143,6 +1221,13 @@ Pattern invalidation logic in `check_pattern_invalidation()` skips the breakdown
 | `POST` | `/analyze` | Form-submit version of analysis |
 | `POST` | `/quick_scores` | Batch analysis for index scan; returns flat JSON for AG Grid |
 
+### Scores & Data (v1 API)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/scores` | Versioned endpoint returning all cached horizon scores |
+| `GET` | `/api/v1/corporate_actions` | Versioned endpoint returning cached corporate actions summary |
+
 ### Index & Data
 
 | Method | Path | Description |
@@ -1197,14 +1282,25 @@ Before the FastAPI route serialises the final result dict to JSON, `summaries.py
 
 This string is what gets persisted to `signal_cache.signal_text` in the database, surfaced in the `/analyze` JSON response, and rendered verbatim in the AG Grid tooltip cell. `summaries.py` is the only place this string is constructed — neither the signal engine nor the trade enhancer produce narrative output directly.
 
+**Narrative functions:**
+
+| Function | Purpose |
+|---|---|
+| `generate_confidence_narrative()` | Explains confidence level and key contributing modifiers |
+| `generate_gate_validation_narrative()` | Plain-text summary of which structural gates passed/failed |
+| `generate_scoring_breakdown_narrative()` | Per-pillar score narrative (technical/fundamental/hybrid) |
+| `generate_trade_plan_narrative()` | Full trade plan with entry, SL, targets, RR, and position size. Bearish setups display "Buy Stop (SL)" instead of "Stop Loss" |
+| `generate_rr_explanation_narrative()` | Quality label (Excellent/Good/Marginal) with RR ratio |
+| `build_all_summaries()` | Legacy function. Now correctly reads strategy name from `strat_report["best"]["strategy"]` (camelCase key fixed in Phase 8) |
+
 The FastAPI routes under `/analyze` and `/multibagger_dashboard` render Jinja2 templates that receive the raw JSON signal output and map it into interactive AG Grid dashboards.
 
 ### Template Routing
 
 | Template | Route | Grid Contents |
 |---|---|---|
-| `result.html` | `/` and `/analyze` responses | Per-symbol signal rows with setup, confidence, entry/SL/target, gate pass/fail badges |
-| `mb_result.html` | `/multibagger_dashboard` | Conviction-tiered multibagger picks with fundamental scores, pattern alignment, and holding horizon |
+| `result.html` | `/` and `/analyze` responses | Per-symbol signal rows with setup, confidence, entry/SL/target, gate pass/fail badges. Structural gate panel is null-guarded (`{% if eval_ctx.structural_gates %}`) to prevent crashes on symbols with no gates defined |
+| `mb_result.html` | `/multibagger_dashboard` | Conviction-tiered multibagger picks with fundamental scores, pattern alignment, and holding horizon. Fundamental category scores are rendered via a dynamic `{% for cat, cat_data in ... %}` loop — not hardcoded keys — ensuring new categories are automatically displayed |
 
 ### Confluence Dots
 
@@ -1273,7 +1369,7 @@ Do not use `--reload` in production — it breaks the `multiprocessing.Lock()` a
 | `WARMER_OFFPEAK_INTERVAL_SEC` | `3600` | Warmer cycle interval off-peak |
 | `WARMER_BATCH_TIMEOUT_SEC` | `300` | Max seconds per batch before timeout |
 | `WARMER_RATE_LIMIT_COOLDOWN_SEC` | `300` | Cooldown on yfinance rate limit detection |
-| `SIGNAL_CACHE_WRITE_RETRIES` | `3` | SQLite write retry count |
+| `SIGNAL_CACHE_WRITE_RETRIES` | `5` | SQLite write retry count (jittered exponential backoff) |
 | `SIGNAL_CACHE_RETRY_SLEEP_SEC` | `0.2` | Base sleep between retries |
 | `ENABLE_CACHE_WARMER` | `True` | Toggle background cache warmer |
 | `ENABLE_JSON_ENRICHMENT` | `True` | Toggle async JSON name enrichment |
@@ -1377,19 +1473,35 @@ The conflict penalty calculated in `_validate_patterns` is correctly subtracted 
 
 ### ✅ W46 — Centralized Horizon Constants (RESOLVED)
 
-The dual-semantics issue of `HORIZON_WINDOWS` has been resolved by decoupling into `HORIZON_WINDOWS_SECONDS` (for DB cleanup) and `HORIZON_WINDOWS_BARS` (for pattern detectors). All patterns now reference the centralized `horizon_constants.py` file.
+The dual-semantics issue of `HORIZON_WINDOWS` has been resolved by decoupling into `HORIZON_WINDOWS_SECONDS` (for DB cleanup) and `HORIZON_WINDOWS_BARS` (for pattern detectors). `HORIZON_MA_CONFIG` for crossover MA periods was also centralized to `horizon_constants.py`. All patterns now reference this file.
 
 ### ✅ W50 — Ichimoku `signal_age` Precision (RESOLVED)
 
-The `signal_age` ambiguity for fresh crosses has been fixed using a sentinel return value in `_compute_signal_age`. The system now distinguishes between a truly fresh cross (`age=1`) and a cross detected at the lookback boundary.
+The `signal_age` ambiguity for fresh crosses has been fixed. The system now distinguishes between a truly fresh cross (`age=1`) and a cross detected at the lookback boundary via an `is_boundary_default=True` sentinel in the returned meta dict.
 
 ### ✅ W59 — `FULL_HORIZON_SCORES` Hydration (RESOLVED)
 
-The in-memory score cache is now reliably hydrated by the main process from the results of parallel workers in both single-symbol and bulk warmer paths.
+The in-memory score cache is now reliably hydrated via three paths: after warmer batches (serialized in main process), after single-symbol analysis, and at startup from `signal_cache.horizon_scores` (marked `_stale: True` until the first warmer cycle refreshes them).
 
 ### ✅ SQLite Concurrency (RESOLVED)
 
-Write contention on the `signal_cache` has been mitigated via a combination of `journal_mode=WAL`, a `10,000ms` busy timeout, and the `_write_signal_cache_with_retry` helper in `main.py` which implements jittered exponential backoff.
+Write contention on the `signal_cache` has been eliminated. Phase 9 moved warmer DB writes to the main process (serialized), backed by `journal_mode=WAL`, 10,000ms `busy_timeout`, and jittered exponential backoff (`SIGNAL_CACHE_WRITE_RETRIES=5`).
+
+### ✅ Issue 4 — VCP Stop-Loss Physics (RESOLVED)
+
+`PATTERN_METADATA["minerviniStage2"]` now includes the required `physics` block with `sl_method`, `sl_key`, and `sl_formula`. VCP trades no longer fall through to the ATR-fallback stop calculation.
+
+### ✅ Metadata Completeness Guard (RESOLVED)
+
+`ConfigExtractor.validate_pattern_metadata()` now performs a camelCase-accurate completeness check at startup and raises `ConfigurationError` (hard crash) if any active detector alias is missing from `PATTERN_METADATA`. This prevents silent deployment with broken trade physics.
+
+### ✅ Phase 8 — Presentation Layer (RESOLVED)
+
+- **XSS:** All dynamic narrative content is escaped via `markupsafe.escape()` before rendering.
+- **SHORT Trade % rendering:** Profit percentages for bearish signals are now displayed as positive values with correct green coloring.
+- **API Versioning:** `/api/v1/scores` and `/api/v1/corporate_actions` added with `X-API-Version` response headers.
+- **Template stability:** `structural_gates` Jinja2 access is null-guarded with `{% if eval_ctx.structural_gates %}`.
+- **Multibagger zeros:** Replaced hardcoded category score keys with a dynamic loop.
 
 ---
 
@@ -1444,7 +1556,10 @@ services/
       ├── pattern_state_manager.py
       ├── pattern_velocity_tracking.py
       ├── three_line_strike.py
+      ├── horizon_constants.py            # Centralized: WINDOWS_BARS, WINDOWS_SECONDS, HORIZON_MA_CONFIG
       └── utils.py
+
+  scoring_utils.py                      # Decoupled signal scoring helpers (used by MB pipeline)
 
 templates/
   ├── result.html                     # AG Grid main dashboard
@@ -1471,8 +1586,21 @@ The system does not ship with a test suite but the following isolated components
 - All pattern `detect()` methods — require a DataFrame and indicators dict
 - `confidence_config.CONFIDENCE_CALCULATION_PIPELINE` — readable step-by-step for manual verification
 
+**Phase 9 formal test assertions** (defined in `main_review.md`):
+
+| Test | Validates |
+|---|---|
+| `test_cup_handle_age_candles_is_bars_not_seconds` | W46: `age_candles` uses bar count, not seconds |
+| `test_vcp_sl_is_pattern_low_not_atr` | Issue 4: VCP SL uses contraction low, not ATR×multiplier |
+| `test_ichimoku_no_nameerror_on_fresh_cross` | W50: NameError on `is_fresh_cross` is gone |
+| `test_ichimoku_boundary_flag_set` | W50: `is_boundary_default=True` returned at lookback limit |
+| `test_exponential_backoff_desynchronizes_concurrent_writers` | Issue 6: Jitter prevents retry storms |
+| `test_startup_restores_scores_from_db` | W59: `_stale=True` scores present after lifespan startup |
+| `test_minervini_vcp_metadata_exists` | Issue 4: `PATTERN_METADATA` has `minerviniStage2` with `physics` block |
+| `test_pattern_metadata_has_single_definition_site` | Issue 5: No duplicate `PATTERN_METADATA` outside canonical file |
+
 For integration testing, initialize `ConfigResolver` with `MASTER_CONFIG` for the target horizon and call `build_evaluation_context_only()` with synthetic indicator data to trace the full 8-phase pipeline output.
 
 ---
 
-*Pro Stock Analyzer v15.0 — NSE India — Quantitative Trading System*
+*Pro Stock Analyzer v15.1 — NSE India — Quantitative Trading System*

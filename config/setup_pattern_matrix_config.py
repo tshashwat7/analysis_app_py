@@ -38,7 +38,7 @@ DEFAULT_PHYSICS = {
     "target_ratio": 1.0,
     "duration_multiplier": 1.0,
     "max_stop_pct": 10.0,
-    "horizons_supported": ["intraday", "short_term", "long_term"]
+    "horizons_supported": ("intraday", "short_term", "long_term")
 }
 
 # ============================================================

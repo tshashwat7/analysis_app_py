@@ -162,8 +162,8 @@ GATE_METRIC_REGISTRY = {
         "category": "trend",
         "validation_type": "threshold",
         "description": "Moving Average trend alignment signal (1=Strong Up, 0.5=Developing, -1=Down)",
-        "context_paths": [("indicators", "ma_trend_signal")],  # ✅ P2-1 FIX: Corrected path
-        "optional": True                                      # ✅ P2-1 FIX: Marked as optional
+        "context_paths": [("indicators", "maTrendSignal")],
+        "optional": True
     },
     "prev_supertrend": {
         "type": "text",
@@ -177,8 +177,8 @@ GATE_METRIC_REGISTRY = {
         "category": "trend",
         "validation_type": "threshold",
         "description": "Composite trend strength (0-10)",
-        "context_paths": [("indicators", "trend_strength")],  # ✅ P2-1 FIX: Corrected path
-        "optional": True                                      # ✅ P2-1 FIX: Marked as optional
+        "context_paths": [("indicators", "trendStrength")],
+        "optional": True
     },
     
     "adx": {
@@ -197,8 +197,8 @@ GATE_METRIC_REGISTRY = {
         "category": "momentum",
         "validation_type": "threshold",
         "description": "Composite momentum strength (0-10)",
-        "context_paths": [("indicators", "momentum_strength")],  # ✅ P2-1 FIX: Corrected path
-        "optional": True                                         # ✅ P2-1 FIX: Marked as optional
+        "context_paths": [("indicators", "momentumStrength")],
+        "optional": True
     },
     
     "rsi": {
@@ -240,8 +240,8 @@ GATE_METRIC_REGISTRY = {
         "category": "volatility",
         "validation_type": "threshold",
         "description": "Composite volatility quality (0-10)",
-        "context_paths": [("indicators", "volatility_quality")],  # ✅ P2-1 FIX: Corrected path
-        "optional": True                                          # ✅ P2-1 FIX: Marked as optional
+        "context_paths": [("indicators", "volatilityQuality")],
+        "optional": True
     },
     
     "atrPct": {
@@ -290,7 +290,7 @@ GATE_METRIC_REGISTRY = {
         "category": "structure",
         "validation_type": "threshold",
         "description": "Bollinger Band %B position",
-        "context_paths": [("indicators", "bb_percent_b")],  # ✅ P2-1 FIX: Corrected path
+        "context_paths": [("indicators", "bbpercentb")],  # ✅ P2-1 FIX: Corrected path
         "optional": True                                    # ✅ P2-1 FIX: Marked as optional
     },
     
@@ -299,7 +299,7 @@ GATE_METRIC_REGISTRY = {
         "category": "structure",
         "validation_type": "threshold",
         "description": "Bollinger Band Width",
-        "context_paths": [("indicators", "bb_width")],  # ✅ P2-1 FIX: Corrected path
+        "context_paths": [("indicators", "bbWidth")],  # ✅ P2-1 FIX: Corrected path
         "optional": True                                # ✅ P2-1 FIX: Marked as optional
     },
     
@@ -308,7 +308,7 @@ GATE_METRIC_REGISTRY = {
         "category": "structure",
         "validation_type": "threshold",
         "description": "Distance from 52-week high",
-        "context_paths": [("indicators", "position_52w")],  # ✅ P2-1 FIX: Corrected path
+        "context_paths": [("indicators", "position52w")],  # ✅ P2-1 FIX: Corrected path
         "optional": True                                    # ✅ P2-1 FIX: Marked as optional
     },
     
