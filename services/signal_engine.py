@@ -25,6 +25,8 @@ import logging
 import hashlib
 import json
 from datetime import datetime
+import copy
+
 
 from config.constants import VALUE_WEIGHTS, GROWTH_WEIGHTS, QUALITY_WEIGHTS, MOMENTUM_WEIGHTS
 
@@ -1209,7 +1211,6 @@ def generate_trade_plan(
         
         # ✅ P0-1 FIX (Phase 3): Always deep-copy eval_ctx before enhancement
         # Prevents execution-phase state (e.g. adjustments) from leaking back into the pure evaluation context.
-        import copy
         eval_ctx_for_enhancement = copy.deepcopy(eval_ctx)
         
         # ✅ P3-3 FIX (Phase 3): Add compatibility shim for signature changes

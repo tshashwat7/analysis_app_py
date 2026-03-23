@@ -118,6 +118,7 @@ def update_pattern_performance(
     
     ✅ Uses symbol/pattern/horizon lookup (no need to store record_id).
     """
+    db = None # C23 FIX: guard against NameError if SessionLocal() fails
     try:
         db = SessionLocal()
         record = None
@@ -199,11 +200,13 @@ def update_pattern_performance(
     
     except Exception as e:
         logger.error(f"❌ update_pattern_performance failed: {e}", exc_info=True)
-        db.rollback()
+        if db:
+            db.rollback()
         return False
     
     finally:
-        db.close()
+        if db:
+            db.close()
 
 
 # ============================================================

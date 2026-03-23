@@ -47,13 +47,7 @@ from typing import Dict, Any, Optional, Tuple
 from config.config_utility.logger_config import log_failures
 from config.config_utility.market_utils import get_current_utc
 from services.data_fetch import _get_val, safe_float
-from services.patterns.pattern_state_manager import (
-    get_breakdown_state,
-    save_breakdown_state,
-    update_breakdown_state,
-    delete_breakdown_state,
-    HORIZON_WINDOWS  # ✅ W46
-)
+from services.patterns.horizon_constants import HORIZON_WINDOWS_SECONDS as HORIZON_WINDOWS  # ✅ W46
 
 # ✅ NEW v5.0: Import shared utilities
 from config.config_helpers import get_resolver
@@ -64,7 +58,8 @@ def adjust_targets_for_market_conditions(
     risk_data: Dict[str, Any],
     indicators: Dict[str, Any],
     fundamentals: Dict[str, Any],
-    horizon: str
+    horizon: str,
+    extractor: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     STATELESS market adjustment of resolver's pattern-based targets.
@@ -94,6 +89,10 @@ def adjust_targets_for_market_conditions(
         
         if not all([pattern_entry, pattern_sl, pattern_targets]):
             return {"adjusted": False, "reason": "Missing base values"}
+        
+        # ✅ P2-4 GUARD: Avoid LONG misclassification for missing SL
+        if not pattern_sl:
+            return {"adjusted": False, "reason": "Missing SL value in risk data"}
         
         pattern_t1 = safe_float(pattern_targets[0]) if len(pattern_targets) > 0 else None
         pattern_t2 = safe_float(pattern_targets[1]) if len(pattern_targets) > 1 else None
@@ -126,15 +125,21 @@ def adjust_targets_for_market_conditions(
             atr_pct = 2.0
         # === Fetch Config-Driven Policy Constants ===
         # Replaces module-level hardcodes (W37)
-        resolver = get_resolver(horizon=horizon)
-        risk_management_cfg = resolver.get_config().get("global", {}).get("risk_management", {})
+        if extractor is None:
+            resolver = get_resolver(horizon=horizon)
+            extractor = resolver.extractor
+        
+        risk_management_cfg = extractor.get_risk_management_config()
         
         # Pull directly from config with simple defaults mirroring master_config
         vol_buffer_factors = risk_management_cfg.get("volatility_buffer_factors", {})
         min_sl_atr = risk_management_cfg.get("min_sl_atr_multiples", {})
         targ_adj_factors = risk_management_cfg.get("target_adjustment_factors", {})
+        
+        # Resolve NameError for volatility_regime
+        volatility_regime = _classify_volatility(atr_pct)
+        
         min_rr_by_trend = risk_management_cfg.get("min_rr_by_trend", {})
-        base_spread_pct_dict = risk_management_cfg.get("base_spread_pct", {})
         
         # === Volatility-Adjusted SL ===
         vol_buffer = vol_buffer_factors.get(volatility_regime, 0.25)
@@ -194,17 +199,17 @@ def adjust_targets_for_market_conditions(
             target_source = "market_adjusted"
         
         # === Spread Cost ===
-        base_spread = BASE_SPREAD_PCT.get(horizon, 0.001)
+        # Resolve NameError for BASE_SPREAD_PCT by removing it (calculate_adaptive_spread_cost handles it)
         spread_multiplier = 2.0 if atr_pct > 5.0 else (1.5 if atr_pct > 3.0 else 1.0)
         market_cap_data = fundamentals.get("marketCap", {})
         mc_raw = market_cap_data.get("raw", 0) if isinstance(market_cap_data, dict) else (market_cap_data or 0)
         market_cap_crores = mc_raw / 10000000
-        
         spread_cost = calculate_adaptive_spread_cost(
             current_price=current_price,
             rvol=_get_val(indicators, "rvol", 1.0),
             market_cap=market_cap_crores,
-            horizon=horizon
+            horizon=horizon,
+            extractor=extractor
         )
         # ✅ NEW: Spread Cost Cap (Issue 3)
         # Cap spread at 50% of potential T1 reward to prevent RR distortion
@@ -674,12 +679,19 @@ def enhance_execution_context(
                 current_hash = hashlib.md5(json.dumps(hash_payload, sort_keys=True, default=str).encode()).hexdigest()
                 
                 if current_hash != stored_hash:
-                    exec_ctx["stale_context"] = True
-                    exec_ctx["warning"] = "Market moved since evaluation"
-                    logger.warning(
-                        f"[{symbol}] STALE CONTEXT DETECTED | "
-                        f"Eval Hash: {stored_hash} != execution data hash."
-                    )
+                    # ✅ P2-2 FIX: Threshold check to filter price noise
+                    _stored_px = _get_val(eval_ctx.get("indicators", {}), "price") or 0
+                    _curr_px = _get_val(indicators, "price") or 0
+                    _px_moved = abs(_curr_px - _stored_px) / _stored_px > 0.002 if _stored_px > 0 else True
+                    
+                    if _px_moved:
+                        exec_ctx["stale_context"] = True
+                        exec_ctx["warning"] = "Market moved significantly since evaluation"
+                        logger.warning(f"[{symbol}] Stale context (hash mismatch & >0.2% price move)")
+                    else:
+                        logger.debug(f"[{symbol}] Context hash mismatch but price stable (<0.2% change).")
+                else:
+                    logger.debug(f"[{symbol}] Context hash verified.")
         except Exception as e:
             logger.error(f"[{symbol}] Context hash verification failed: {e}")
 
@@ -752,7 +764,8 @@ def enhance_execution_context(
                     "breakdown": []
                 })
                 if not _adj.get("expiry_applied"):
-                    penalty = risk_management_cfg.get("expiry_penalty", -20)
+                    risk_cfg = extractor.get_risk_management_config()
+                    penalty = risk_cfg.get("expiry_penalty", -20)
                     _adj["total_penalty"] += penalty
                     _adj["breakdown"].append(
                         f"Pattern expired ({expiration['pattern']}): {penalty}%"
@@ -781,17 +794,15 @@ def enhance_execution_context(
             )
 
             if invalidation["invalidated"]:
-                exec_ctx["pattern_invalidation"] = invalidation
-
-                # Mark execution as blocked
-                if "can_execute" not in exec_ctx:
-                    exec_ctx["can_execute"] = {"can_execute": False, "failures": []}
-
-                exec_ctx["can_execute"]["can_execute"] = False
-                exec_ctx["can_execute"]["is_hard_blocked"] = True
-                exec_ctx["can_execute"]["failures"].append(
-                    f"Pattern invalidation: {invalidation['reason']}"
-                )
+                if not exec_ctx.get("_invalidation_applied"):  # P1-2 idempotency guard
+                    exec_ctx["pattern_invalidation"] = invalidation
+                    exec_ctx.setdefault("can_execute", {"can_execute": False, "failures": []})
+                    exec_ctx["can_execute"]["can_execute"] = False
+                    exec_ctx["can_execute"]["is_hard_blocked"] = True
+                    exec_ctx["can_execute"]["failures"].append(
+                        f"Pattern invalidation: {invalidation['reason']}"
+                    )
+                    exec_ctx["_invalidation_applied"] = True
 
                 logger.error(
                     f"[{symbol}] ❌ Pattern invalidated: {invalidation['reason']} "
@@ -859,14 +870,21 @@ def enhance_execution_context(
         DIRECTION_NORM = {
             "BULLISH": "LONG",
             "BEARISH": "SHORT",
-            "NEUTRAL": "NEUTRAL"
+            "NEUTRAL": "NEUTRAL",
+            "LONG": "LONG",    # Forward compatibility
+            "SHORT": "SHORT"
         }
-        eval_dir_norm = DIRECTION_NORM.get(eval_direction, eval_direction)
+        eval_dir_norm = DIRECTION_NORM.get(eval_direction, "UNKNOWN")
+        
+        # ✅ P1-3 FIX: Handle NEUTRAL conflicts explicitly
+        if eval_dir_norm == "UNKNOWN":
+             logger.error(f"[{symbol}] Unrecognized eval direction: {eval_direction}")
 
         if (
             eval_dir_norm != execution_direction
             and execution_direction != "NEUTRAL"
             and eval_dir_norm != "NEUTRAL"
+            and eval_dir_norm != "UNKNOWN"
         ):
             exec_ctx["direction_conflict"] = True
             exec_ctx.setdefault("can_execute", {})
@@ -887,12 +905,12 @@ def enhance_execution_context(
             f"[{symbol}] enhance_execution_context failed: {e}", exc_info=True
         )
         return exec_ctx, eval_ctx
-    
 def calculate_adaptive_spread_cost(
     current_price: float,
     rvol: float,
     market_cap: float,
-    horizon: str
+    horizon: str,
+    extractor: Optional[Any] = None
 ) -> float:
     """
     Calculate spread cost based on stock liquidity and horizon.
@@ -906,28 +924,48 @@ def calculate_adaptive_spread_cost(
     Returns:
         Spread cost in rupees
     """
+    # === Config-Driven Thresholds (W37) ===
+    if extractor is None:
+        from config.config_helpers import get_resolver
+        resolver = get_resolver(horizon)
+        extractor = resolver.extractor
+    
+    risk_mgmt = extractor.get_risk_management_config()
+    spread_cfg = risk_mgmt.get("adaptive_spread", {})
+    
     # Base spread by market cap
-    if market_cap > 50000:  # Large cap (₹50,000+ crore)
-        base_spread_pct = 0.05
-    elif market_cap > 10000:  # Mid cap (₹10,000+ crore)
-        base_spread_pct = 0.15
-    else:  # Small cap
-        base_spread_pct = 0.25
+    # Config format: {"large": {"threshold": 50000, "pct": 0.05}, ...}
+    mc_cfg = spread_cfg.get("market_cap_tiers", {})
+    large_cap = mc_cfg.get("large", {"threshold": 50000, "pct": 0.05})
+    mid_cap = mc_cfg.get("mid", {"threshold": 10000, "pct": 0.15})
+    small_cap_pct = mc_cfg.get("small", {"pct": 0.25})["pct"]
+
+    if market_cap > large_cap["threshold"]:
+        base_spread_pct = large_cap["pct"]
+    elif market_cap > mid_cap["threshold"]:
+        base_spread_pct = mid_cap["pct"]
+    else:
+        base_spread_pct = small_cap_pct
     
     # Adjust for volume surge
-    if rvol >= 3.0:
-        volume_factor = 0.7  # 30% discount for high volume
-    elif rvol >= 1.5:
-        volume_factor = 1.0  # No adjustment
+    vol_cfg = spread_cfg.get("volume_adjustments", {})
+    high_vol = vol_cfg.get("high", {"threshold": 3.0, "factor": 0.7})
+    norm_vol = vol_cfg.get("normal", {"threshold": 1.5, "factor": 1.0})
+    low_vol_factor = vol_cfg.get("low", {"factor": 1.3})["factor"]
+
+    if rvol >= high_vol["threshold"]:
+        volume_factor = high_vol["factor"]
+    elif rvol >= norm_vol["threshold"]:
+        volume_factor = norm_vol["factor"]
     else:
-        volume_factor = 1.3  # 30% premium for low volume
+        volume_factor = low_vol_factor
     
     # Adjust for horizon
-    horizon_factors = {
-        "intraday": 1.0,      # Full spread for quick trades
-        "short_term": 0.8,    # Slightly better for swing
-        "long_term": 0.6      # Much better for position
-    }
+    horizon_factors = spread_cfg.get("horizon_factors", {
+        "intraday": 1.0,
+        "short_term": 0.8,
+        "long_term": 0.6
+    })
     horizon_factor = horizon_factors.get(horizon, 1.0)
     
     # Calculate final spread
@@ -1045,12 +1083,12 @@ def extract_pattern_execution_metadata(
 # 7. ✅ NEW: PATTERN TIMELINE CALCULATION (Shared Utility)
 # ==============================================================================
 
-@log_failures(return_on_error={}, critical=False)
 def calculate_pattern_timeline(
     pattern_meta: Dict[str, Any],
     risk: Dict[str, Any],
     trend: Dict[str, Any],
-    horizon: str
+    horizon: str,
+    exec_ctx: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
     ✅ UNIFIED: Calculate pattern-based timeline estimation.
@@ -1341,7 +1379,8 @@ def validate_execution_rr(
     
     # Calculate effective min threshold
     effective_min_t1 = min_t1
-    min_rr_by_trend = rr_gates.get("min_rr_by_trend", {})
+    risk_mgmt_cfg = extractor.get_risk_management_config()
+    min_rr_by_trend = risk_mgmt_cfg.get("min_rr_by_trend", {})
     if not min_rr_by_trend:
         # Emergency fallback if config is missing keys
         min_rr_by_trend = {
