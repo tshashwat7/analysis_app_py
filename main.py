@@ -6,13 +6,15 @@ import pytz
 import concurrent.futures
 import multiprocessing
 from typing import List, Tuple, Dict, Any, Optional
-from fastapi import FastAPI, Request, Form, Query
+from fastapi import FastAPI, Request, Form, Query, Security, HTTPException, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.security.api_key import APIKeyHeader
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from filelock import FileLock
 import random
+import re
 import pandas as pd
 from config.config_utility.logger_config import setup_logger
 from services.indicator_cache import compute_indicators_cached
@@ -69,6 +71,25 @@ WARMER_RATE_LIMIT_COOLDOWN_SEC = int(os.getenv("WARMER_RATE_LIMIT_COOLDOWN_SEC",
 CORP_ACTIONS_STARTUP_TIMEOUT_SEC = int(os.getenv("CORP_ACTIONS_STARTUP_TIMEOUT_SEC", "120"))
 IST = pytz.timezone("Asia/Kolkata")
 
+# --- SECURITY ---
+API_KEY = os.getenv("SIGNAL_API_KEY", "pro-signal-v15-secret")  # Default for dev
+api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
+
+async def get_api_key(header_key: str = Security(api_key_header)):
+    if header_key == API_KEY:
+        return header_key
+    raise HTTPException(status_code=403, detail="Invalid API Key")
+
+def sanitize_index_name(name: str) -> str:
+    """Fix P3-1: Prevent path traversal by allowing only alphanumeric and underscores."""
+    if not name: return "nifty50"
+    return re.sub(r'[^a-zA-Z0-9_]', '', name)
+
+def _validate_symbol(symbol: str):
+    """✅ P0: Ensure symbol matches expected format to prevent NameError and injection."""
+    if not symbol or not re.match(r'^[A-Z0-9.\-&]{1,30}$', symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+
 # --- CACHE WARMER HELPER ---
 def run_analysis_for_cache(symbol: str):
     try:
@@ -83,8 +104,11 @@ def run_analysis_for_cache(symbol: str):
 API_EXECUTOR = None
 COMPUTE_EXECUTOR = None
 BACKGROUND_EXECUTOR = None
-_SHUTDOWN_IN_PROGRESS = False
 _SHUTDOWN_LOCK = threading.Lock()
+
+# ✅ FIX P1-6: In-flight request deduplication
+_IN_FLIGHT_ANALYSES = set()
+_IN_FLIGHT_LOCK = threading.Lock()
 
 # Lazy Loaded Stock Lists (P1-7: Moved loading logic to index_utils)
 from services.index_utils import (
@@ -248,6 +272,16 @@ async def periodic_warmer():
                     # We can't directly cancel the underlying thread tasks, but we should continue and cool down
                     await asyncio.sleep(WARMER_RATE_LIMIT_COOLDOWN_SEC)
                     # Move to next batch
+                    continue
+                except concurrent.futures.process.BrokenProcessPool as e:
+                    # ✅ FIX P1-3: Recover from crashed compute worker
+                    logger.error(f"[WARMER] COMPUTE_EXECUTOR broken: {e}. Recreating...")
+                    global COMPUTE_EXECUTOR
+                    if COMPUTE_EXECUTOR:
+                        COMPUTE_EXECUTOR.shutdown(wait=False)
+                    safe_cpu_count = min(4, os.cpu_count() or 4)
+                    COMPUTE_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=safe_cpu_count)
+                    await asyncio.sleep(5)
                     continue
                 except Exception as e:
                     logger.error(f"[WARMER] Error: {e}")
@@ -541,8 +575,12 @@ _LAST_CORP_FETCH_TIME = 0.0        # epoch timestamp of last successful corp act
 _CORP_FETCH_COOLDOWN_SEC = 3600    # 1 hour cooldown between fetches
 CACHE_TTL = 60 * 60
 # Phase 6 P0-1: Use FileLock for cross-process synchronization
-CACHE_LOCK = FileLock("cache/global_json.lock")
-SIGNAL_CACHE_WRITE_RETRIES = int(os.getenv("SIGNAL_CACHE_WRITE_RETRIES", "3"))
+# Ensures JSON enrichment is safe across parallel workers
+CACHE_LOCK_FILE = "cache/global_json.lock"
+os.makedirs(os.path.dirname(CACHE_LOCK_FILE), exist_ok=True)
+CACHE_LOCK = FileLock(CACHE_LOCK_FILE)
+
+SIGNAL_CACHE_WRITE_RETRIES = int(os.getenv("SIGNAL_CACHE_WRITE_RETRIES", "5"))
 SIGNAL_CACHE_RETRY_SLEEP_SEC = float(os.getenv("SIGNAL_CACHE_RETRY_SLEEP_SEC", "0.2"))
 
 # (Moved index loading helpers to services/index_utils.py)
@@ -604,46 +642,29 @@ def _is_retryable_sqlite_error(exc: Exception) -> bool:
     return "database is locked" in msg or "database table is locked" in msg or "busy" in msg
 
 
+# ✅ Phase 6 P0-2: Implement exponential backoff with jitter (delegated to db.py decorator)
+from services.db import backoff_retry_db
+
+@backoff_retry_db(retries=SIGNAL_CACHE_WRITE_RETRIES, base_delay=SIGNAL_CACHE_RETRY_SLEEP_SEC)
 def _write_signal_cache_with_retry(symbol: str, writer_fn):
     """
     Execute a SignalCache write with a fresh DB session per attempt.
-    This is safer under SQLite write contention than retrying a failed session.
     """
-    last_exc = None
-    for attempt in range(1, SIGNAL_CACHE_WRITE_RETRIES + 1):
-        db: Session = SessionLocal()
-        try:
-            entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
-            if not entry:
-                entry = SignalCache(symbol=symbol)
-                db.add(entry)
+    db: Session = SessionLocal()
+    try:
+        entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
+        if not entry:
+            entry = SignalCache(symbol=symbol)
+            db.add(entry)
 
-            writer_fn(db, entry)
-            db.commit()
-            return True
-        except OperationalError as e:
-            db.rollback()
-            last_exc = e
-            if attempt >= SIGNAL_CACHE_WRITE_RETRIES or not _is_retryable_sqlite_error(e):
-                raise
-            # Phase 6 P0-2: Exponential backoff with jitter
-            base_sleep = SIGNAL_CACHE_RETRY_SLEEP_SEC * (2 ** (attempt - 1))
-            jitter = random.uniform(0, base_sleep * 0.5)
-            sleep_for = base_sleep + jitter
-            logger.warning(
-                "[%s] Signal cache write retry %d/%d after SQLite contention: %s",
-                symbol, attempt, SIGNAL_CACHE_WRITE_RETRIES, e,
-            )
-            time.sleep(sleep_for)
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
-    if last_exc:
-        raise last_exc
-    return False
+        writer_fn(db, entry)
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def set_cached(symbol: str, value: Dict[str, Any]):
@@ -955,9 +976,9 @@ def run_analysis(
         # =====================================================================
         if "full_report" in analysis_data:
             # ✅ C30 FIX: Always save to cache, even on ERROR (Phase 8 P2-6 cleaned)
-            db = None
+            # ✅ FIX P1-1: Removed redundant SessionLocal hold.
+            # Functions now manage their own sessions via _write_signal_cache_with_retry.
             try:
-                db = SessionLocal()
                 # If the trade plan had an error, we mark it specially in DB
                 if analysis_data.get("trade_recommendation", {}).get("status") != "ERROR":
                     _save_analysis_to_db(
@@ -969,7 +990,6 @@ def run_analysis(
                     )
                 else:
                     _mark_analysis_error_in_db(
-                        db,  # Pass the session
                         symbol,
                         analysis_data,
                         index_name,
@@ -979,8 +999,6 @@ def run_analysis(
                     logger.warning(f"[{symbol}] Persisted ERROR state to cache.")
             except Exception as db_err:
                 logger.error(f"[{symbol}] Cache Persistence Failed: {db_err}")
-            finally:
-                if db: db.close()
         
         # =====================================================================
         # STEP 10: ENRICHMENT METADATA
@@ -1108,7 +1126,6 @@ def _save_analysis_to_db(
 
 
 def _mark_analysis_error_in_db(
-    db: Session,  # ✅ Added Session
     symbol: str,
     data: Dict[str, Any],
     index_name: str,
@@ -1170,174 +1187,8 @@ def _mark_analysis_error_in_db(
 
 # --- ENDPOINTS ---
 
-@app.post("/quick_scores")
-async def quick_scores(payload: QuickScoresRequest):
-    # Lazy Load Stock List
-    _ensure_stocks_loaded()
-    
-    symbols = [s.strip().upper() for s in payload.symbols if s.strip()]
-    index_name = payload.index_name
-    results = {}
-    to_fetch = []
-
-    for s in symbols:
-        c = get_cached(s)
-        if c: results[s] = {**c, "cached": True}
-        else: to_fetch.append(s)
-
-    if not to_fetch: return results
-
-    # P1-1: Pre-warm Parquet cache for to_fetch symbols (Non-blocking)
-    await asyncio.to_thread(prewarm_parquet_cache, to_fetch, ["intraday", "short_term", "long_term"])
-
-    # Bug 2 Fix: Open session before loop and ensure closure
-    from config.multibagger.mb_db_model import MultibaggerCandidate
-    mb_db = SessionLocal()
-    try:
-        loop = asyncio.get_running_loop()
-        calc_tasks = [loop.run_in_executor(get_compute_executor(), run_full_analysis, s, index_name) for s in to_fetch]
-        analyzed_data_list = await asyncio.gather(*calc_tasks)
-
-        for analysis_data in analyzed_data_list:
-            sym = analysis_data.get("symbol")
-            if not sym: continue
-            # Extract & Strip Enrichment Data
-            enrich_payload = analysis_data.pop("_enrichment", None)
-            
-            # Fire & Forget Background Task
-            if enrich_payload:
-                idx, s, n = enrich_payload
-                # Runs sync function in thread pool. No await needed.
-                loop.run_in_executor(get_background_executor(), enrich_json_sync, idx, s, n)
-            try:
-                full_rep = analysis_data.get("full_report", {})
-                profiles = full_rep.get("profiles", {})
-                best_profile = profiles.get(full_rep.get("best_fit", "short_term"), {})
-                trade_plan = analysis_data.get("trade_recommendation", {})
-                indicators = analysis_data.get("indicators", {})
-                final_score = best_profile.get("final_score", 0)
-                confidence = trade_plan.get("final_confidence", 0)
-                signal_str = trade_plan.get("signal", "N/A")
-                error_status = analysis_data.get("error_details", [])
-                
-                # trade_signal_clean is computed later, so we determine it here locally or use the existing logic if already computed
-                trade_signal_local = trade_plan.get("trade_signal", "HOLD")
-                
-                bull_score = 0
-                if trade_signal_local == "SELL":
-                    bull_score = 5   # confirmed short — lowest possible
-                elif "BREAKDOWN" in signal_str or "BEAR" in signal_str:
-                    bull_score = 10
-                elif "SQUEEZE" in signal_str:  bull_score = 95
-                elif "TREND" in signal_str:    bull_score = 85
-                elif "DIP" in signal_str:      bull_score = 75
-                elif "HOLD" in signal_str:     bull_score = 50
-                else:                           bull_score = 20
-
-                rr = trade_plan.get("rr_ratio")
-                entry_val = trade_plan.get("entry")
-                sl_val = trade_plan.get("stop_loss")
-                current_price = indicators.get("price", {}).get("value") or entry_val
-                sl_dist_str = "-"
-                if current_price and sl_val and current_price > 0:
-                    dist = abs(current_price - sl_val) / current_price * 100
-                    sl_dist_str = f"{dist:.1f}%"
-
-                # ✅ FIX: strategy_report = profile_report.strategy
-                strat_data = analysis_data.get("strategy_report", {})
-                strat_summ = strat_data.get("summary", {})
-                best_strat = (
-                    strat_summ.get("best_strategy")
-                    or (strat_data.get("best") or {}).get("strategy")
-                    or strat_data.get("primary")
-                    or "N/A"
-                )
-                ranked = strat_data.get("ranked", [])
-                all_fits = ", ".join(
-                    c["name"] for c in ranked
-                    if c.get("weighted_score", 0) >= c.get("fit_threshold", 50)
-                )
-
-                pattern_keys = ["goldenCross", "doubleTopBottom", "cupHandle", "darvasBox", 
-                                "flagPennant", "minerviniStage2", "bollingerSqueeze", "threeLineStrike", "ichimokuSignals"]
-                top_pattern_name = ""
-                top_pattern_score = 0
-                for pk in pattern_keys:
-                    p_obj = indicators.get(pk)
-                    if p_obj and isinstance(p_obj, dict) and p_obj.get("found"):
-                        s = p_obj.get("score", 0)
-                        if s > top_pattern_score:
-                            top_pattern_score = s
-                            top_pattern_name = pk.replace("_", " ").title()
-
-                name_map = {"Bollinger Squeeze": "Squeeze", "Minervini Stage2": "VCP", "Three Line Strike": "3-Strike", 
-                            "Golden Cross": "Gold Cross", "Double Top Bottom": "Double T/B", "Cup Handle": "Cup", 
-                            "Darvas Box": "Darvas", "Flag Pennant": "Flag", "Ichimoku Signals": "Ichimoku"}
-                top_pattern_name = name_map.get(top_pattern_name, top_pattern_name)
-
-                trade_signal_clean = trade_plan.get("trade_signal") or (
-                    "SELL" if any(k in signal_str for k in ("SELL", "SHORT", "BREAKDOWN", "BEAR"))
-                    else "BUY"  if any(k in signal_str for k in ("BUY", "SQUEEZE", "TREND", "DIP"))
-                    else "HOLD"
-                )
-
-                t1_val = (trade_plan.get("targets") or {}).get("t1")
-                t2_val = (trade_plan.get("targets") or {}).get("t2")
-                profit_pct = None
-                if entry_val and t1_val and entry_val > 0:
-                    if trade_signal_clean == "SELL":
-                        profit_pct = round((entry_val - t1_val) / entry_val * 100, 2)
-                    else:
-                        profit_pct = round((t1_val - entry_val) / entry_val * 100, 2)
-
-                def safe_val(v):
-                    if v is None: return None
-                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return None
-                    return v
-
-                flat_output = {
-                    "symbol": sym,
-                    "score": int(final_score * 10) if final_score else 0,
-                    "confidence": confidence,
-                    "recommendation": (best_profile.get("profile_signal", best_profile.get("category", "HOLD")) + "--" + full_rep.get("best_fit", "")),
-                    "bull_score": bull_score,
-                    "direction": trade_plan.get("metadata", {}).get("direction", "bullish"),
-                    "bull_signal": trade_signal_clean,
-                    "profile_category": best_profile.get("profile_signal", best_profile.get("category", "HOLD")),
-                    "setup_signal": signal_str.replace("_", " "), 
-                    "rr_ratio": rr if rr else 0,
-                    "entry_trigger": entry_val if entry_val else 0,
-                    "t1": safe_val(t1_val),
-                    "t2": safe_val(t2_val),
-                    "profit_pct": safe_val(profit_pct),
-                    "sl_dist": sl_dist_str,
-                    "best_strategy": best_strat,
-                    "fitting_strategies": all_fits,
-                    "best_fit_horizon": full_rep.get("best_fit", ""),
-                    "intra_score": safe_val(profiles.get("intraday", {}).get("final_score")),
-                    "short_score": safe_val(profiles.get("short_term", {}).get("final_score")),
-                    "long_score": safe_val(profiles.get("long_term", {}).get("final_score")),
-                    "multi_score": safe_val(
-                        profiles.get("multibagger", {}).get("final_score") or (
-                            mb_db.query(MultibaggerCandidate.final_score)
-                              .filter(MultibaggerCandidate.symbol == sym, MultibaggerCandidate.gatekeeper_passed == True)
-                              .scalar()
-                        )
-                    ),
-                    "macro_index_name": index_name.upper(),
-                    "top_pattern": top_pattern_name,
-                    "error_details": "; ".join(error_status) if error_status else "",
-                }
-                results[sym] = flat_output
-            except Exception as e:
-                logger.error(f"[{sym}] Error flattening: {e}")
-                results[sym] = {"symbol": sym, "recommendation": "Error"}
-    finally:
-        mb_db.close()
-    return results
-
 @app.get("/load_index/{index_name}")
-async def load_index_endpoint(index_name: str):
+async def load_index_endpoint(index_name: str, api_key: str = Depends(get_api_key)):
     stocks = load_or_create_index(index_name)
     if not stocks and "nifty" in index_name.lower():
         stocks = [("RELIANCE.NS", "Reliance Industries"), ("TCS.NS", "TCS")]
@@ -1358,7 +1209,7 @@ async def load_index_endpoint(index_name: str):
         "corp_actions_ready": corp_ready,
     }
 
-async def analyze_multibagger(request: Request, symbol: str, index: str = "nifty50"):
+async def analyze_multibagger(request: Request, symbol: str, index: str = "nifty50", api_key: str = Depends(get_api_key)):
     """
     Specialized route for Multibagger Thesis.
     Uses the MB-specific evaluator and renders the dedicated dashboard.
@@ -1419,11 +1270,13 @@ async def analyze_multibagger(request: Request, symbol: str, index: str = "nifty
         
     except Exception as e:
         logger.exception(f"Error in analyze_multibagger for {symbol}: {e}")
+        # ✅ P2-4: Sanitize error disclosure
+        error_msg = "A technical error occurred during multibagger analysis."
         return templates.TemplateResponse("result.html", {
             "request": request,
             "symbol": symbol,
             "current_index": index,
-            "error": f"Multibagger Analysis Error: {str(e)}",
+            "error": error_msg,
             "full_report": {"profiles": {}},
             "profile_report": {},
             "indicators": {},
@@ -1442,16 +1295,29 @@ async def analyze_common(
     request: Request,
     symbol: str,
     index: str = "nifty50",
-    horizon: str = None
+    horizon: str = None,
+    api_key: str = Depends(get_api_key)
 ):
     """
     ✅ FULLY REVISED: Proper separation of concerns with smart routing.
-    
-    Routes:
-    - horizon=None     → mode="full" (compute all 4, pick best)
-    - horizon=specific → mode="single" (compute only 1)
     """
+    # ✅ P2-3/P3-1: Full sanitization
+    symbol = symbol.strip().upper()
+    _validate_symbol(symbol)
+    index = sanitize_index_name(index)
     _ensure_stocks_loaded()
+
+    # ✅ P1-6: Deduplication logic
+    with _IN_FLIGHT_LOCK:
+        if symbol in _IN_FLIGHT_ANALYSES:
+             return templates.TemplateResponse("result.html", {
+                "request": request, 
+                "symbol": symbol,
+                "error": "Analysis already in progress for this symbol. Please wait.",
+                "all_horizon_scores": FULL_HORIZON_SCORES.get(symbol, {}),
+                "full_report": {"profiles": {}},
+             })
+        _IN_FLIGHT_ANALYSES.add(symbol)
     
     try:
         loop = asyncio.get_running_loop()
@@ -1724,11 +1590,13 @@ async def analyze_common(
         
     except Exception as e:
         logger.exception(f"Error in analyze_common for {symbol}: {e}")
+        # ✅ P2-4: Sanitize error disclosure
+        error_msg = "An error occurred while analyzing the requested symbol."
         return templates.TemplateResponse("result.html", {
             "request": request,
             "symbol": symbol,
             "current_index": index,
-            "error": str(e),
+            "error": error_msg,
             "full_report": {"profiles": {}},
             "profile_report": {},
             "indicators": {},
@@ -1742,22 +1610,66 @@ async def analyze_common(
             "all_horizon_scores": {},
             "trade_direction": "bullish",
         })
+    finally:
+        # ✅ FIX: Properly paired finally block
+        with _IN_FLIGHT_LOCK:
+            if symbol in _IN_FLIGHT_ANALYSES:
+                _IN_FLIGHT_ANALYSES.remove(symbol)
 
 @app.post("/analyze", response_class=HTMLResponse)
-async def analyze_post(request: Request, symbol: str = Form(...), index: str = Form("nifty50")):
-    return await analyze_common(request, symbol.strip().upper(), index)
+async def analyze_post(request: Request, symbol: str = Form(...), index: str = Form("nifty50"), api_key: str = Depends(get_api_key)):
+    return await analyze_common(request, symbol.strip().upper(), index, api_key=api_key)
+
+@app.post("/quick_scores")
+async def get_quick_scores(req: QuickScoresRequest, api_key: str = Depends(get_api_key)):
+    """
+    Returns the scores for multiple tickers.
+    ✅ P0-4: Hydrates FULL_HORIZON_SCORES from Signal Cache if missing.
+    """
+    symbols = [s.strip().upper() for s in req.symbols]
+    index_name = sanitize_index_name(req.index_name)
+    
+    scores = {}
+    for sym in symbols:
+        # 1. Check in-memory cache first
+        if sym in FULL_HORIZON_SCORES and FULL_HORIZON_SCORES[sym]:
+            scores[sym] = FULL_HORIZON_SCORES[sym]
+            continue
+            
+        # 2. ✅ P0-4: Fallback to DB to hydrate memory
+        db_data = get_cached(sym)
+        if db_data:
+             h_scores = {
+                 "intra_score": db_data.get("intra_score"),
+                 "short_score": db_data.get("short_score"),
+                 "long_score": db_data.get("long_score"),
+                 "multi_score": db_data.get("multi_score")
+             }
+             h_scores = {k: v for k, v in h_scores.items() if v is not None}
+             if h_scores:
+                 FULL_HORIZON_SCORES[sym] = h_scores
+                 scores[sym] = h_scores
+                 continue
+                 
+        scores[sym] = {}
+    return scores
+
+@app.get("/corporate_actions_api", response_class=JSONResponse)
+async def corporate_actions_api_secured(tickers: str = Query(...), api_key: str = Depends(get_api_key)):
+    ticker_list = [t.strip().upper() for t in tickers.split(",")]
+    return get_corporate_actions(ticker_list)
 
 @app.get("/multibagger_dashboard", response_class=HTMLResponse)
-async def multibagger_dashboard(request: Request):
+async def multibagger_dashboard(request: Request, api_key: str = Depends(get_api_key)):
     """Render the Multibagger Picks dashboard."""
     return templates.TemplateResponse("mb_picks.html", {"request": request})
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+async def home(request: Request, api_key: str = Depends(get_api_key)):
+    return templates.TemplateResponse("index.html", {"request": request, "api_key": api_key})
 
 @app.post("/corporate_action_summary")
-async def corporate_action_summary(payload: CorpActionsRequest):
+async def corporate_action_summary(payload: CorpActionsRequest, api_key: str = Depends(get_api_key)):
     """
     Returns a flat {ticker: display_string} map for the given tickers.
     Reads from pre-built disk cache — instant response, no live fetches.
@@ -1776,7 +1688,7 @@ async def corporate_action_summary(payload: CorpActionsRequest):
         return JSONResponse({})
 
 @app.get("/api/corp_actions_status")
-async def corp_actions_status():
+async def corp_actions_status(api_key: str = Depends(get_api_key)):
     """
     Returns readiness state of the corp actions summary cache.
     """
@@ -1792,8 +1704,14 @@ async def corp_actions_status():
     return JSONResponse({"ready": ready, "count": count})
 
 
+@app.get("/health")
+async def health_check():
+    """✅ P2-1: Standard health endpoint for infrastructure monitoring."""
+    return {"status": "ok", "timestamp": get_current_utc().isoformat()}
+
+
 @app.post("/api/fetch_corp_actions")
-async def fetch_corp_actions_endpoint():
+async def fetch_corp_actions_endpoint(api_key: str = Depends(get_api_key)):
     """
     On-demand fetch of upcoming corp actions (split, bonus, dividend).
     Runs on BACKGROUND_EXECUTOR (ThreadPoolExecutor). 1-hour cooldown.
@@ -1837,7 +1755,7 @@ async def fetch_corp_actions_endpoint():
 
 
 @app.get("/corporate_actions")
-async def corporate_actions(ticker: str):
+async def corporate_actions(ticker: str, api_key: str = Depends(get_api_key)):
     loop = asyncio.get_running_loop()
     def _fetch():
         past = get_corporate_actions([ticker], mode="past", lookback_days=365)
@@ -1858,16 +1776,16 @@ async def corporate_actions(ticker: str):
     return JSONResponse(flat)
 
 @app.get("/api/macro_metrics")
-async def macro_metrics_api():
+async def macro_metrics_api(api_key: str = Depends(get_api_key)):
     try:
         metrics = get_macro_metrics()
         return JSONResponse(metrics)
     except Exception as e:
         logger.error(f"Error fetching macro metrics: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Failed to fetch macro metrics"}, status_code=500)
 
 @app.post("/api/paper_trade/add")
-async def add_paper_trade(req: PaperTradeRequest):
+async def add_paper_trade(req: PaperTradeRequest, api_key: str = Depends(get_api_key)):
     db = SessionLocal()
     try:
         trade = PaperTrade(
@@ -1886,7 +1804,8 @@ async def add_paper_trade(req: PaperTradeRequest):
         return {"status": "success", "id": trade.id}
     except Exception as e:
         db.rollback()
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.error(f"Failed to add paper trade: {e}")
+        return JSONResponse({"error": "Failed to add paper trade"}, status_code=500)
     finally:
         db.close()
 
@@ -1895,7 +1814,7 @@ class PaperTradeRemoveRequest(BaseModel):
     horizon: str
 
 @app.post("/api/paper_trade/remove")
-async def remove_paper_trade(req: PaperTradeRemoveRequest):
+async def remove_paper_trade(req: PaperTradeRemoveRequest, api_key: str = Depends(get_api_key)):
     db = SessionLocal()
     try:
         # Remove ALL open paper trades matching symbol and horizon
@@ -1910,12 +1829,13 @@ async def remove_paper_trade(req: PaperTradeRemoveRequest):
         return {"status": "success", "deleted": len(trades)}
     except Exception as e:
         db.rollback()
-        return JSONResponse({"error": str(e)}, status_code=500)
+        logger.error(f"Failed to remove paper trade: {e}")
+        return JSONResponse({"error": "Failed to remove paper trade"}, status_code=500)
     finally:
         db.close()
 
 @app.get("/api/paper_trade/status")
-async def get_paper_trade_status(symbol: str = Query(...), horizon: str = Query(...)):
+async def get_paper_trade_status(symbol: str = Query(...), horizon: str = Query(...), api_key: str = Depends(get_api_key)):
     db = SessionLocal()
     try:
         trade = db.query(PaperTrade).filter(
@@ -1925,12 +1845,12 @@ async def get_paper_trade_status(symbol: str = Query(...), horizon: str = Query(
         ).first()
         return {"active": trade is not None}
     except Exception as e:
-        return {"active": False, "error": str(e)}
+        return {"active": False, "error": "Database error"}
     finally:
         db.close()
 
 @app.get("/paper_trades", response_class=HTMLResponse)
-async def view_paper_trades(request: Request):
+async def view_paper_trades(request: Request, api_key: str = Depends(get_api_key)):
     db: Session = SessionLocal()
     try:
         trades = db.query(PaperTrade).order_by(PaperTrade.created_at.desc()).all()
@@ -1939,7 +1859,7 @@ async def view_paper_trades(request: Request):
         db.close()
 
 @app.get("/api/paper_trade/cmp")
-async def get_paper_trade_cmp(symbols: str = Query("")):
+async def get_paper_trade_cmp(symbols: str = Query(""), api_key: str = Depends(get_api_key)):
     if not symbols:
         return {}
     import yfinance as yf

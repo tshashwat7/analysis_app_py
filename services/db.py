@@ -8,6 +8,11 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import text
 import logging
+import time
+import random
+import functools
+from typing import Callable, Any
+from sqlalchemy.exc import OperationalError
 from config.config_utility.market_utils import get_current_utc
 logger = logging.getLogger(__name__)
 
@@ -264,6 +269,45 @@ class SchemaMigration(Base):
     __tablename__ = "schema_migrations"
     migration_name = Column(String, primary_key=True)
     applied_at = Column(DateTime, default=utc_now, nullable=False)
+
+
+def backoff_retry_db(retries: int = 5, base_delay: float = 0.1, max_delay: float = 2.0):
+    """
+    Decorator for database write operations with exponential backoff and jitter.
+    Specifically targets SQLite "database is locked" errors.
+    """
+    def decorator(func: Callable):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc = None
+            for attempt in range(1, retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except OperationalError as e:
+                    last_exc = e
+                    msg = str(e).lower()
+                    if "locked" in msg or "busy" in msg:
+                        if attempt == retries:
+                            logger.error(f"DB Max retries ({retries}) reached: {e}")
+                            raise
+                        
+                        delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
+                        jitter = random.uniform(0, 0.1 * delay)
+                        final_delay = delay + jitter
+                        
+                        logger.warning(
+                            f"DB locked/busy. Retry {attempt}/{retries} in {final_delay:.2f}s..."
+                        )
+                        time.sleep(final_delay)
+                        continue
+                    raise # Non-retryable operational error
+                except Exception as e:
+                    logger.error(f"Unexpected DB error: {e}")
+                    raise
+            if last_exc:
+                raise last_exc
+        return wrapper
+    return decorator
 
 
 # 4. Create Tables
