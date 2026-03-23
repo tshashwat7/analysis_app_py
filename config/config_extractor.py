@@ -1023,19 +1023,23 @@ class ConfigExtractor:
         pattern_meta = self.sections.get("pattern_metadata", ConfigSection({}, "fallback")).data
         
         # This list should match PatternAnalyzer.detectors aliases
+        # ✅ Issue 4 FIX: Use camelCase to match PATTERN_METADATA keys
         active_aliases = [
-            "bollinger_squeeze", "darvas_box", "flag_pennant", "minervini_vcp",
-            "cup_handle", "three_line_strike", "ichimoku_signals", "golden_cross",
-            "death_cross", "bullish_neckline", "bearish_neckline", "momentum_flow",
+            "bollingerSqueeze", "darvasBox", "flagPennant", "minerviniStage2",
+            "cupHandle", "threeLineStrike", "ichimokuSignals", "goldenCross",
+            "deathCross", "bullishNecklinePattern", "bearishNecklinePattern", "momentumFlow",
             "engulfing"
         ]
         
-        missing = [alias for alias in active_aliases if alias not in pattern_meta]
+        missing = [alias for alias in active_aliases if alias not in (pattern_meta or {})]
         if missing:
-            self.logger.warning(
-                f"Startup Validation: PATTERN_METADATA missing definitions for active detectors: {missing}. "
-                f"Targets/SL calculation for these patterns will use ATR fallbacks."
+            # ✅ Issue 4 FIX: Hard crash at startup instead of just a warning
+            msg = (
+                f"CRITICAL: PATTERN_METADATA missing definitions for active detectors: {missing}. "
+                f"This will cause broken trade physics. Aborting startup."
             )
+            self.logger.critical(msg)
+            raise ConfigurationError(msg)
         else:
             self.logger.info("✅ PATTERN_METADATA completeness validation passed")
 
@@ -1372,3 +1376,31 @@ class ConfigExtractor:
     def horizon_priority_overrides(self) -> Dict[str, float]:
         """Get horizon-specific setup priority overrides."""
         return self.get("horizon_priority_overrides", {})
+
+def startup_config_validation() -> bool:
+    """
+    Standalone validation function to be called at application startup.
+    Validates all supported horizons.
+    Returns True if all critical configs are valid.
+    """
+    from config.master_config import MASTER_CONFIG
+    
+    horizons = ["intraday", "short_term", "long_term", "multibagger"]
+    all_valid = True
+    
+    logger.info("🚀 Initiating Startup Config Validation...")
+    
+    for h in horizons:
+        try:
+            extractor = ConfigExtractor(MASTER_CONFIG, h)
+            logger.info(f"✅ Horizon '{h}' validation: PASSED")
+        except Exception as e:
+            logger.error(f"❌ Horizon '{h}' validation: FAILED - {e}")
+            all_valid = False
+            
+    if all_valid:
+        logger.info("✅ All startup configurations validated successfully.")
+    else:
+        logger.error("❌ Startup configuration validation FAILED.")
+        
+    return all_valid

@@ -33,15 +33,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
-from services.patterns.utils import _build_formation_context
-
-# Point 6 fix: horizon-aware lookback window sizes
-HORIZON_WINDOWS = {
-    "intraday":    {"window": 30,  "min_history": 35},
-    "short_term":  {"window": 60,  "min_history": 65},
-    "long_term":   {"window": 120, "min_history": 130},
-    "multibagger": {"window": 120, "min_history": 130},
-}
+from services.patterns.horizon_constants import HORIZON_WINDOWS_BARS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,7 +81,7 @@ class BullishNecklinePattern(BasePattern):
         if not self._is_horizon_supported(horizon):
             return {"found": False, "score": 0, "quality": 0, "meta": {}}
         # Point 6 fix: horizon-aware window
-        hw          = HORIZON_WINDOWS.get(horizon, HORIZON_WINDOWS["short_term"])
+        hw          = HORIZON_WINDOWS_BARS.get(horizon, HORIZON_WINDOWS_BARS["short_term"])
         window_size = hw["window"]
         min_history = hw["min_history"]
 
@@ -218,7 +210,7 @@ class BearishNecklinePattern(BasePattern):
         if not self._is_horizon_supported(horizon):
             return {"found": False, "score": 0, "quality": 0, "meta": {}}
         # Point 6 fix: horizon-aware window
-        hw          = HORIZON_WINDOWS.get(horizon, HORIZON_WINDOWS["short_term"])
+        hw          = HORIZON_WINDOWS_BARS.get(horizon, HORIZON_WINDOWS_BARS["short_term"])
         window_size = hw["window"]
         min_history = hw["min_history"]
 

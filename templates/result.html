@@ -2412,7 +2412,7 @@
                 <div class="accordion-body accordion-body-sm">
                   {% if profile_report.eval_ctx and profile_report.eval_ctx.structural_gates %}
                   <div class="gate-section-lbl">Structural</div>
-                  {% for gate_name, result in profile_report.eval_ctx.structural_gates.by_gate.items() | default([]) %}
+                  {% for gate_name, result in (profile_report.eval_ctx.structural_gates.by_gate or {}).items() %}
                   <div class="gate-item">
                     <span class="gate-name">{{ gate_name | replace('_',' ') | title }}</span>
                     {% if result.status == 'passed' %}<span class="gate-pass"><i

@@ -2234,6 +2234,9 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             "duration_multiplier": 1.8,
             "max_stop_pct": 7.0,
             "min_contraction_pct": 1.5,               # ⚠️ register in DEFAULT_PHYSICS
+            "sl_method": "pattern_low",               # ✅ Issue 4 FIX: Override ATR stops
+            "sl_key": "pivot_point",                 # ✅ Issue 4 FIX: Use pivot as secondary SL guard
+            "sl_formula": "x * 0.98",                # ✅ Issue 4 FIX: Tight Stop for VCP
             "horizons_supported": ["short_term", "long_term"]
         },
         "entry_rules": {

@@ -21,3 +21,21 @@ HORIZON_WINDOWS_BARS = {
     "long_term":   {"window": 120, "min_history": 150},
     "multibagger": {"window": 120, "min_history": 150},
 }
+
+# Horizon-aware MA config for crossovers (Golden Cross / Death Cross)
+# Matches definitions in indicators.py for consistent structural analysis
+HORIZON_MA_CONFIG = {
+    "intraday":    {"mid_len": 50, "slow_len": 200, "type": "EMA"},
+    "short_term":  {"mid_len": 50, "slow_len": 200, "type": "EMA"},
+    "long_term":   {"mid_len": 40, "slow_len": 50,  "type": "WMA"},
+    "multibagger": {"mid_len": 12, "slow_len": 24,  "type": "SMA"},
+}
+
+# Wall-clock expiry days for pattern state cleanup (W46/Phase 4)
+# Intraday: 1 day, Short: 7, Long: 30, Multibagger: 90
+HORIZON_EXPIRY_DAYS = {
+    "intraday":    1,
+    "short_term":  7,
+    "long_term":   30,
+    "multibagger": 90,
+}

@@ -31,18 +31,7 @@ import numpy as np
 from typing import Dict, Any
 from services.patterns.base import BasePattern
 from services.patterns.utils import _build_formation_context
-
-
-# Horizon-aware MA config to match indicators.py definitions
-# intraday/short_term: 50 vs 200 EMA
-# long_term: 40 vs 50 WMA
-# multibagger: 12 vs 24 SMA
-HORIZON_MA_CONFIG = {
-    "intraday":    {"mid_len": 50, "slow_len": 200, "type": "EMA"},
-    "short_term":  {"mid_len": 50, "slow_len": 200, "type": "EMA"},
-    "long_term":   {"mid_len": 40, "slow_len": 50,  "type": "WMA"},
-    "multibagger": {"mid_len": 12, "slow_len": 24,  "type": "SMA"},
-}
+from services.patterns.horizon_constants import HORIZON_MA_CONFIG
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared detection helper

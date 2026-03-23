@@ -951,7 +951,7 @@ Initialization fails hard (`RuntimeError`) if confidence config is missing or if
 
 ## Database Schema
 
-All tables in `data/trade.db` (SQLite, WAL mode).
+All tables in `data/trade.db` (SQLite, **WAL mode** with **10s busy_timeout** for high-concurrency safety). Primary signal writes utilize a jittered exponential backoff retry helper.
 
 ### `signal_cache`
 
@@ -1369,37 +1369,27 @@ Edit `master_config.py` → `global.risk_management.rr_gates` for global minimum
 
 ---
 
-## Known Limitations
+## Known Limitations (Refactored v15.1)
 
-### ✅ W64 — Decoupled Conflict Penalty (Resolved in v15.1)
+### ✅ W64 — Decoupled Conflict Penalty (RESOLVED)
 
-Previously, the conflict penalty calculated in `_validate_patterns` was stored in `ctx["pattern_validation"]["by_setup"][setup_type]["score"]` but never read by `_calculate_confidence`. A setup with a Golden Cross and a Death Cross simultaneously active would still receive full confidence.
+The conflict penalty calculated in `_validate_patterns` is correctly subtracted from `total_adjustment` at **Step 8** of the confidence pipeline. A setup with contradictory patterns (e.g., Golden Cross + Death Cross) now receives a specific penalty (up to -30).
 
-**Resolution (v15.1):** `_validate_patterns` now computes `capped_conflict_penalty = max(-30, len(conflicting_found) * -20)` and stores it under the `"conflict_penalty"` key. `_calculate_confidence` reads this value at **Step 8 (Additive Adjustments)** — before the Step 9 `horizon_confidence_clamp` — and subtracts it from `total_adjustment` with a dedicated `INFO`-level log line and a `breakdown` entry. The `-30` cap ensures a heavily-conflicted setup is penalised without being unconditionally blocked by confidence arithmetic alone.
+### ✅ W46 — Centralized Horizon Constants (RESOLVED)
 
-### W46 — `HORIZON_WINDOWS` Dual Semantics
+The dual-semantics issue of `HORIZON_WINDOWS` has been resolved by decoupling into `HORIZON_WINDOWS_SECONDS` (for DB cleanup) and `HORIZON_WINDOWS_BARS` (for pattern detectors). All patterns now reference the centralized `horizon_constants.py` file.
 
-`HORIZON_WINDOWS` in `pattern_state_manager.py` defines candle duration in seconds (`intraday: 900`, `short_term: 86400`). In `cup_handle.py`, a local `HORIZON_WINDOWS` dict defines bar count (`short_term: 60`). These are two distinct constants with different units. The pattern detectors need a separate `HORIZON_WINDOWS_BARS` constant to avoid the implicit unit confusion. Until resolved, both constants must be maintained independently.
+### ✅ W50 — Ichimoku `signal_age` Precision (RESOLVED)
 
-### W50 — Ichimoku `signal_age` for Established Signals
+The `signal_age` ambiguity for fresh crosses has been fixed using a sentinel return value in `_compute_signal_age`. The system now distinguishes between a truly fresh cross (`age=1`) and a cross detected at the lookback boundary.
 
-`signal_age` is now computed by walking the TK series backward from the current bar. For patterns where the TK cross happened many bars ago, this correctly returns the true age. However, a **fresh cross** always returns `age=1` regardless of how long the cross has been forming intrabar. This is conservative and correct but means fresh crosses and zero-age signals are indistinguishable.
+### ✅ W59 — `FULL_HORIZON_SCORES` Hydration (RESOLVED)
 
-### W59 — `FULL_HORIZON_SCORES` Population Path
+The in-memory score cache is now reliably hydrated by the main process from the results of parallel workers in both single-symbol and bulk warmer paths.
 
-`FULL_HORIZON_SCORES` is populated from warmer batch results **in the main process** after each worker completes (single-symbol path) and after each warmer batch (warmer path). Workers running in `ProcessPoolExecutor` subprocesses cannot directly write to this in-memory dict. Any horizon score computed inside a worker must be returned in the worker's result dict and merged by the main process. If a worker crashes mid-execution, its horizon scores are not recorded.
+### ✅ SQLite Concurrency (RESOLVED)
 
-### `minerviniStage2` Missing `PATTERN_METADATA` Entry Risk
-
-`minerviniStage2` must have a `PATTERN_METADATA` entry for VCP trade entry/invalidation gate evaluation to function correctly. Specifically, `_calculate_pattern_targets()` reads `meta["contraction_pct"]` from the pattern's meta output. If the `PATTERN_METADATA` entry is missing, `get_pattern_context()` returns `None` and the resolver falls through to the ATR-fallback target path, producing geometrically incorrect SL/T1/T2 levels for VCP setups.
-
-### Three `PATTERN_METADATA` Blocks
-
-The authoritative `PATTERN_METADATA` definition should be a single dict. At time of writing, there are references in the codebase to pattern metadata being potentially spread across multiple definition sites. All pattern metadata must be consolidated into the single `PATTERN_METADATA` dict in `setup_pattern_matrix_config.py`.
-
-### SQLite Concurrency Under High Load
-
-The single-file SQLite database with WAL mode and `pool_size=1` is sufficient for single-server deployments. Under high concurrency (many parallel analysis requests from `ProcessPoolExecutor`), write contention on `signal_cache` can produce `OperationalError: database is locked`. The retry helper handles this up to 3 attempts, but sustained load may require migrating the persistence layer to PostgreSQL.
+Write contention on the `signal_cache` has been mitigated via a combination of `journal_mode=WAL`, a `10,000ms` busy timeout, and the `_write_signal_cache_with_retry` helper in `main.py` which implements jittered exponential backoff.
 
 ---
 

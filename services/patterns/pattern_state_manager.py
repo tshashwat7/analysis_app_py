@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from sqlalchemy.orm import Session
 from services.db import PatternBreakdownState, PatternBreakdownEvent, SessionLocal
 from config.config_utility.market_utils import get_current_utc
-from services.patterns.horizon_constants import HORIZON_WINDOWS_SECONDS
+from services.patterns.horizon_constants import HORIZON_WINDOWS_SECONDS, HORIZON_EXPIRY_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -359,14 +359,7 @@ def cleanup_old_breakdown_states(days_old: int = 7) -> int:
         db = SessionLocal()
         now = get_current_utc()
         
-        # ✅ P1-5 FIX: Horizon-aware expiry days
-        HORIZON_EXPIRY_DAYS = {
-            "intraday": 1,
-            "short_term": 7,
-            "long_term": 30,
-            "multibagger": 90,
-        }
-        
+        # ✅ P1-5 FIX: Horizon-aware expiry derived from central constants
         total_expired = 0
         for horizon, days in HORIZON_EXPIRY_DAYS.items():
             cutoff_active = now - timedelta(days=days)

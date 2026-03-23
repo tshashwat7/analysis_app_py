@@ -131,8 +131,17 @@ class IchimokuSignals(BasePattern):
                         if is_bull and t_vals[i] <= k_vals[i]: break
                         if not is_bull and t_vals[i] >= k_vals[i]: break
                         signal_age += 1
+                    
+                    # ✅ W50 GAP FIX: If we reached the end of the series, it's a boundary value
+                    lookback_limit = len(t_vals) - 1 # excluding current candle
+                    if signal_age >= lookback_limit:
+                        result["is_boundary_default"] = True
                 except Exception:
-                    signal_age = 5  # Fallback
+                    # ✅ W50 FIX: Use available history length minus warmup instead of 1
+                    # Prevents ambiguity at the lookback boundary
+                    signal_age = len(df) - self.kijun_win
+                    # ✅ NEW W50 FIX: Add sentinel flag for boundary detection
+                    result["is_boundary_default"] = True
 
             # Calculate cloud thickness
             cloud_thickness = abs(span_a - span_b) / price if price else 0

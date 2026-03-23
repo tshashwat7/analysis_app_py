@@ -30,7 +30,7 @@ engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
     connect_args={
         "check_same_thread": False,
-        "timeout": 30.0, 
+        "timeout": 10.0, # ✅ Issue 6: Standardized 10s timeout
     },
     pool_pre_ping=True,
     pool_size=1,
@@ -49,7 +49,7 @@ def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.execute("PRAGMA cache_size=-64000;")
     cursor.execute("PRAGMA temp_store=MEMORY;")
-    cursor.execute("PRAGMA busy_timeout=30000;")
+    cursor.execute("PRAGMA busy_timeout=10000;") # ✅ Issue 6: Standardized 10s timeout
     cursor.close()
 
 # 2. Define Tables

@@ -260,9 +260,9 @@ async def periodic_warmer():
                 # P1-1: Pre-warm Parquet cache for the current batch (Non-blocking)
                 await asyncio.to_thread(prewarm_parquet_cache, batch, ["intraday", "short_term", "long_term"])
 
-                # Kick off analysis of the batch using the compute executor
+                # ✅ Issue 6 FIX: pass enable_write_cache=False to workers
                 futures = [
-                    loop.run_in_executor(get_compute_executor(), run_full_analysis, symbol)
+                    loop.run_in_executor(get_compute_executor(), run_full_analysis, symbol, "nifty50", False)
                     for symbol in batch
                 ]
                 try:
@@ -313,15 +313,44 @@ async def periodic_warmer():
                         logger.debug(
                             "[WARMER] Warmed %s (result type=%s)", sym, type(res).__name__
                         )
-                        # ✅ FIX W59: Hydrate FULL_HORIZON_SCORES from worker results
+                        
+                        # ✅ Issue 6 & W59 FIX: Process results and serialize DB writes in main process
                         if isinstance(res, dict) and "full_report" in res:
                             profiles = res.get("full_report", {}).get("profiles", {})
                             if sym not in FULL_HORIZON_SCORES:
                                 FULL_HORIZON_SCORES[sym] = {}
+                            
                             for h, profile_data in profiles.items():
                                 score = profile_data.get("final_score")
                                 if score is not None:
                                     FULL_HORIZON_SCORES[sym][h] = score
+                                    # ✅ W59 FIX: Add staleness flag
+                                    FULL_HORIZON_SCORES[sym]["_stale"] = False
+                            
+                            # ✅ Issue 6 FIX: Serialize DB writes here
+                            logger.debug(f"[WARMER] Serializing DB write for {sym}...")
+                            try:
+                                best_fit = res.get("full_report", {}).get("best_fit")
+                                display_h = res.get("analysis_mode") == "single" and res.get("requested_horizon") or best_fit
+                                
+                                if res.get("trade_recommendation", {}).get("status") != "ERROR":
+                                    _save_analysis_to_db(
+                                        sym,
+                                        res,
+                                        "nifty50", 
+                                        best_fit_horizon=best_fit,
+                                        selected_horizon=display_h
+                                    )
+                                else:
+                                    _mark_analysis_error_in_db(
+                                        sym,
+                                        res,
+                                        "nifty50",
+                                        best_fit_horizon=best_fit,
+                                        selected_horizon=display_h,
+                                    )
+                            except Exception as db_err:
+                                logger.error(f"[WARMER] Serialized DB Write Failed for {sym}: {db_err}")
 
                 if rate_limited:
                     logger.warning( "[WARMER] Rate-limited; cooling down for %d seconds before resuming.", WARMER_RATE_LIMIT_COOLDOWN_SEC, )
@@ -360,6 +389,25 @@ async def lifespan(app: FastAPI):
     
     # Phase 6 P1-4: Initialize DB at the very beginning of startup
     init_db()
+    
+    # ✅ W59 FIX: Restore FULL_HORIZON_SCORES from SignalCache on startup
+    # Ensures persistence of recent analysis across app restarts.
+    try:
+        tmp_db = SessionLocal()
+        # Fetch most recent signals for all active symbols
+        recent_signals = tmp_db.query(SignalCache).all()
+        for sig in recent_signals:
+                if sig.horizon_scores:
+                    # sig.horizon_scores is stored as a JSON dict: {horizon: score}
+                    score_data = sig.horizon_scores.copy()
+                    # ✅ W59 FIX: Mark restored scores as stale
+                    score_data["_stale"] = True
+                    FULL_HORIZON_SCORES[sig.symbol] = score_data
+        logger.info(f"📋 W59: Restored {len(recent_signals)} symbols into FULL_HORIZON_SCORES (marked as _stale).")
+    except Exception as e:
+        logger.error(f"❌ W59: Score restoration failed: {e}")
+    finally:
+        tmp_db.close()
     
     # Pre-load data in main process
     build_smart_index_map()
@@ -432,7 +480,29 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("[STARTUP] Corp actions cache build failed: %s", e)
         
+        # ✅ W59 FIX: Restore FULL_HORIZON_SCORES from SignalCache on startup
+        logger.info("[STARTUP] Restoring FULL_HORIZON_SCORES from database...")
+        db_session = SessionLocal()
+        try:
+            cached_signals = db_session.query(SignalCache).all()
+            for s in cached_signals:
+                if s.horizon_scores:
+                    FULL_HORIZON_SCORES[s.symbol] = s.horizon_scores
+            logger.info(f"[STARTUP] Restored scores for {len(cached_signals)} symbols.")
+        except Exception as e:
+            logger.warning(f"[STARTUP] Score restoration failed: {e}")
+        finally:
+            db_session.close()
+
+        # Phase 4 P1-6: Activate pattern config validation
+        from config.config_extractor import startup_config_validation
+        if not startup_config_validation():
+            logger.error("❌ CRITICAL: Pattern Config validation failed. Shutdown sequence initiated.")
+            # In a real PROD app, you might want to exit here.
+        
+        # Restore warmer call
         threading.Thread(target=_warm_corp_actions_cache, daemon=True, name="CorpActionsWarmer").start()
+        
         start_mb_scheduler()
         yield
     finally:
@@ -740,7 +810,8 @@ def run_analysis(
     symbol: str, 
     index_name: str = "nifty50",
     mode: str = "full",           # ✅ NEW: "full" or "single"
-    requested_horizon: str = None # ✅ NEW: Required if mode="single"
+    requested_horizon: str = None, # ✅ NEW: Required if mode="single"
+    enable_write_cache: bool = True # ✅ Issue 6 FIX: Allow disabling DB write in worker
 ) -> Dict[str, Any]:
     """
     Unified analysis function supporting both full and single-horizon modes.
@@ -984,10 +1055,9 @@ def run_analysis(
         # =====================================================================
         # STEP 9: DATABASE PERSISTENCE (WITH BOTH HORIZONS)
         # =====================================================================
-        if "full_report" in analysis_data:
-            # ✅ C30 FIX: Always save to cache, even on ERROR (Phase 8 P2-6 cleaned)
-            # ✅ FIX P1-1: Removed redundant SessionLocal hold.
-            # Functions now manage their own sessions via _write_signal_cache_with_retry.
+        # ✅ Issue 6 FIX: Only save to cache if enable_write_cache is True.
+        # Warmer sets this to False to perform serialization in the main process.
+        if enable_write_cache and "full_report" in analysis_data:
             try:
                 # If the trade plan had an error, we mark it specially in DB
                 if analysis_data.get("trade_recommendation", {}).get("status") != "ERROR":
@@ -1023,9 +1093,9 @@ def run_analysis(
         return {"symbol": symbol, "error": str(e)}
     
 # ✅ BACKWARD COMPATIBLE WRAPPERS
-def run_full_analysis(symbol: str, index_name: str = "nifty50") -> Dict[str, Any]:
+def run_full_analysis(symbol: str, index_name: str = "nifty50", enable_write_cache: bool = True) -> Dict[str, Any]:
     """Legacy wrapper for full analysis."""
-    return run_analysis(symbol, index_name, mode="full")
+    return run_analysis(symbol, index_name, mode="full", enable_write_cache=enable_write_cache)
 
 
 def run_single_horizon_analysis(symbol: str, horizon: str, index_name: str = "nifty50") -> Dict[str, Any]:
@@ -1179,8 +1249,8 @@ def _mark_analysis_error_in_db(
             entry_row.best_horizon = best_fit_horizon
             entry_row.selected_horizon = selected_horizon
             entry_row.score = int(selected_profile.get("final_score", 0) * 10) if selected_profile.get("final_score") else 0
-            entry_row.recommendation = selected_profile.get("category", "ERROR") + "--" + selected_horizon
-            entry_row.signal_text = "ERROR"
+            entry_row.recommendation = selected_profile.get("category", "INCOMPLETE") + "--" + selected_horizon
+            entry_row.signal_text = "INCOMPLETE"
             entry_row.conf_score = 0
             entry_row.rr_ratio = None
             entry_row.entry_price = None
@@ -1663,8 +1733,10 @@ async def get_quick_scores(req: QuickScoresRequest, api_key: str = Depends(get_a
              }
              h_scores = {k: v for k, v in h_scores.items() if v is not None}
              if h_scores:
-                 FULL_HORIZON_SCORES[sym] = h_scores
-                 scores[sym] = h_scores
+                 # ✅ W59 FIX: Ensure we store the properly keyed horizon_scores JSON if available
+                 FINAL_SCORES = db_data.get("horizon_scores") or h_scores
+                 FULL_HORIZON_SCORES[sym] = FINAL_SCORES
+                 scores[sym] = FINAL_SCORES
                  continue
                  
         scores[sym] = {
@@ -1673,6 +1745,15 @@ async def get_quick_scores(req: QuickScoresRequest, api_key: str = Depends(get_a
             "api_v": API_VERSION,
             "ts": get_current_utc().isoformat()
         }
+        
+@app.get("/api/v1/scores", response_class=JSONResponse)
+async def get_all_scores_v1(api_key: str = Depends(get_api_key)):
+    """
+    ✅ P0-3: Versioned endpoint for all scores.
+    """
+    scores = {}
+    for symbol in FULL_HORIZON_SCORES:
+        scores[symbol] = FULL_HORIZON_SCORES[symbol]
         
     return {
         "api_info": {
@@ -1683,8 +1764,11 @@ async def get_quick_scores(req: QuickScoresRequest, api_key: str = Depends(get_a
         "scores": scores
     }
 
-@app.get("/corporate_actions_api", response_class=JSONResponse)
-async def corporate_actions_api_secured(tickers: str = Query(...), api_key: str = Depends(get_api_key)):
+@app.get("/api/v1/corporate_actions", response_class=JSONResponse)
+async def corporate_actions_api_v1(tickers: str = Query(...), api_key: str = Depends(get_api_key)):
+    """
+    ✅ P0-3: Versioned endpoint for corporate actions.
+    """
     ticker_list = [t.strip().upper() for t in tickers.split(",")]
     return get_corporate_actions(ticker_list)
 

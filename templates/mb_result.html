@@ -192,25 +192,19 @@
     <div class="metric-grid">
       {% if eval_ctx.scoring and eval_ctx.scoring.fundamental %}
       {% set cat_scores = eval_ctx.scoring.fundamental.category_scores or {} %}
-      <div class="metric-card">
-        <div class="metric-label">Quality Score</div>
-        <div class="metric-value">{{ "%.1f"|format(cat_scores.quality.score | default(0)) }}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Growth Score</div>
-        <div class="metric-value">{{ "%.1f"|format(cat_scores.growth.score | default(0)) }}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Profitability</div>
-        {% set _p_score = cat_scores.profitability.score | default(0) %}
-        <div class="metric-value text-{{ 'success' if _p_score > 5 else 'danger' }}">
-          {{ "%.1f"|format(_p_score) }}
+      {% if cat_scores %}
+        {% for cat_id, cat_data in cat_scores.items() %}
+        <div class="metric-card">
+          <div class="metric-label">{{ cat_id | replace('_', ' ') | title }}</div>
+          {% set _score = cat_data.score | default(0) %}
+          <div class="metric-value {{ 'text-success' if _score >= 7 else ('text-danger' if _score <= 3 else '') }}">
+            {{ "%.1f"|format(_score) }}
+          </div>
         </div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Financial Health</div>
-        <div class="metric-value">{{ "%.1f"|format(cat_scores.financial_health.score | default(0)) }}</div>
-      </div>
+        {% endfor %}
+      {% else %}
+        <div class="alert alert-light w-100">No category scores available for analysis.</div>
+      {% endif %}
       {% else %}
       <div class="alert alert-light w-100">Scoring context unavailable for drivers.</div>
       {% endif %}

@@ -3698,6 +3698,52 @@ class ConfigResolver:
             if not entry:
                 return None
 
+            # ── Helper: resolve Physics-based SL if available ───────────────────
+            def _apply_physics_sl_local(p_name: str) -> tuple:
+                """Checks for physics overrides in PATTERN_METADATA."""
+                physics_cfg = self.extractor.sections.get(f"pattern_physics_{p_name}")
+                if not physics_cfg or not physics_cfg.is_valid:
+                    return None, None
+                
+                physics = physics_cfg.data
+                sl_key = physics.get("sl_key")
+                sl_formula = physics.get("sl_formula")
+                
+                if not sl_key:
+                    return None, None
+                
+                # Dynamic lookup of 'x'
+                key_map = {
+                    "pivot_point": "pivotPoint",
+                    "ma_fast": "maFast",
+                    "ma_mid": "maMid",
+                    "ma_slow": "maSlow",
+                    "bb_low": "bbLow",
+                    "ichi_kijun": "ichiKijun",
+                    "ichi_tenkan": "ichiTenkan"
+                }
+                
+                lookup_key = key_map.get(sl_key, sl_key)
+                # Check both indicators and price_data
+                val = _safe_float(price_data.get(lookup_key) or (indicators or {}).get(lookup_key))
+                
+                if val is None:
+                    return None, None
+                    
+                if sl_formula:
+                    try:
+                        # Safety regex for simple arithmetic
+                        import re
+                        if re.match(r'^[x0-9.+\-*/\s()]+$', sl_formula):
+                            expr = sl_formula.replace('x', str(val))
+                            # Use restricted eval
+                            sl_val = eval(expr, {"__builtins__": {}})
+                            return round(float(sl_val), 2), f"physics_{sl_key}"
+                    except Exception as e:
+                        self.logger.error(f"[{p_name}] Physics sl_formula failed: {e}")
+                
+                return None, None
+
             # ── Helper: resolve SL from slAtrDynamic or atrDynamic ──────────────
             ind = indicators or {}
 
@@ -4023,12 +4069,16 @@ class ConfigResolver:
                 pivot = _safe_float(price_data.get("pivotPoint"))
                 ma_fast = _safe_float(ind.get("maFast") or price_data.get("maFast"))
 
-                # SL: below the most recent contraction's MA (10-day for minervini)
-                if ma_fast and ma_fast < entry:
-                    sl = round(ma_fast * 0.97, 2)
-                    sl_src = "ma_fast_stage2"
-                else:
-                    sl, sl_src = _sl_from_atr(1.5)
+                # ✅ Issue 4 FIX: Check physics overrides first (e.g. pivot_point * 0.98)
+                sl, sl_src = _apply_physics_sl_local(pattern_name)
+                
+                if sl is None:
+                    # Fallback to structural MA if physics not defined
+                    if ma_fast and ma_fast < entry:
+                        sl = round(ma_fast * 0.97, 2)
+                        sl_src = "ma_fast_stage2"
+                    else:
+                        sl, sl_src = _sl_from_atr(1.5)
 
                 risk = entry - sl
                 if contraction_pct is not None and contraction_pct > 0:

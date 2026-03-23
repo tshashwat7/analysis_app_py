@@ -370,7 +370,13 @@ def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
     narrative = f"<b>Trade Plan: {safe_ticker}</b><br><br>"
     
     narrative += f"<b>Entry:</b> ₹{entry:,.2f}<br>"
-    narrative += f"<b>Stop Loss:</b> ₹{sl:,.2f} ({_calculate_sl_pct(entry, sl):.1f}% risk)<br>"
+    # ✅ P3-4: Terminology fix for bearish setups
+    is_bearish = risk.get("direction", "").lower() == "bearish"
+    sl_label = "Stop Loss"
+    if is_bearish:
+        sl_label = "Buy Stop (SL)"
+        
+    narrative += f"<b>{sl_label}:</b> ₹{sl:,.2f} ({_calculate_sl_pct(entry, sl):.1f}% risk)<br>"
     
     if targets:
         narrative += f"<b>Target 1:</b> ₹{targets[0]:,.2f}"
@@ -710,7 +716,12 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
             if k == "cupHandle":
                 desc += f" (Depth: {meta.get('depth_pct')}%)"
             elif k == "minerviniStage2":
-                desc += f" (Contraction: {meta.get('tightness')})"
+                # ✅ P1-6: Use contraction_pct with ATR fallback
+                c_pct = meta.get('contraction_pct')
+                if c_pct:
+                    desc += f" (Contraction: {c_pct}%)"
+                else:
+                    desc += " (Tight Consolidation)"
             elif k == "bollingerSqueeze":
                 desc += " (Volatility Compression)"
                 
@@ -896,7 +907,7 @@ def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
     if isinstance(strat_report, dict):
         summary_node = strat_report.get("best") or strat_report.get("summary") or {}
         if isinstance(summary_node, dict):
-            best_strat = summary_node.get("best_strategy", "unknown")
+            best_strat = summary_node.get("strategy") or summary_node.get("best_strategy", "unknown")
     
     return {
         "trade": summarize_trade_recommendation(tr),
