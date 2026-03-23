@@ -69,6 +69,12 @@ from services.patterns.pattern_velocity_tracking import classify_volatility
 # Import pattern enhancer (post-processing)
 from services.trade_enhancer import enhance_execution_context, validate_execution_rr
 from services.summaries import build_enhanced_summaries
+from services.scoring_utils import (
+    calculate_structural_eligibility as calc_eligibility_util,
+    compute_opportunity_score_logic as calc_opp_logic_util,
+    calculate_final_decision_score as calc_final_score_util,
+    get_horizon_pillar_weights as get_weights_util
+)
 
 
 
@@ -156,73 +162,13 @@ def calculate_structural_eligibility(
     extractor: Optional[Any] = None  # ✅ NEW: Accept extractor
 ) -> float:
     """
-    ✅ REFACTORED: Now uses query extractor for horizon pillar weights.
-    
-    Step 6b: Blends the three structural pillars based on horizon DNA.
-    
-    Args:
-        tech_score: Technical pillar score (0-10)
-        fund_score: Fundamental pillar score (0-10)
-        hybrid_score: Hybrid pillar score (0-10)
-        horizon: Trading timeframe
-        extractor: QueryOptimizedExtractor instance (optional)
-    
-    Returns:
-        Weighted eligibility score (0-10)
+    ✅ REFACTORED: Now uses shared utility and query extractor.
     """
-    try:
-        # Get extractor if not provided
-        if extractor is None:
-            resolver = get_resolver(horizon)
-            extractor = resolver.extractor
-        
-        # Get weights via extractor
-        weights = _get_horizon_pillar_weights(extractor)
-        
-        # ✅ B1 FIX (Refined): Weight Redistribution for missing pillars
-        # Prevents score dilution when some data (e.g. fundamentals) is missing.
-        scores = {
-            'tech': tech_score,
-            'fund': fund_score,
-            'hybrid': hybrid_score
-        }
-        
-        active_weights = {k: v for k, v in weights.items() if k in scores and scores[k] is not None}
-        
-        if not active_weights:
-            logger.warning(f"[{horizon}] No active pillars for structural eligibility!")
-            return 0.0
-            
-        total_active_weight = sum(active_weights.values())
-        
-        if total_active_weight <= 0:
-            logger.warning(f"[{horizon}] Total active weight is zero! Tech={tech_score}, Fund={fund_score}")
-            return max(tech_score or 0.0, fund_score or 0.0, hybrid_score or 0.0)
-            
-        eligibility_score = 0.0
-        for k, w in active_weights.items():
-            # Redistribute weight proportionally to active pillars
-            redistributed_weight = w / total_active_weight
-            val = scores.get(k, 0.0) or 0.0
-            eligibility_score += val * redistributed_weight
-        
-        logger.debug(
-            f"[{horizon}] 📊 STRUCTURAL ELIGIBILITY: {eligibility_score:.2f} | "
-            f"Components: T={tech_score or 0.0:.1f}({weights.get('tech', 0):.2f}) + "
-            f"F={fund_score or 0.0:.1f}({weights.get('fund', 0):.2f}) + "
-            f"H={hybrid_score or 0.0:.1f}({weights.get('hybrid', 0):.2f})"
-        )
-        
-        return round(eligibility_score, 2)
-        
-    except Exception as e:
-        logger.error(
-            f"[{horizon}] ❌ STRUCTURAL ELIGIBILITY FAILED | "
-            f"Tech={tech_score}, Fund={fund_score}, Hybrid={hybrid_score} | "
-            f"Error: {type(e).__name__}: {e}",
-            exc_info=True
-        )
-        return 0.0
+    if extractor is None:
+        resolver = get_resolver(horizon)
+        extractor = resolver.extractor
+    
+    return calc_eligibility_util(tech_score, fund_score, hybrid_score, horizon, extractor)
 
 
 @log_failures(return_on_error={}, critical=False)
@@ -306,39 +252,22 @@ def compute_opportunity_score(
         else:
             logger.debug(f"[{ticker}][{horizon}] ✅ All gates passed")
         
-        # 4. Calculate Opportunity Bonus (0-5 scale)
-        opp_bonus = 0.0
-        bonus_breakdown = {}
-        
         if gate_result["passed"]:
-            # Bonus A: Pattern/Setup priority
-            priority_bonus = priority / 100.0
-            opp_bonus += priority_bonus
-            bonus_breakdown["priority"] = priority_bonus
-            
-            # Bonus B: Strategy Fit
-            fit_bonus = strategy["fit_score"] / 100.0
-            opp_bonus += fit_bonus
-            bonus_breakdown["strategy_fit"] = fit_bonus
-            
-            # Bonus C: Conviction (Excess confidence over 50 floor)
-            setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
-            baseline_floor = extractor.get_setup_baseline_floor(setup_type)
-            
-            # W14 FIX: baseline_floor can be None if setup is blocked. Use 50 as safe fallback for bonus calc.
-            floor_val = baseline_floor if baseline_floor is not None else 50.0
-            conviction_bonus = max(0, (confidence - floor_val) / 50.0)
-            opp_bonus += conviction_bonus
-            bonus_breakdown["conviction"] = conviction_bonus
-            bonus_breakdown["baseline_floor"] = floor_val  # Track for debugging
+            baseline_floor = extractor.get_setup_baseline_floor(eval_ctx.get("setup", {}).get("type", "GENERIC"))
+            opp_bonus = calc_opp_logic_util(
+                ticker, horizon, eligibility_base_score, 
+                confidence, priority, strategy["fit_score"], baseline_floor
+            )
             
             logger.debug(
-                f"[{ticker}][{horizon}] 💎 OPPORTUNITY BONUS: {opp_bonus:.2f} | "
-                f"Breakdown: Priority={priority_bonus:.2f} + "
-                f"Fit={fit_bonus:.2f} + Conviction={conviction_bonus:.2f}"
+                f"[{ticker}][{horizon}] 💎 OPPORTUNITY BONUS: {opp_bonus:.2f}"
             )
         else:
+            opp_bonus = 0.0
             logger.debug(f"[{ticker}][{horizon}] ⚠️ No bonus (gates failed)")
+
+        # 5. Final Decision Score
+        final_score = calc_final_score_util(eligibility_base_score, opp_bonus)
 
         # 5. Final Decision Score
         # Mathematical Refactor: Weighting instead of raw addition (Score > 10 fix)
@@ -1652,20 +1581,9 @@ def score_momentum_profile(
 
 def _get_horizon_pillar_weights(extractor) -> Dict[str, float]:
     """
-    ✅ NEW: Get horizon pillar weights via extractor.
-    
-    Checks hierarchy:
-    1. Horizon-specific weights (from horizon config)
-    2. Global HORIZON_PILLAR_WEIGHTS (from master_config)
-    3. Hardcoded defaults
-    
-    Args:
-        extractor: QueryOptimizedExtractor instance
-    
-    Returns:
-        Pillar weights dict with keys: tech, fund, hybrid
+    ✅ REFACTORED: Now uses shared utility.
     """
-    return extractor.get_horizon_pillar_weights()
+    return get_weights_util(extractor)
 
 def _extract_formation_context(
     indicators: Dict[str, Any],

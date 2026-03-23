@@ -70,22 +70,28 @@ class ConfigExtractor:
         self,
         master_config: Dict,
         horizon: str,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        confidence_config_override: Optional[Dict] = None
     ):
         self.master_config = master_config
         self.horizon = horizon
         self.logger = logger or logging.getLogger(__name__)
 
-        # ✅ NEW: Import confidence config
-        try:
-            from config.confidence_config import CONFIDENCE_CONFIG
-            self.confidence_config = CONFIDENCE_CONFIG
+        # ✅ NEW: Use override or import default
+        if confidence_config_override is not None:
+            self.confidence_config = confidence_config_override
             self.has_confidence_config = True
-            self.logger.info("✅ Loaded confidence_config.py")
-        except ImportError as e:
-            self.confidence_config = {}
-            self.has_confidence_config = False
-            self.logger.warning(f"⚠️ Could not import confidence_config: {e}")
+            self.logger.info("✅ Using injected confidence configuration")
+        else:
+            try:
+                from config.confidence_config import CONFIDENCE_CONFIG
+                self.confidence_config = CONFIDENCE_CONFIG
+                self.has_confidence_config = True
+                self.logger.info("✅ Loaded confidence_config.py")
+            except ImportError as e:
+                self.confidence_config = {}
+                self.has_confidence_config = False
+                self.logger.warning(f"⚠️ Could not import confidence_config: {e}")
 
         # Cached sections
         self.sections: Dict[str, ConfigSection] = {}

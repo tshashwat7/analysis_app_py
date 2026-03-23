@@ -51,10 +51,13 @@ from config.config_helpers import (
     _extract_price_data,
     _extract_patterns,
 )
-from services.signal_engine import (
+from services.scoring_utils import (
     calculate_structural_eligibility,
-    compute_opportunity_score,
+    compute_opportunity_score_logic as calc_opp_logic_util,
+    calculate_final_decision_score as calc_final_score_util,
+    compute_opportunity_score_full,
 )
+from collections import OrderedDict
 
 from config.multibagger.multibagger_master_config import (
     MB_MASTER_CONFIG,
@@ -351,10 +354,16 @@ class MBConfigExtractor(ConfigExtractor):
     """
 
     def __init__(self, master_config: Dict, horizon: str, log=None):
-        super().__init__(master_config, horizon, log)
+        # ✅ P2-2 FULL FIX: Pass MB_CONFIDENCE_CONFIG directly to super().__init__
+        # This prevents double-extraction and double-import log spam.
+        super().__init__(
+            master_config, 
+            horizon, 
+            logger=log, 
+            confidence_config_override=MB_CONFIDENCE_CONFIG
+        )
 
-        # Overwrite baked-in module-level sections — use guard in case
-        # base extractor didn't produce the key (safe for any config shape)
+        # Overwrite baked-in module-level sections
         for key, val in [
             ("horizon_pillar_weights",    MB_HORIZON_PILLAR_WEIGHTS.get(horizon, {})),
             ("hybrid_pillar_composition", MB_HYBRID_PILLAR_COMPOSITION.get(horizon, {})),
@@ -365,11 +374,6 @@ class MBConfigExtractor(ConfigExtractor):
                 self.sections[key] = ConfigSection(
                     data=val, source=f"MB_override.{key}"
                 )
-
-        # Replace confidence config and re-run extraction with MB values
-        self.confidence_config     = MB_CONFIDENCE_CONFIG
-        self.has_confidence_config = True
-        self.extract_confidence_sections()
 
     def extract_matrix_sections(self):
         """
@@ -429,15 +433,14 @@ class MBQueryOptimizedExtractor(QueryOptimizedExtractor):
     """
 
     def __init__(self, master_config: Dict, horizon: str, log=None):
-        # Do NOT call super().__init__() — it builds a wasted ConfigExtractor
-        # backed by the main pipeline's module-level imports.
-        # Replicate only the 5 instance vars QOE.__init__ sets:
-        self.base_extractor  = MBConfigExtractor(master_config, horizon, log)
-        self.horizon         = horizon
-        self.logger          = log or logging.getLogger(__name__)
-        self._config_version = self._compute_config_hash(master_config)
-        self._gate_cache     = {}
-        self._pattern_cache  = {}
+        # ✅ P2-1 FULL FIX: Inject MBConfigExtractor into super().__init__
+        # This eliminates the "super() overhead" of creating two base extractors.
+        mb_base_extractor = MBConfigExtractor(master_config, horizon, log)
+        super().__init__(master_config, horizon, logger=log, base_extractor=mb_base_extractor)
+        
+        # ✅ P2-1 REJECTION FIX: Use OrderedDict to maintain LRU compatibility
+        self._gate_cache     = OrderedDict()
+        self._pattern_cache  = OrderedDict()
 
     # -- Scoring overrides -------------------------------------------------
 
@@ -564,12 +567,13 @@ def run_mb_resolver(
             _HORIZON, extractor=extractor,
         )
 
-        opportunity = compute_opportunity_score(
+        # ✅ P0-1 REJECTION FIX: Use decoupled compute_opportunity_score_full
+        opportunity = compute_opportunity_score_full(
             ticker                 = symbol,
             horizon                = _HORIZON,
             eligibility_base_score = eligibility,
-            indicators             = clean_ind,    # ← Pass flattened consistently
-            fundamentals           = clean_fund,   # ← Pass flattened consistently
+            indicators             = clean_ind,
+            fundamentals           = clean_fund,
             eval_ctx               = eval_ctx,
             extractor              = extractor,
         )

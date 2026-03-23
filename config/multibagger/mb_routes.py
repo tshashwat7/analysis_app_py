@@ -17,6 +17,7 @@ ENDPOINTS:
 """
 
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,6 +29,7 @@ from config.multibagger.mb_db_model import MultibaggerCandidate
 # cycle_status is owned by mb_scheduler (the authoritative writer).
 # Imported here so /status reads live values without a circular import.
 from config.multibagger.mb_scheduler import cycle_status
+from main import get_api_key
 
 logger    = logging.getLogger(__name__)
 mb_router = APIRouter(prefix="/multibagger", tags=["Multibagger"])
@@ -70,11 +72,15 @@ def get_candidates(
     passed:  Optional[bool] = Query(True,  description="Only show gatekeeper-passed stocks"),
     limit:   int            = Query(100,  ge=1, le=500),
     db:      Session        = Depends(get_db),
+    api_key: str            = Depends(get_api_key),
 ):
     """
     Return multibagger candidates, sorted by final_decision_score descending.
     """
-    q = db.query(MultibaggerCandidate)
+    # ✅ P2-4 FIX: Filter by staleness (35 days)
+    # This prevents the dashboard from showing stale results if the weekly run fails
+    cutoff = datetime.now(timezone.utc) - timedelta(days=35)
+    q = db.query(MultibaggerCandidate).filter(MultibaggerCandidate.last_evaluated >= cutoff)
 
     if passed:
         q = q.filter(MultibaggerCandidate.gatekeeper_passed == True)   # noqa: E712
@@ -90,7 +96,7 @@ def get_candidates(
 
 
 @mb_router.get("/candidates/{symbol}", response_model=dict)
-def get_candidate(symbol: str, db: Session = Depends(get_db)):
+def get_candidate(symbol: str, db: Session = Depends(get_db), api_key: str = Depends(get_api_key)):
     """Return full detail for a single symbol including thesis_json."""
     row = db.query(MultibaggerCandidate).filter_by(symbol=symbol).first()
     if not row:
@@ -102,7 +108,7 @@ def get_candidate(symbol: str, db: Session = Depends(get_db)):
 
 
 @mb_router.get("/status", response_model=dict)
-def get_status():
+def get_status(api_key: str = Depends(get_api_key)):
     """Return last cycle metadata and next scheduled run time."""
     from config.multibagger.mb_scheduler import _next_sunday_ist, _now_ist
     return {
@@ -113,7 +119,7 @@ def get_status():
 
 
 @mb_router.post("/run", response_model=dict)
-def trigger_manual_run():
+def trigger_manual_run(api_key: str = Depends(get_api_key)):
     """
     Trigger an immediate MB cycle in the background.
     Intended for admin/testing use only — not to be called during market hours.

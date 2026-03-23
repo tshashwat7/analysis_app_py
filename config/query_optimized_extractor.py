@@ -61,11 +61,11 @@ class QueryOptimizedExtractor:
     - Clear precedence: Setup > Horizon > Global
     """
     
-    def __init__(self, master_config: Dict, horizon: str, logger=None):
+    def __init__(self, master_config: Dict, horizon: str, logger=None, base_extractor=None):
         from config.config_extractor import ConfigExtractor
         
-        # Use base extractor for extraction
-        self.base_extractor = ConfigExtractor(master_config, horizon, logger)
+        # Use provided extractor or create a new one
+        self.base_extractor = base_extractor or ConfigExtractor(master_config, horizon, logger)
         self.horizon = horizon
         self.logger = logger or logging.getLogger(__name__)
         
