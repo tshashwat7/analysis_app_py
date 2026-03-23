@@ -190,24 +190,30 @@
       <i class="bi bi-bar-chart"></i> Growth & Value Drivers
     </div>
     <div class="metric-grid">
+      {% if eval_ctx.scoring and eval_ctx.scoring.fundamental %}
+      {% set cat_scores = eval_ctx.scoring.fundamental.category_scores or {} %}
       <div class="metric-card">
-        <div class="metric-label">Efficiency (ROE)</div>
-        <div class="metric-value">{{ "%.1f"|format(eval_ctx.scoring.fundamental.category_scores.efficiency.score or 0) }}</div>
+        <div class="metric-label">Quality Score</div>
+        <div class="metric-value">{{ "%.1f"|format(cat_scores.quality.score | default(0)) }}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Growth Score</div>
-        <div class="metric-value">{{ "%.1f"|format(eval_ctx.scoring.fundamental.category_scores.growth.score or 0) }}</div>
+        <div class="metric-value">{{ "%.1f"|format(cat_scores.growth.score | default(0)) }}</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Margin expansions</div>
-        <div class="metric-value text-{{ 'success' if (eval_ctx.scoring.fundamental.category_scores.margins.score or 0) > 5 else 'danger' }}">
-          {{ "%.1f"|format(eval_ctx.scoring.fundamental.category_scores.margins.score or 0) }}
+        <div class="metric-label">Profitability</div>
+        {% set _p_score = cat_scores.profitability.score | default(0) %}
+        <div class="metric-value text-{{ 'success' if _p_score > 5 else 'danger' }}">
+          {{ "%.1f"|format(_p_score) }}
         </div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Solvency Score</div>
-        <div class="metric-value">{{ "%.1f"|format(eval_ctx.scoring.fundamental.category_scores.solvency.score or 0) }}</div>
+        <div class="metric-label">Financial Health</div>
+        <div class="metric-value">{{ "%.1f"|format(cat_scores.financial_health.score | default(0)) }}</div>
       </div>
+      {% else %}
+      <div class="alert alert-light w-100">Scoring context unavailable for drivers.</div>
+      {% endif %}
     </div>
 
     <!-- Vertical Breakdowns -->
@@ -247,7 +253,13 @@
             {% for comp, val in (eval_ctx.scoring.technical.breakdown or {}).items() %}
             <tr>
               <td>{{ comp|capitalize }}</td>
-              <td class="text-end fw-bold">{{ "%.1f"|format(val if val is number else 0) }}</td>
+              <td class="text-end fw-bold">
+                {% if val is mapping %}
+                  {{ "%.1f"|format(val.score or 0) }}
+                {% else %}
+                  {{ "%.1f"|format(val if val is number else 0) }}
+                {% endif %}
+              </td>
             </tr>
             {% endfor %}
           </tbody>

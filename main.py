@@ -56,6 +56,10 @@ class PaperTradeRequest(BaseModel):
     horizon: str = None
     position_size: int = None
 
+# API Versioning & Schema (P0-3)
+API_VERSION = "1.0.0"
+RESPONSE_SCHEMA_VERSION = "1.1.0"
+
 # Environment-configurable parameters
 WARMER_BATCH_SIZE = int(os.getenv("WARMER_BATCH_SIZE", "5"))
 WARMER_TOP_N_DURING_MARKET = int(os.getenv("WARMER_TOP_N_DURING_MARKET", "50"))
@@ -614,7 +618,9 @@ def get_cached(symbol: str):
         flat_data = {
             "symbol": entry.symbol,
             "score": entry.score,
+            "bull_score": entry.score, # ✅ P2-5: Key normalization
             "recommendation": entry.recommendation,
+            "setup_signal": entry.recommendation, # ✅ P2-5: Key normalization
             "confidence": entry.conf_score,
             "bull_signal": entry.signal_text,
             "rr_ratio": entry.rr_ratio,
@@ -627,6 +633,10 @@ def get_cached(symbol: str):
         # 2. Merge the flexible JSON fields (horizon scores, errors, macros)
         if entry.horizon_scores:
             flat_data.update(entry.horizon_scores)
+            # ✅ P2-5: Ensure profit_pct is present
+            if "profit_pct" not in flat_data:
+                flat_data["profit_pct"] = flat_data.get("expected_return", 0)
+
         # Prefer the dedicated DB column over legacy JSON shadow data.
         flat_data["direction"] = entry.direction or flat_data.get("direction", "neutral")
         return flat_data
@@ -1543,6 +1553,7 @@ async def analyze_common(
             "indicators": analysis_data.get("indicators", {}),
             "trade_recommendation": trade_plan,
             "profile_report": profile_report,
+            "strategy_report": analysis_data.get("strategy_report", {}), # ✅ P1-4: Restore missing strategy context
             "meta_scores": analysis_data.get("meta_scores", {}),
             "macro_trend_status": analysis_data.get("macro_trend_status", "N/A")
         }
@@ -1586,7 +1597,12 @@ async def analyze_common(
             "trade_plan": trade_plan
         }
         logger.debug(f"analysis data for {symbol}: {log_context}")
-        return templates.TemplateResponse("result.html", context)
+        
+        # ✅ P0-3: API Versioning in response headers if needed, or in context
+        response = templates.TemplateResponse("result.html", context)
+        response.headers["X-API-Version"] = API_VERSION
+        response.headers["X-Response-Schema-Version"] = RESPONSE_SCHEMA_VERSION
+        return response
         
     except Exception as e:
         logger.exception(f"Error in analyze_common for {symbol}: {e}")
@@ -1651,8 +1667,21 @@ async def get_quick_scores(req: QuickScoresRequest, api_key: str = Depends(get_a
                  scores[sym] = h_scores
                  continue
                  
-        scores[sym] = {}
-    return scores
+        scores[sym] = {
+            "error": "Not Found",
+            "status": "pending",
+            "api_v": API_VERSION,
+            "ts": get_current_utc().isoformat()
+        }
+        
+    return {
+        "api_info": {
+            "version": API_VERSION,
+            "schema_version": RESPONSE_SCHEMA_VERSION,
+            "timestamp": get_current_utc().isoformat()
+        },
+        "scores": scores
+    }
 
 @app.get("/corporate_actions_api", response_class=JSONResponse)
 async def corporate_actions_api_secured(tickers: str = Query(...), api_key: str = Depends(get_api_key)):

@@ -18,6 +18,7 @@ from datetime import datetime
 
 from services.data_fetch import _format_metric_name
 from config.setup_pattern_matrix_config import PATTERN_INDICATOR_MAPPINGS
+from markupsafe import escape  # ✅ P0-1: For XSS protection
 import logging
 logger = logging.getLogger(__name__)
 
@@ -121,9 +122,10 @@ def generate_confidence_narrative(eval_ctx: Dict[str, Any], horizon: str) -> str
     bonuses = [a for a in structured if a.get("direction") == "positive"]
     penalties = [a for a in structured if a.get("direction") == "negative"]
 
-    setup_name = _format_setup_name(setup_type)
-    narrative = f"<b>Confidence Score: {clamped}%</b> ({horizon})<br><br>"
-    narrative += f"Base floor: <b>{base}%</b> ({setup_name}, {horizon}).<br>"
+    setup_name = escape(_format_setup_name(setup_type))
+    safe_horizon = escape(horizon)
+    narrative = f"<b>Confidence Score: {clamped}%</b> ({safe_horizon})<br><br>"
+    narrative += f"Base floor: <b>{base}%</b> ({setup_name}, {safe_horizon}).<br>"
     narrative += f"Adjustments: <b>{final - base:+.1f}%</b> → Raw {final:.1f}%<br><br>"
 
     if bonuses:
@@ -139,14 +141,25 @@ def generate_confidence_narrative(eval_ctx: Dict[str, Any], horizon: str) -> str
         narrative += "<br>"
 
     if divergence_mult != 1.0:
-        severity = "Severe" if divergence_mult <= 0.55 else ("Moderate" if divergence_mult <= 0.75 else "Minor")
-        narrative += f"<b>⚡ Divergence Dampener:</b> {severity} bearish divergence applied ({divergence_mult:.2f}×)<br><br>"
+        if divergence_mult < 1.0:
+            severity = "Severe" if divergence_mult <= 0.55 else ("Moderate" if divergence_mult <= 0.75 else "Minor")
+            label = "bearish divergence"
+            icon = "⚡"
+        else:
+            severity = "Strong" if divergence_mult >= 1.2 else "Minor"
+            label = "bullish boost"
+            icon = "🚀"
+        narrative += f"<b>{icon} Divergence Logic:</b> {severity} {label} applied ({divergence_mult:.2f}×)<br><br>"
 
     if clamped != final:
+        # ✅ P3-4: Correct bearish vocabulary (Ceiling -> Vulnerability)
+        direction = eval_ctx.get("signal_intent", "BULLISH")
+        limit_label = "ceiling" if direction == "BULLISH" else "vulnerability floor"
+        
         if clamped == clamp_range[1]:
-            narrative += f"Raw score ({final:.1f}%) exceeded {horizon} ceiling, clamped to <b>{clamped}%</b>.<br>"
+            narrative += f"Raw score ({final:.1f}%) reached {safe_horizon} {limit_label}, clamped to <b>{clamped}%</b>.<br>"
         elif clamped == clamp_range[0]:
-            narrative += f"Raw score ({final:.1f}%) below {horizon} floor, raised to <b>{clamped}%</b>.<br>"
+            narrative += f"Raw score ({final:.1f}%) below {safe_horizon} {limit_label}, raised to <b>{clamped}%</b>.<br>"
 
     return narrative.strip()
 
@@ -206,7 +219,10 @@ def generate_gate_validation_narrative(eval_ctx: Dict[str, Any]) -> str:
             narrative += f"&nbsp;&nbsp;{icon} {_format_gate_name(gate_name)}"
 
             if actual is not None:
-                narrative += f": {actual:.2f}"
+                if isinstance(actual, (int, float)):
+                    narrative += f": {actual:.2f}"
+                else:
+                    narrative += f": {escape(str(actual))}"
                 if isinstance(required, dict):
                     if required.get("min") is not None:
                         narrative += f" (need ≥{required['min']})"
@@ -231,8 +247,11 @@ def generate_gate_validation_narrative(eval_ctx: Dict[str, Any]) -> str:
             narrative += f"&nbsp;&nbsp;{icon} {_format_gate_name(gate_name)}"
 
             if actual is not None:
-                fmt = f"{actual:.0f}%" if gate_name == "confidence" else f"{actual:.2f}"
-                narrative += f": {fmt}"
+                if isinstance(actual, (int, float)):
+                    fmt = f"{actual:.0f}%" if gate_name == "confidence" else f"{actual:.2f}"
+                    narrative += f": {fmt}"
+                else:
+                    narrative += f": {escape(str(actual))}"
                 if isinstance(required, dict) and required.get("min") is not None:
                     narrative += f" (need ≥{required['min']})"
 
@@ -285,21 +304,22 @@ def generate_opportunity_narrative(
     strategy = trade_ctx.get("strategy", "generic")
     confidence = trade_ctx.get("confidence", 50)
     
-    narrative = f"<b>Opportunity Score: {final_score:.1f}/10</b> ({horizon})<br><br>"
+    safe_horizon = escape(horizon)
+    narrative = f"<b>Opportunity Score: {final_score:.1f}/10</b> ({safe_horizon})<br><br>"
     
     narrative += f"<b>Base Structural Eligibility: {eligibility_score:.1f}/10</b><br>"
     narrative += f"Combines technical, fundamental, and hybrid scoring weighted for {horizon} trading.<br><br>"
     
     if gate_passed:
         narrative += f"<b>Opportunity Bonus: +{bonus:.1f}</b><br>"
-        narrative += f"Setup: {_format_setup_name(setup)}<br>"
-        narrative += f"Strategy: {strategy.replace('_', ' ').title()}<br>"
+        narrative += f"Setup: {escape(_format_setup_name(setup))}<br>"
+        narrative += f"Strategy: {escape(strategy.replace('_', ' ').title())}<br>"
         narrative += f"Confidence: {confidence}%<br><br>"
         narrative += "✅ All entry gates passed — this is a tradeable opportunity.<br>"
     else:
         narrative += "<b>No Opportunity Bonus</b> (entry gates not met)<br><br>"
         block_reason = trade_ctx.get("block_reason", "Unknown")
-        narrative += f"⛔ <b>Blocked:</b> {block_reason}<br><br>"
+        narrative += f"⛔ <b>Blocked:</b> {escape(str(block_reason))}<br><br>"
         
         # Match block reason to specific next-action
         next_action = None
@@ -345,7 +365,9 @@ def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
     if not entry or not sl:
         return "No actionable trade plan available."
     
-    narrative = f"<b>Trade Plan: {ticker}</b><br><br>"
+    # ✅ P0-1: Escape dynamic ticker for XSS protection
+    safe_ticker = escape(ticker)
+    narrative = f"<b>Trade Plan: {safe_ticker}</b><br><br>"
     
     narrative += f"<b>Entry:</b> ₹{entry:,.2f}<br>"
     narrative += f"<b>Stop Loss:</b> ₹{sl:,.2f} ({_calculate_sl_pct(entry, sl):.1f}% risk)<br>"
@@ -373,7 +395,7 @@ def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
         pattern_name = pattern_meta.get("pattern", "")
         age = pattern_meta.get("age_candles", 0)
         quality = pattern_meta.get("quality", 0)
-        narrative += f"<br><b>Pattern:</b> {_format_pattern_name(pattern_name)}<br>"
+        narrative += f"<br><b>Pattern:</b> {escape(_format_pattern_name(pattern_name))}<br>"
         narrative += f"Pattern Age: {age} candles | Quality: {quality}/10<br>"
     
     return narrative.strip()
@@ -408,31 +430,15 @@ def generate_scoring_breakdown_narrative(eval_ctx: Dict[str, Any]) -> str:
             penalty_list = []
 
         if penalty_list:
-            narrative += "<br><b>📉 Technical Drag:</b><br>"
+            narrative += "<br><b>📉 Technical Penalties:</b><br>"
             for p in penalty_list[:3]:
-                narrative += f"&nbsp;&nbsp;• {p}<br>"
-        
-        # Also show low-scoring metrics from breakdown
-        tech_breakdown = tech.get("breakdown", {})
-        low_scorers = []
-        if isinstance(tech_breakdown, dict):
-            for cat, metrics in tech_breakdown.items():
-                if isinstance(metrics, dict):
-                    for metric, val in metrics.items():
-                        score_val = val.get("score", 5) if isinstance(val, dict) else 5
-                        if isinstance(score_val, (int, float)) and score_val < 4.0:
-                            low_scorers.append((metric, score_val))
-            low_scorers.sort(key=lambda x: x[1])
-        
-        if penalty_list:
-            narrative += "<br><b>📉 Technical Drag:</b><br>"
-            for p in penalty_list[:3]:
-                narrative += f"&nbsp;&nbsp;• {p}<br>"
-
-        if low_scorers:
-            narrative += "<br><b>📉 Weak Indicators:</b><br>"  # separate header always
-            for metric, score_val in low_scorers[:3]:
-                narrative += f"&nbsp;&nbsp;• {_format_metric_name(metric)}: {score_val:.1f}/10<br>"
+                if isinstance(p, dict):
+                    metric = p.get("metric", "Unknown")
+                    score_val = p.get("score", 0)
+                    safe_metric = escape(_format_metric_name(metric))
+                    narrative += f"&nbsp;&nbsp;• {safe_metric}: {score_val:.1f}/10<br>"
+                else:
+                    narrative += f"&nbsp;&nbsp;• {escape(str(p))}<br>"
         
         narrative += f"<b>Fundamental Score: {fund_score:.1f}/10</b><br>"
         fund_breakdown = fund.get("breakdown", {})
@@ -455,7 +461,9 @@ def generate_scoring_breakdown_narrative(eval_ctx: Dict[str, Any]) -> str:
             narrative += "Top metrics:<br>"
             for metric, score_val in top_metrics:
                 if isinstance(score_val, (int, float)) and score_val > 0:
-                    narrative += f"&nbsp;&nbsp;• {_format_metric_name(metric)}: {score_val:.1f}<br>"
+                    # ✅ P0-1: Escape dynamic metric name
+                    safe_metric = escape(_format_metric_name(metric))
+                    narrative += f"&nbsp;&nbsp;• {safe_metric}: {score_val:.1f}<br>"
         
         narrative += "<br>"
         
@@ -470,7 +478,7 @@ def generate_scoring_breakdown_narrative(eval_ctx: Dict[str, Any]) -> str:
                 else:
                     score_val = value if value is not None else 0
                 if isinstance(score_val, (int, float)) and score_val > 0:
-                    narrative += f"&nbsp;&nbsp;• {_format_metric_name(metric)}: {score_val:.1f}<br>"
+                    narrative += f"&nbsp;&nbsp;• {escape(_format_metric_name(metric))}: {score_val:.1f}<br>"
     
     except Exception as e:
         logger.error(f"Error generating scoring breakdown narrative: {e}")
@@ -732,8 +740,8 @@ def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
         return "No analysis available."
     
     # Use trade_signal (from finalize_trade_decision), fallback to signal
-    signal = tr.get("trade_signal", tr.get("signal", "N/A"))
-    setup = tr.get("setup_type", "Generic").replace("_", " ").title()
+    signal = escape(tr.get("trade_signal", tr.get("signal", "N/A")))
+    setup = escape(tr.get("setup_type", "Generic").replace("_", " ").title())
     conf = (
         tr.get("confidence") or
         tr.get("setup_confidence") or
@@ -760,7 +768,7 @@ def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
         )
 
     if not tr.get("entry_permission", True):
-        reason = tr.get("reason", "Entry conditions not met")
+        reason = escape(tr.get("reason", "Entry conditions not met"))
         return (
             f"<b>Setup identified but entry blocked.</b> "
             f"Reason: {reason}. Monitor for improvement."
@@ -786,7 +794,7 @@ def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
             )
 
     if "BLOCKED" in signal:
-        reason = tr.get("reason", "Execution gates not met")
+        reason = escape(tr.get("reason", "Execution gates not met"))
         return (
             f"<b>{setup} setup detected but entry is blocked.</b> "
             f"Reason: {reason}. Check gate status for specifics."
@@ -799,7 +807,7 @@ def summarize_trade_recommendation(tr: Dict[str, Any]) -> str:
             f"Wait for volume expansion or a valid breakout pattern."
         )
             
-    return f"Current structure is <b>{setup}</b> but lacks conviction ({conf}%). {tr.get('reason')}."
+    return f"Current structure is <b>{setup}</b> but lacks conviction ({conf}%). {escape(tr.get('reason'))}."
 
 
 # ==========================================
@@ -885,14 +893,16 @@ def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
     
     # Get Best Strategy Name safely
     best_strat = "unknown"
-    if strat_report.get("summary"):
-        best_strat = strat_report["summary"].get("best_strategy", "unknown")
+    if isinstance(strat_report, dict):
+        summary_node = strat_report.get("best") or strat_report.get("summary") or {}
+        if isinstance(summary_node, dict):
+            best_strat = summary_node.get("best_strategy", "unknown")
     
     return {
         "trade": summarize_trade_recommendation(tr),
         "patterns": summarize_patterns(indicators),
         "pattern_details": get_active_pattern_details(indicators),
         "strategy_details": STRATEGY_LIBRARY.get(best_strat.lower(), "Standard strategy analysis."),
-        "market": f"Market Trend: {result.get('macro_trend_status', 'Neutral')}",
+        "market": f"Market Trend: {escape(result.get('macro_trend_status', 'Neutral'))}",
         "risk": f"Suggested Stop Loss: {_fmt_money(tr.get('stop_loss'))} ({tr.get('execution_hints', {}).get('risk_note', 'Standard Risk')})"
     }

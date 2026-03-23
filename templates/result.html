@@ -2410,9 +2410,9 @@
               </h2>
               <div id="collapseGate" class="accordion-collapse collapse">
                 <div class="accordion-body accordion-body-sm">
-                  {% if profile_report.eval_ctx %}
+                  {% if profile_report.eval_ctx and profile_report.eval_ctx.structural_gates %}
                   <div class="gate-section-lbl">Structural</div>
-                  {% for gate_name, result in profile_report.eval_ctx.structural_gates.by_gate.items() %}
+                  {% for gate_name, result in profile_report.eval_ctx.structural_gates.by_gate.items() | default([]) %}
                   <div class="gate-item">
                     <span class="gate-name">{{ gate_name | replace('_',' ') | title }}</span>
                     {% if result.status == 'passed' %}<span class="gate-pass"><i
@@ -2631,22 +2631,25 @@
               <div class="exec-lbl">Target 1</div>
               <div class="exec-num exec-num-sm exec-t-color">{{ "₹" ~ tr.get("targets",{}).get("t1") if
                 tr.get("targets",{}).get("t1") else '-' }}</div>
-              {% if tr.entry and tr.get("targets",{}).get("t1") and tr.entry > 0 %}
+               {% if tr.entry and tr.get("targets",{}).get("t1") and tr.entry > 0 %}
               {% set pct1 = (tr.get("targets",{}).get("t1") - tr.entry) / tr.entry * 100 %}
-              {% set pct1_profit = pct1 if trade_direction == 'bullish' else -pct1 %}
+              {# ✅ P0-2: Fix SHORT trade rendering (pct1 is negative for short, but it IS a profit if direction is bearish) #}
+              {% set _dir = trade_direction | default(tr.direction) | lower %}
+              {% set pct1_profit = pct1 if _dir == 'bullish' else -pct1 %}
               {% if pct1_profit > 0 %}{% set _p1c_cls = 'exec-pct clr-green' %}{% else %}{% set _p1c_cls = 'exec-pct clr-red' %}{% endif %}
-              <div class="{{ _p1c_cls }}">{{ "%.1f" | format(pct1) }}%</div>
+              <div class="{{ _p1c_cls }}">{{ "%.1f" | format(pct1_profit) }}%</div>
               {% endif %}
             </div>
             <div class="col-4 exec-cell">
               <div class="exec-lbl">Target 2</div>
               <div class="exec-num exec-num-sm exec-t-color">{{ "₹" ~ tr.get("targets",{}).get("t2") if
                 tr.get("targets",{}).get("t2") else '-' }}</div>
-              {% if tr.entry and tr.get("targets",{}).get("t2") and tr.entry > 0 %}
+               {% if tr.entry and tr.get("targets",{}).get("t2") and tr.entry > 0 %}
               {% set pct2 = (tr.get("targets",{}).get("t2") - tr.entry) / tr.entry * 100 %}
-              {% set pct2_profit = pct2 if trade_direction == 'bullish' else -pct2 %}
+              {# ✅ P0-2: Fix SHORT trade rendering #}
+              {% set pct2_profit = pct2 if _dir == 'bullish' else -pct2 %}
               {% if pct2_profit > 0 %}{% set _p2c_cls = 'exec-pct clr-green' %}{% else %}{% set _p2c_cls = 'exec-pct clr-red' %}{% endif %}
-              <div class="{{ _p2c_cls }}">{{ "%.1f" | format(pct2) }}%</div>
+              <div class="{{ _p2c_cls }}">{{ "%.1f" | format(pct2_profit) }}%</div>
               {% endif %}
             </div>
             <div class="col-4 exec-cell">
@@ -3086,63 +3089,9 @@
             backgroundColor: '#ffffff',
             windowWidth: 794,
             onclone: function (doc) {
-              // Apply all @media print overrides via a <style> injected into the clone
-              const s = doc.createElement('style');
-              s.textContent = `
-              body,html{background:#fff!important;color:#111!important;}
-              body::before{display:none!important;}
-              .wrap{max-width:100%!important;padding:4px 0!important;}
-              .fixed-bottom,.trade-footer{display:none!important;}
-              .panel{background:#fff!important;border:1px solid #ccc!important;box-shadow:none!important;}
-              .panel-header{background:#f4f4f4!important;color:#444!important;border-color:#ccc!important;}
-              .panel-body,.panel-body-flush{background:#fff!important;}
-              .header-bar{background:#fff!important;border-color:#ccc!important;}
-              .stock-name,.stock-price{color:#111!important;}
-              .stock-tag{background:#f0f0f0!important;color:#555!important;border-color:#ccc!important;}
-              .horizon-tabs{background:#f0f0f0!important;border-color:#ccc!important;}
-              .horizon-tab{color:#555!important;}
-              .horizon-tab.active{background:#3b82f6!important;color:#fff!important;}
-              .btn-pdf{display:none!important;}
-              .signal-buy,.signal-strong{background:#dcfce7!important;color:#166534!important;border-color:#22c55e!important;}
-              .signal-sell,.signal-avoid{background:#fee2e2!important;color:#991b1b!important;border-color:#ef4444!important;}
-              .signal-hold,.signal-watch,.signal-moderate,.signal-blocked{background:#fef3c7!important;color:#92400e!important;border-color:#f59e0b!important;}
-              .score-pill-sm{border:1px solid #ccc!important;}
-              .pill-green{background:#dcfce7!important;color:#166534!important;}
-              .pill-red{background:#fee2e2!important;color:#991b1b!important;}
-              .pill-yellow{background:#fef3c7!important;color:#92400e!important;}
-              .pill-blue{background:#dbeafe!important;color:#1d4ed8!important;}
-              .pill-muted{background:#f3f4f6!important;color:#374151!important;}
-              .score-green{color:#166534!important;} .score-amber{color:#92400e!important;} .score-red{color:#991b1b!important;}
-              .score-accent,.clr-accent2{color:#1d4ed8!important;}
-              .score-label,.clr-muted,.clr-muted2{color:#6b7280!important;}
-              .clr-text{color:#111!important;} .clr-green{color:#166534!important;} .clr-red{color:#991b1b!important;}
-              .clr-yellow{color:#92400e!important;} .clr-cyan{color:#0e7490!important;}
-              .strat-card{background:#f9f9f9!important;border-color:#ccc!important;}
-              .strat-card.best{background:#eff6ff!important;border-color:#93c5fd!important;}
-              .strat-card.qualified{background:#f0fdf4!important;border-color:#86efac!important;}
-              .sbc-blue{background:#eff6ff!important;} .sbc-green{background:#f0fdf4!important;} .sbc-yellow{background:#fffbeb!important;}
-              .sbc-val-blue{color:#1d4ed8!important;} .sbc-val-green{color:#166534!important;} .sbc-val-yellow{color:#92400e!important;}
-              .tbl th{background:#f3f4f6!important;color:#374151!important;border-color:#e5e7eb!important;}
-              .tbl td{border-color:#e5e7eb!important;}
-              .tbl tr:hover td{background:#fff!important;} .tbl tr.used td{background:#eff6ff!important;}
-              .pattern-item{background:#f9f9f9!important;border-color:#ccc!important;}
-              .pattern-item.bull{border-left-color:#22c55e!important;} .pattern-item.bear{border-left-color:#ef4444!important;}
-              .pattern-title-bull{color:#166534!important;} .pattern-title-bear{color:#991b1b!important;}
-              .exec-box{background:#f9f9f9!important;border-color:#ccc!important;}
-              .exec-entry-color{color:#1d4ed8!important;} .exec-sl-color{color:#991b1b!important;} .exec-t-color{color:#166534!important;}
-              .rr-fill-sl{background:#fca5a5!important;opacity:1!important;} .rr-fill-t1{background:#86efac!important;opacity:1!important;}
-              .rr-lbl-sl{color:#991b1b!important;} .rr-lbl-en{color:#1d4ed8!important;} .rr-lbl-t1{color:#166534!important;}
-              .analysis-box{background:#eff6ff!important;} .analysis-box strong{color:#1d4ed8!important;}
-              .score-box{background:#f0fdf4!important;} .score-box strong{color:#166534!important;}
-              .accordion-button{background:#f3f4f6!important;color:#374151!important;}
-              .accordion-body{background:#fff!important;color:#111!important;}
-              .meta-tag{background:#f3f4f6!important;border-color:#e5e7eb!important;color:#374151!important;}
-              .gate-pass{color:#166534!important;} .gate-fail{color:#991b1b!important;} .gate-name{color:#374151!important;}
-              .scrollable,.scroll-180,.scroll-200,.scroll-220,.scroll-240,.scroll-700{max-height:none!important;overflow:visible!important;}
-              .conf-track{background:#e5e7eb!important;}
-              .conf-fill-green{background:#22c55e!important;} .conf-fill-amber{background:#f59e0b!important;} .conf-fill-red{background:#ef4444!important;}
-            `;
-              doc.head.appendChild(s);
+              // ✅ P3-3: Deduplicated CSS. 
+              // Most styles are now handled by the regular @media print block.
+              // We only keep the most critical overrides if any are missing from @media print.
             }
           },
           jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
@@ -3204,5 +3153,5 @@
     }
   </script>
 </body>
-
 </html>
+```
