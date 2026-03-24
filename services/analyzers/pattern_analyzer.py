@@ -31,7 +31,6 @@ from services.patterns.double_top_bottom import (
     BearishNecklinePattern,
 )
 from services.patterns.momentum_flow  import MomentumFlowPattern
-from services.patterns.engulfing      import EngulfingPattern
 from services.fusion.pattern_fusion import merge_pattern_into_indicators
 
 logger = logging.getLogger(__name__)
@@ -52,7 +51,6 @@ class PatternAnalyzer:
             BullishNecklinePattern(),
             BearishNecklinePattern(),
             MomentumFlowPattern(),
-            EngulfingPattern(), # alias "engulfing"
         ]
         # ✅ P3-2: Circuit breaker for failing detectors
         self.failure_counts: Dict[str, int] = {}

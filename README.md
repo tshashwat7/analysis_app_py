@@ -88,7 +88,7 @@ The core philosophy distinguishes stock *quality* (structural eligibility — "i
                        ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  BRAIN LAYER (Phase 3 + 4)                                   │
-│  signal_engine.py ──► config_resolver.py (74 methods)        │
+│  signal_engine.py ──► config_resolver.py                        │
 │  [Scoring · Setup Classification · Gates · Confidence]       │
 └──────────────────────┬───────────────────────────────────────┘
                        │ eval_ctx + exec_ctx
@@ -161,7 +161,7 @@ Before a single config gate is evaluated, the system must produce clean, adjuste
 
 **Files:** `services/data_fetch.py`, `services/cache.py`
 
-`data_fetch.py` is the single entry point for all raw OHLCV ingestion. It never hits the network if the data is already resident. The lookup follows a strict three-tier fallback:
+`data_fetch.py` is the single entry point for all raw OHLCV ingestion and owns the complete three-tier fallback logic (via `ParquetStore`). It never hits the network if the data is already resident:
 
 ```
 Tier 1 — RAM Cache (in-process dict, sub-millisecond)
@@ -174,7 +174,7 @@ Tier 3 — Yahoo Finance (network, ~300–800 ms)
          → download → write Parquet → promote to RAM → return
 ```
 
-`cache.py` manages the in-process RAM store and Parquet persistence layer. It handles cache invalidation (staleness by candle count / TTL), Parquet read/write with schema enforcement, and thread-safe promotion from disk to RAM after a Tier-3 fetch.
+`cache.py` is a **thread-safe LRU wrapper** for the in-process RAM store. Its role is strictly bounded to providing a concurrency-safe in-memory cache with size eviction; it does not orchestrate the Parquet tier or the network fallback — those are handled entirely inside `data_fetch.py`.
 
 **Why this matters:** A full market scan across 200+ symbols processes each symbol in a `ProcessPoolExecutor` worker. Without a Parquet tier, every cold start would fan out 200+ simultaneous Yahoo Finance requests, overwhelming rate limits and inflating scan time by an order of magnitude. With warm Parquet cache, a full scan runs entirely from disk.
 
@@ -226,6 +226,8 @@ The horizon is passed into `indicators.py` at call time; the function selects th
 **Files:** `services/corporate_actions.py`, `daily_corp_action_warmer.py`
 
 The corporate actions system uses a **3-tier data source hierarchy** to avoid inaccurate price adjustments and prevent false alarm signals from unadjusted splits or ex-dividend gaps.
+
+> **Idempotency:** Corporate action data deduplication relies on the **upstream API** (NSE lib / Equitymaster / yfinance) returning a stable, canonical event list. The system does not perform its own client-side event deduplication beyond what each upstream source already guarantees.
 
 #### Data Source Hierarchy
 
@@ -303,7 +305,9 @@ If the library is not available, the system emits a `WARNING` at startup and fal
 | `fundamental_score_config.py` | `HORIZON_FUNDAMENTAL_WEIGHTS`, `METRIC_WEIGHTS` | Category weights per horizon, metric-level weights, penalty rules (operator-based), bonus rules (gate-based), sector-specific exclusions |
 | `master_config.py` | `MASTER_CONFIG`, `GATE_METRIC_REGISTRY`, `HORIZON_PILLAR_WEIGHTS` | Global constants, horizon execution rules, risk management, RR regime adjustments, `GATE_METRIC_REGISTRY` with `context_paths` and `optional` flags for each gate metric, `HYBRID_METRIC_REGISTRY`, pillar weights |
 
-**Design Principle:** No horizon-specific logic inside these files. Horizon overrides are expressed as nested dicts (`horizon_overrides.intraday`, `horizon_overrides.short_term`, etc.) that the extraction layer merges at query time. No module outside of `config_extractor.py` may import directly from these files.
+**Design Principle:** No horizon-specific logic inside these files. Horizon overrides are expressed as nested dicts (`horizon_overrides.intraday`, `horizon_overrides.short_term`, etc.) that the extraction layer merges at query time.
+
+**Config import policy:** Trading-logic modules (`config_resolver.py`, `signal_engine.py`) must never import raw config dicts directly — all access must flow through `config_extractor.py`. Infrastructure modules (`data_fetch.py`) are an **intentional exception**: they are permitted to import `config/constants.py` directly for system-level settings (cache toggle flags, fetch horizons, Parquet TTLs) that must be available before the resolver stack is initialised.
 
 ---
 
@@ -347,7 +351,7 @@ setup = extractor.get_required("setup_pattern_matrix")
 
 #### `query_optimized_extractor.py` — `QueryOptimizedExtractor`
 
-Wraps `ConfigExtractor` with **85 type-safe query methods** organized in 7 categories. Adds versioned LRU caching for `get_resolved_gates()` and `get_pattern_context()`. All confidence pipeline methods delegate gate evaluation to `gate_evaluator.py`.
+Wraps `ConfigExtractor` with type-safe query methods organised in 7 categories. Adds versioned LRU caching for `get_resolved_gates()` and `get_pattern_context()`. All confidence pipeline methods delegate gate evaluation to `gate_evaluator.py`.
 
 **Method categories:**
 
@@ -515,7 +519,7 @@ Layer 3 — Finalize: apply direction, write plan fields
 
 ### Phase 4 — Config Resolver
 
-**File:** `config/config_resolver.py` — v6.0 (4200+ lines, 74 methods)
+**File:** `config/config_resolver.py` — v6.0
 
 **Inputs:** `eval_ctx` dict with `indicators`, `fundamentals`, `price_data`, `patterns`  
 **Outputs:** Complete `eval_ctx` (evaluation phase) and `execution` dict (execution phase)
@@ -601,6 +605,8 @@ Dual constraint: `qty_by_risk = risk_per_trade / risk_per_share` vs `qty_by_capi
 **Outputs:** Enhanced `exec_ctx` with pattern warnings, invalidation flags, RR regime metadata, timeline estimates, and market-adjusted targets
 
 The trade enhancer is a **post-processing** layer that operates in real-time after the static resolver pass. It adds dynamic validation that the resolver intentionally defers (pattern age, breakdown state, market volatility regime).
+
+> **`eval_ctx` mutability:** `trade_enhancer.py` **intentionally mutates** `eval_ctx` during the enhance pass — specifically, confidence adjustments such as the expiry penalty are written back into `eval_ctx["confidence_adjustments"]`. This allows real-time pattern state (expiry, invalidation) to flow seamlessly into the downstream trade plan generator without requiring a full re-evaluation pass.
 
 #### `enhance_execution_context()`
 
@@ -695,7 +701,7 @@ def merge_pattern_into_indicators(
     indicators: Dict[str, Any],
     pattern_results: Dict[str, Any],
     horizon: str = None,        # used to build scoped alias key
-    df: pd.DataFrame = None     # optional — provides idempotent ts field
+    df: pd.DataFrame = None     # optional — provides last-bar ts field
 )
 ```
 
@@ -705,7 +711,7 @@ indicators[alias] = {
     "value":  result.get("quality", 0),      # float 0–10 (quality score, NOT pattern name)
     "found":  result.get("found", False),    # bool — always True at injection time
     "ts":     float(df.index[-1].timestamp()) if df is not None else None,
-                                             # idempotent timestamp from last OHLCV bar
+                                             # last OHLCV bar timestamp (informational)
     "raw":    result,                        # full detector output dict (meta, score, quality)
     "score":  result.get("score", 0),        # normalized 0–100
     "desc":   result.get("desc", f"Pattern {alias} Detected"),
@@ -713,6 +719,8 @@ indicators[alias] = {
     "source": "Pattern"
 }
 ```
+
+**Pattern fusion idempotency:** `merge_pattern_into_indicators` is re-entrant safe because it only writes an entry for patterns where `found=True`. The idempotency guarantee for re-runs relies on **quality score checks** — a second analysis pass with unchanged market data will produce identical quality scores and thus identical injected dicts. The `ts` field is informational and is **not** used as an idempotency key.
 
 > **Note:** `value` is the pattern's **quality float** (0–10), not its name string. Templates displaying a pattern label should use `"alias"` or `"desc"`, not `"value"`. This is the correct production schema as of v15.1.
 
@@ -944,7 +952,7 @@ Setup-specific (SETUP_PATTERN_MATRIX["MOMENTUM_BREAKOUT"]["context_requirements"
                + horizon_overrides["short_term"]
 ```
 
-**All config access goes through `query_optimized_extractor.py`.** Neither `config_resolver.py` nor `signal_engine.py` may import from any config file directly.
+**Config import policy:** Trading-logic modules (`config_resolver.py`, `signal_engine.py`) must never import raw config dicts directly — all access must flow through `query_optimized_extractor.py`. Infrastructure modules (`data_fetch.py`) are an **intentional exception**: they may import `config/constants.py` directly for system-level settings (cache toggles, fetch horizons) that must be resolved before the resolver stack is initialised.
 
 ### Config Hierarchy Examples
 
@@ -1325,6 +1333,24 @@ Each dot maps directly to the `signal` field from the corresponding horizon's an
 
 **Confluence logic:** The UI queries all three horizons in parallel and assembles the dot row client-side after all three responses resolve. A stock is flagged as **STRONG confluence** only when all three horizons return `BUY` or `STRONG_BUY` — meaning the momentum thesis is valid on the 5-minute chart, the daily chart, and the weekly chart simultaneously. This multi-timeframe alignment filter is the primary tool traders use to surface the highest-conviction setups from the full scan output.
 
+### UI Analysis Workflows
+
+The system transitions between two distinct analysis modes based on user interaction in the frontend:
+
+#### Initial Analysis (Full Mode)
+There are two ways to initiate the first analysis of a session:
+1. **Auto Analyze**: Triggered when a user selects an index from the dropdown (e.g., Nifty 50) and clicks "Analyze". This performs a batch scan of all symbols in that index.
+2. **Manual Analyze**: Triggered when a user enters a specific stock symbol (e.g., `RELIANCE.NS`) in the top search bar and clicks "Analyze".
+
+In both cases, the frontend dispatches a request to the backend with `mode="full"`. The backend computes results for all three primary trading horizons (`intraday`, `short_term`, `long_term`) and returns the full profile. The UI then automatically displays the trade plan and gauges for the system-determined **best_fit** horizon (the horizon with the highest opportunity score).
+
+#### Horizon Toggle Buttons (Single Mode)
+Once a symbol is loaded, the result page displays specific **Horizon Buttons** (Intraday, Swing, Long-Term, Multibagger). Clicking one of these buttons:
+1. **Overrides** the system's `best_fit` logic.
+2. Triggers a backend request with `mode="single"` and the requested `horizon` parameter.
+3. Fetching single-horizon data is significantly faster as the backend suppresses computation for the other two horizons.
+4. The UI then refreshes the main gauge, narrative, and trade plan table to match the user's explicit selection.
+
 ---
 
 ## Setup & Installation
@@ -1514,7 +1540,7 @@ config/
   ├── confidence_config.py            # Confidence pipeline config
   ├── config_extractor.py             # Section extraction + ConfigSection dataclass
   ├── config_helpers.py               # Business logic bridge (only public interface)
-  ├── config_resolver.py              # Decision-making layer (74 methods)
+  ├── config_resolver.py              # Decision-making layer
   ├── config_utility/
   │   ├── market_utils.py             # NSE market hours / trading session detection
   │   └── logger_config.py            # METRICS, SafeDict, log_failures, track_performance
@@ -1572,10 +1598,10 @@ main.py                               # FastAPI app + lifespan
 ### Core Principles
 
 1. **Config purity:** No code outside `config_extractor.py` may import from `config/*.py` raw config files. All config access through the extractor stack.
-2. **Evaluation purity:** `eval_ctx` produced by `build_evaluation_context_only()` must never be mutated by the trade enhancer. The enhancer should write to `exec_ctx` and note stale-context flags rather than modifying discovery-phase data.
+2. **Evaluation state flow:** `eval_ctx` is intentionally mutated by the trade enhancer (specifically for confidence adjustments like expiry penalties) to allow real-time pattern states to flow into downstream execution without a full re-evaluation.
 3. **Pattern meta contract:** All detectors must populate all 10 standard meta fields when `found=True`. Missing fields produce silent failures in the trade enhancer and resolver.
 4. **Gate metric registry:** New gate metrics must be registered in `GATE_METRIC_REGISTRY` with correct `context_paths` before being referenced in any gate config.
-5. **Confidence arithmetic:** Penalties are signed (`-15`, not `15`). The `evaluate_confidence_modifier()` method auto-corrects positive `confidence_penalty` values with a CRITICAL log warning.
+5. **Confidence arithmetic:** Penalties must be explicitly signed (e.g., -15, not 15). To ensure data purity for downstream ML pipelines, the system no longer auto-corrects misconfigured positive penalties. Instead, it fails fast by raising a hard `ConfigurationError`.
 
 ### Testing Patterns
 

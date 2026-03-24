@@ -27,6 +27,7 @@ import config.gate_evaluator as _gate_evaluator
 
 from config.fundamental_score_config import compute_fundamental_score
 from config.technical_score_config import calculate_dynamic_score, compute_technical_score
+from config.config_extractor import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -418,13 +419,10 @@ class QueryOptimizedExtractor:
             if key in modifier_config:
                 adjustment = modifier_config[key]
                 if key == "confidence_penalty" and adjustment is not None and float(adjustment) > 0:
-                    # ✅ Phase 3 P3-2 FIX: Demote to WARNING to prevent log spam
-                    self.logger.warning(
-                        f"[CONFIG BUG] confidence_penalty={adjustment} is positive — "
-                        f"must be negative in confidence_config.py. Auto-correcting. "
-                        f"Check: {modifier_config.get('reason', 'unknown')}"
+                    raise ConfigurationError(
+                        f"CRITICAL CONFIG ERROR: confidence_penalty={adjustment} is positive. "
+                        f"Penalties must be negative. Check: {modifier_config.get('reason', 'unknown')}"
                     )
-                    adjustment = -abs(float(adjustment))
                 break
         
         block_entry = modifier_config.get("block_entry", False)

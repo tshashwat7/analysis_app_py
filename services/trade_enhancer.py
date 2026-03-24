@@ -198,8 +198,7 @@ def adjust_targets_for_market_conditions(
                     execution_t2 = current_price - (t2_distance * target_factor)
             target_source = "market_adjusted"
         
-        # === Spread Cost ===
-        # Resolve NameError for BASE_SPREAD_PCT by removing it (calculate_adaptive_spread_cost handles it)
+        # Spread Cost
         spread_multiplier = 2.0 if atr_pct > 5.0 else (1.5 if atr_pct > 3.0 else 1.0)
         market_cap_data = fundamentals.get("marketCap", {})
         mc_raw = market_cap_data.get("raw", 0) if isinstance(market_cap_data, dict) else (market_cap_data or 0)
@@ -211,14 +210,6 @@ def adjust_targets_for_market_conditions(
             horizon=horizon,
             extractor=extractor
         )
-        # ✅ NEW: Spread Cost Cap (Issue 3)
-        # Cap spread at 50% of potential T1 reward to prevent RR distortion
-        reward_to_t1 = abs(execution_t1 - current_price)
-        if reward_to_t1 > 0:
-            capped_spread = min(spread_cost, reward_to_t1 * 0.5)
-            if capped_spread < spread_cost:
-                logger.debug(f"[{horizon}] Capping spread cost: {spread_cost:.2f} -> {capped_spread:.2f} (50% rule)")
-                spread_cost = capped_spread
         
         # === Execution RR ===
         if direction == "LONG":
