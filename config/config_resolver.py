@@ -2214,6 +2214,15 @@ class ConfigResolver:
         
         warning_pen = conf_adj.get("warning_penalty", -5)
         violation_pen = conf_adj.get("violation_penalty", -15)
+        
+        # ✅ Phase 3 P2-1 FIX: Validate penalty signs (Fail-Fast)
+        # Execution penalties MUST be negative to prevent accidental confidence boosts.
+        if warning_pen > 0 or violation_pen > 0:
+            raise ConfigurationError(
+                f"ARCHITECTURAL VIOLATION: Positive execution penalty found: "
+                f"warning={warning_pen}, violation={violation_pen}. "
+                f"Penalties must be negative."
+            )
         risk_thresh = conf_adj.get("risk_score_thresholds", {"high": 80, "moderate": 60, "low": 40})
         risk_high_pen = conf_adj.get("risk_score_high_penalty", -10)
         risk_mod_pen = conf_adj.get("risk_score_moderate_penalty", -5)

@@ -266,8 +266,8 @@ def compute_opportunity_score(
             opp_bonus = 0.0
             logger.debug(f"[{ticker}][{horizon}] ⚠️ No bonus (gates failed)")
 
-        # 5. Final Decision Score
-        final_score = calc_final_score_util(eligibility_base_score, opp_bonus)
+        # ✅ Phase 3 P3-2 FIX: Remove dead calc_final_score_util call.
+        # Scoring logic below (normalized_bonus) is the source of truth.
 
         # 5. Final Decision Score
         # Mathematical Refactor: Weighting instead of raw addition (Score > 10 fix)
@@ -500,18 +500,20 @@ def compute_all_profiles(
                 }
                 completeness_score = sum(pillar_flags.values()) / 3.0
 
-                # Coerce for calculation, but record the fact
-                tech_val = 0.0 if tech_score is None else tech_score
-                fund_val = 0.0 if fund_score is None else fund_score
-                hybrid_val = 0.0 if hybrid_score is None else hybrid_score
+                # ✅ Phase 3 P2-2 FIX: Do NOT coerce None to 0.0 here.
+                # Passing None to calculate_structural_eligibility allows scoring_utils
+                # to perform correct weight redistribution for missing pillars.
+                tech_val = tech_score
+                fund_val = fund_score
+                hybrid_val = hybrid_score
 
                 tech_penalties = technical.get("penalties", [])
 
                 logger.debug(
                     f"[{ticker}][{horizon}] 📈 PILLAR SCORES | "
-                    f"Technical={tech_val:.1f} | "
-                    f"Fundamental={fund_val:.1f} | "
-                    f"Hybrid={hybrid_val:.1f} | "
+                    f"Technical={tech_val if tech_val is not None else 'None'} | "
+                    f"Fundamental={fund_val if fund_val is not None else 'None'} | "
+                    f"Hybrid={hybrid_val if hybrid_val is not None else 'None'} | "
                     f"Completeness={completeness_score:.2f}"
                 )
 
@@ -847,7 +849,12 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     
     # Logic: If no primary pattern, you cannot generate a BUY/SELL signal 
     # unless you are in a GENERIC setup which is allowed to be pattern-less.
-    if not primary_found:
+    # ✅ Phase 4 P2-2 FIX: Block GENERIC signals that lack a primary pattern.
+    # While ATR fallback is valid for recognized setups, a GENERIC signal with
+    # no patterns is too noisy to trade. 
+    if setup_type == "GENERIC" and not primary_found:
+        should_block_layer0 = True
+    elif not primary_found:
         if is_atr_fallback:
             # Traditional ATR fallback with no pattern -> Block for specific setups
             if setup_type not in ["GENERIC", "MOMENTUM_FLOW_CONTINUATION"]: # Allow flow continuation
@@ -862,11 +869,9 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
             "setup_signal":      "WATCH",
             "signal":            signal_intent,
             "status":            "NO_PATTERN",
-            "reason":            (
                 f"No primary pattern detected for {setup_type} setup. "
-                f"Strong profile but no active entry structure. "
+                f"Evaluation restricted. "
                 f"Monitor for pattern formation."
-            ),
             "execution_blocked": True,
             "can_trade":         False,
         })
@@ -907,7 +912,8 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
             base_signal = "SELL"
             base_status = "READY"
         else:
-            base_signal = "HOLD"
+            # ✅ Phase 4 P1-1 FIX: Neutral trend for new entry should be WATCH
+            base_signal = "WATCH"
             base_status = "NEUTRAL"
 
     # ════════════════════════════════════════════════════════════════════

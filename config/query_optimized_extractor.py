@@ -170,13 +170,12 @@ class QueryOptimizedExtractor:
                 return None
             return override
         
-        # Check global baseline
-        global_floors = self.base_extractor.get("setup_baseline_floors", {})
-        if setup_name in global_floors:
-            return global_floors[setup_name]
-        
-        # Default
-        return 40
+        # ✅ Phase 3 P1-1 FIX: Fail-Fast for unknown setup types.
+        # Fallback to 40 is dangerous in production.
+        raise ConfigurationError(
+            f"ARCHITECTURAL VIOLATION: Horizon '{self.horizon}' or Global config "
+            f"is missing baseline confidence floor for setup '{setup_name}'."
+        )
 
     def get_base_confidence_adjustment(self) -> float:
         """
@@ -1760,7 +1759,13 @@ class QueryOptimizedExtractor:
         base_floor = self.get_setup_baseline_floor(setup_type)
         
         # Get horizon base adjustment
-        base_adj = self.get_base_confidence_adjustment()
+        # ✅ Phase 3 P2-4 FIX: Horizon floor overrides are absolute. 
+        # If a setup-specific floor exists for this horizon, we bypass the baseline -10 penalty.
+        # This prevents "leakage" where a 60 floor became 50.
+        horizon_overrides = self.base_extractor.get("horizon_setup_floor_overrides", {})
+        has_horizon_override = setup_type in horizon_overrides
+        
+        base_adj = 0.0 if has_horizon_override else self.get_base_confidence_adjustment()
         
         # Apply base adjustment
         adjusted_floor = base_floor + base_adj
@@ -1819,10 +1824,13 @@ class QueryOptimizedExtractor:
                 if max_val is not None and adx_value <= max_val:
                     penalty_val = config.get("confidence_penalty", 0)
         
-                    # ✅ SIGN GUARD: Penalties must be negative (prevent unintended boosts)
+                    # ✅ Phase 3 P2-4 FIX: SIGN GUARD - Penalties must be negative (prevent unintended boosts)
+                    # Upgrade to ConfigurationError to enforce fail-fast architecture.
                     if penalty_val > 0:
-                        self.logger.warning(f"[CONFIG BUG] Positive penalty {penalty_val} in {setup_type} auto-negated")
-                        penalty_val = -penalty_val
+                        raise ConfigurationError(
+                            f"ARCHITECTURAL VIOLATION: Positive penalty {penalty_val} found in ADX penalty band "
+                            f"'{name}' for setup '{setup_type}'. Penalties must be negative."
+                        )
                         
                     adjusted_floor += penalty_val # Penalty is negative
                     self.logger.debug(
@@ -1860,8 +1868,10 @@ class QueryOptimizedExtractor:
             if isinstance(value, dict):
                 # Extract scalar from nested dict
                 # Priority: value > raw > score > dict itself
+                # ✅ Phase 3 P3-4 FIX: Ensure 'value' is NOT None before shadowing.
+                # If 'value' is None but 'raw' exists, 'None' would shadow the valid 'raw' decimal.
                 namespace[key] = (
-                    value.get("value") if "value" in value and not isinstance(value.get("value"), str) else
+                    value.get("value") if value.get("value") is not None and not isinstance(value.get("value"), str) else
                     value.get("raw") if "raw" in value else
                     value.get("score") if "score" in value else
                     value  # Keep dict if no scalar found
