@@ -605,7 +605,8 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
                     # 🔥 FIX: Trim before caching
                     cached_df = _enforce_cache_limits(df_parquet, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-                return df_parquet
+                # Fix 2: Return cached_df (trimmed) -- not the raw df_parquet
+                return cached_df
             else:
                 stale_parquet_fallback = df_parquet  # Keep as emergency fallback
 
@@ -621,7 +622,8 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
                 with CACHE_LOCK:
                     cached_df = _enforce_cache_limits(df, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-            return df
+            # ✅ Fix 2: Return cached_df (trimmed) — not the raw df
+            return cached_df
             
         # Yahoo returned empty — degrade gracefully
         if stale_parquet_fallback is not None:
@@ -672,7 +674,8 @@ def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NS
                 with CACHE_LOCK:
                     cached_df = _enforce_cache_limits(df_parquet, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-                return df_parquet
+                # Fix 2: Return cached_df (trimmed) -- not the raw df_parquet
+                return cached_df
             else:
                 stale_benchmark_fallback = df_parquet
 
@@ -685,10 +688,10 @@ def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NS
             
             if ENABLE_CACHE:
                 with CACHE_LOCK:
-                    # 🔥 FIX: Trim benchmark too
                     cached_df = _enforce_cache_limits(df, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-            return df
+            # ✅ Fix 2: Return cached_df (trimmed) so benchmark callers are consistent.
+            return cached_df
             
         if stale_benchmark_fallback is not None:
             logger.warning(f"[{benchmark_symbol}] Yahoo returned empty benchmark, using stale fallback")
@@ -702,15 +705,19 @@ def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NS
         return pd.DataFrame()
 
 def fetch_data(period: str = None, interval: str = None, auto_adjust: bool = True, horizon: str = None) -> pd.DataFrame:
-    if period is None or interval is None:
-        if horizon:
-            cfg = HORIZON_FETCH_CONFIG.get(horizon, None)
-            if cfg: period, interval = cfg.get("period"), cfg.get("interval")
-        period, interval = period or "1y", interval or "1d"
+    """
+    Deprecated shim — routes to get_benchmark_data() for ^NSEI benchmark index data.
+    Do NOT call this for stock OHLCV. Use get_history_for_horizon(symbol, horizon) instead.
+    """
+    h = horizon or "short_term"
     try:
-        df = yf.download("^NSEI", period=period, interval=interval, progress=False, auto_adjust=auto_adjust)
-        return df.sort_index() if not getattr(df, "empty", True) else pd.DataFrame()
-    except: return pd.DataFrame()
+        df = get_benchmark_data(horizon=h, benchmark_symbol="^NSEI", auto_adjust=auto_adjust)
+        if _validate_ohlcv_schema(df, "^NSEI", "fetch_data"):
+            return df.sort_index() if not df.empty else pd.DataFrame()
+        return pd.DataFrame()
+    except Exception as e:
+        logger.warning(f"[fetch_data] Benchmark fetch failed: {e}")
+        return pd.DataFrame()
 
 def get_price_history(symbol: str, period: str = "2y", auto_adjust: bool = True) -> pd.DataFrame:
     try:

@@ -174,7 +174,8 @@ class IchimokuSignals(BasePattern):
                 "kijun": round(float(k_curr), 2),
                 "age_candles": signal_age,
                 "formation_time": float(df.index[-1].timestamp()),
-                "formation_timestamp": df.index[-signal_age].isoformat() if len(df) > signal_age else None,
+                # ✅ Fix 8: clamp index so formation_timestamp is always a valid ISO string (never None)
+                "formation_timestamp": df.index[-min(signal_age, len(df)-1)].isoformat(),
                 "signal_freshness": "fresh" if is_fresh_cross else "established",
                  # Ichimoku Metrics (Critical for entry conditions)
                 "cloud_thickness": round(cloud_thickness, 4),

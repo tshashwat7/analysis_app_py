@@ -188,6 +188,14 @@ GATE_METRIC_REGISTRY = {
         "description": "ADX trend strength indicator",
         "context_paths": [("indicators", "adx")]
     },
+    "relStrengthNifty": {
+        "type": "numeric",
+        "category": "trend",
+        "validation_type": "threshold",
+        "description": "Relative Strength versus Nifty (Alpha)",
+        "context_paths": [("indicators", "relStrengthNifty")],
+        "optional": True
+    },
     
     # ===========================
     # MOMENTUM GATES

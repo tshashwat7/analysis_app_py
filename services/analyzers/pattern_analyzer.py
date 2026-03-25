@@ -73,8 +73,11 @@ class PatternAnalyzer:
             except Exception as e:
                 self.failure_counts[detector.alias] = self.failure_counts.get(detector.alias, 0) + 1
                 logger.error(f"Error in pattern {detector.alias} (Failure {self.failure_counts[detector.alias]}): {e}", exc_info=True)
-                # ✅ P1-7: Inject error sentinel
-                raw_results[f"_error_{detector.alias}"] = {"found": False, "error": str(e)}
+                # ✅ Fix 10: Do NOT inject _error_ sentinel into raw_results.
+                # The error is already logged and tracked in failure_counts (circuit breaker).
+                # Injecting a non-standard schema entry would pollute raw_results for
+                # any downstream consumer that iterates the dict without key-prefix filtering.
+
 
         # Mutates indicators in-place (returns None by design).
         # Do NOT assign the return value — it is always None.

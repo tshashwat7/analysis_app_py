@@ -111,6 +111,8 @@ class MinerviniVCPPattern(BasePattern):
         )
 
         result["meta"] = {
+            # ── Canonical contract field (required by all detectors) ──────────
+            "type": "bullish",
             # ── Fields read by trade_enhancer ────────────────────────────────
             "age_candles":    len(df) - formation_index,
             "formation_time": float(df.index[formation_index].timestamp()),

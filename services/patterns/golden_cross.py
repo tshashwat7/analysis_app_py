@@ -199,6 +199,13 @@ class DeathCross(BasePattern):
 class GoldenDeathCross(GoldenCross):
     """
     Deprecated: use GoldenCross or DeathCross directly.
+
+    ⚠️  IMPORTANT: This class detects BULLISH (golden) crosses ONLY.
+    It does NOT detect death crosses — it extends GoldenCross and
+    always uses expected_cross="bullish".  Instantiating this class
+    to detect bearish signals will silently return found=False.
+
+    Use DeathCross for bearish (death cross) signals.
     Kept for backward-compatibility only.  alias is still "goldenCross".
     """
     pass

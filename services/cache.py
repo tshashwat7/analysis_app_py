@@ -69,11 +69,22 @@ def cached_result(ttl: int = 3600, key_fn: Optional[Callable[..., str]] = None):
                 finally:
                     # Signal other threads and cleanup the event
                     with lock:
+                        # ✅ Fix 3: Clear _SENTINEL before waking waiters so they see a clean
+                        # miss and re-enter the normal deduplication path, rather than all
+                        # independently computing (thundering herd on exception).
+                        entry = cache.get(key)
+                        if entry is not None and entry.get("value") is _SENTINEL:
+                            cache.pop(key, None)
                         ev = pending_events.pop(key, None)
                         if ev:
                             ev.set()
                 
-            except Exception:
+            except Exception as e:
+                # ✅ Fix 4: Log before fallback so caching logic failures are visible in production.
+                logger.warning(
+                    f"[cached_result] Caching logic failed for '{fn.__name__}', "
+                    f"falling back to direct call: {e}"
+                )
                 # On any caching logic failure, fallback to direct call
                 return fn(*args, **kwargs)
 

@@ -1118,9 +1118,10 @@ def calculate_pattern_timeline(
                 min_samples=10
             )
         
-        # ✅ FIX: Calculate bars_per_unit BEFORE using it
+        # ✅ Fix 11: NSE session = 9:15–15:30 = 375 min = exactly 25 × 15-min candles.
+        # Old value was 26, creating a 390-min (6.5h) phantom day.
         bars_per_unit = {
-            "intraday": 26,      # 26 bars = 1 hour (15min candles)
+            "intraday": 25,      # 25 bars = 1 trading day (15-min candles, NSE session)
             "short_term": 1,     # 1 bar = 1 day
             "long_term": 1       # 1 bar = 1 week  (was 0.2 → 5× inflation)
         }.get(horizon, 1)
@@ -1137,7 +1138,7 @@ def calculate_pattern_timeline(
                 # (unit=months).  Use the actual bars_per_unit to convert:
                 #   bars/unit → units → calendar days (approximate)
                 horizon_to_days = {
-                    "intraday": 1/26,      # 1 bar = 15min; 26 bars ≈ 1 trading hour ≈ 0.04 days
+                    "intraday": 1/25,      # 1 bar = 15min; 25 bars = 1 NSE trading day
                     "short_term": 1.0,     # 1 bar = 1 day
                     "long_term": 5.0      # 1 bar ≈ 1 week (5 trading days)
                 }
