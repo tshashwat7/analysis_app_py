@@ -17,11 +17,11 @@ import sys
 # This ensures that all components use the validated, unified Extractor API.
 _caller_frame = sys._getframe(1)
 _caller_name = _caller_frame.f_globals.get('__name__', '')
-_allowed_callers = ['config.config_extractor', 'config.query_optimized_extractor', 'main', 'tests', 'scripts']
+# Removed 'config.query_optimized_extractor' from allowed callers
+_allowed_callers = ['config.config_extractor', 'main', 'tests', 'scripts']
 
 if not any(caller in _caller_name for caller in _allowed_callers) and 'pytest' not in sys.modules:
-    import logging
-    logging.getLogger(__name__).warning(
+    raise ImportError(
         f"ARCHITECTURAL VIOLATION: Direct import of 'master_config' by '{_caller_name}'. "
         "Use 'config.config_extractor.ConfigExtractor' instead."
     )
@@ -259,6 +259,14 @@ GATE_METRIC_REGISTRY = {
         "description": "ATR as percentage of price",
         "context_paths": [("indicators", "atrPct")]
     },
+    "ttmSqueeze": {
+        "type": "boolean",
+        "category": "volatility",
+        "validation_type": "threshold",
+        "description": "TTM Squeeze signal (True if in squeeze)",
+        "context_paths": [("indicators", "ttmSqueeze")],
+        "optional": True
+    },
     
     # # Special case: alias mapping
     # "volatilitybandsatrPct": {
@@ -327,6 +335,22 @@ GATE_METRIC_REGISTRY = {
         "description": "Current price as a percentage of 52-week high",
         "context_paths": [("fundamentals", "priceVs52wHighPct")]
     },
+    "max_pattern_age_candles": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Maximum allowed age of a pattern in candles",
+        "context_paths": [("indicators", "max_pattern_age_candles")],
+        "optional": True
+    },
+    "max_setup_staleness_candles": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Maximum allowed staleness of a setup in candles",
+        "context_paths": [("indicators", "max_setup_staleness_candles")],
+        "optional": True
+    },
     
     "drawdown52wHigh": {
         "type": "numeric",
@@ -357,6 +381,30 @@ GATE_METRIC_REGISTRY = {
         "validation_type": "threshold",
         "description": "Return on Equity",
         "context_paths": [("fundamentals", "roe")]
+    },
+    "epsGrowth5y": {
+        "type": "numeric",
+        "category": "growth",
+        "validation_type": "threshold",
+        "description": "5-year EPS Growth rate",
+        "context_paths": [("fundamentals", "epsGrowth5y")],
+        "optional": True
+    },
+    "revenueGrowth5y": {
+        "type": "numeric",
+        "category": "growth",
+        "validation_type": "threshold",
+        "description": "5-year Revenue Growth rate",
+        "context_paths": [("fundamentals", "revenueGrowth5y")],
+        "optional": True
+    },
+    "quarterlyGrowth": {
+        "type": "numeric",
+        "category": "growth",
+        "validation_type": "threshold",
+        "description": "Recent Quarterly Growth rate",
+        "context_paths": [("fundamentals", "quarterlyGrowth")],
+        "optional": True
     },
     
     "roce": {
@@ -451,7 +499,7 @@ GATE_METRIC_REGISTRY = {
         "description": "Risk-reward ratio",
         "context_paths": [("risk_model", "rrRatio")],
         "optional": True,
-        "skip_reason": "deferred_to_stage2_when_patterns_present"
+        "skip_reason": "deferred_to_stage2_enhancer"
     },
     
     "technicalScore": {

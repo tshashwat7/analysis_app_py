@@ -56,6 +56,18 @@ class PatternAnalyzer:
         self.failure_counts: Dict[str, int] = {}
         self.max_failures = 3
 
+    @classmethod
+    def get_active_aliases(cls) -> list:
+        """Return the aliases of all detectors registered in the analyzer.
+        
+        This serves as the single source of truth for the config extractor's
+        completeness validation at startup.
+        """
+        # We instantiate a temporary instance to avoid duplicating the detectors list
+        # since aliases are instance attributes.
+        temp = cls()
+        return [d.alias for d in temp.detectors]
+
     def analyze(self, df: pd.DataFrame, indicators: Dict[str, Any], horizon: str) -> Dict[str, Any]:
         raw_results: Dict[str, Any] = {}
 

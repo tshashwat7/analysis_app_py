@@ -963,6 +963,10 @@ class ConfigExtractor:
             
         # ✅ P1-6 FIX: Validate pattern metadata completeness
         self.validate_pattern_metadata()
+        
+        # ✅ Phase 1.5 FIX: Shift-Left structural validation
+        self.validate_horizon_override_structure()
+        self.validate_confidence_penalty_signs()
 
     def validate_confidence_structure(self):
         """Validate confidence config structure."""
@@ -1023,13 +1027,8 @@ class ConfigExtractor:
         pattern_meta = self.sections.get("pattern_metadata", ConfigSection({}, "fallback")).data
         
         # This list should match PatternAnalyzer.detectors aliases
-        # ✅ Issue 4 FIX: Use camelCase to match PATTERN_METADATA keys
-        active_aliases = [
-            "bollingerSqueeze", "darvasBox", "flagPennant", "minerviniStage2",
-            "cupHandle", "threeLineStrike", "ichimokuSignals", "goldenCross",
-            "deathCross", "bullishNecklinePattern", "bearishNecklinePattern", "momentumFlow",
-            "engulfing"
-        ]
+        from services.analyzers.pattern_analyzer import PatternAnalyzer
+        active_aliases = PatternAnalyzer.get_active_aliases()
         
         missing = [alias for alias in active_aliases if alias not in (pattern_meta or {})]
         if missing:
@@ -1130,6 +1129,56 @@ class ConfigExtractor:
             raise ValueError(f"Invalid threshold configurations: {errors}")
 
         self.logger.info(f"✅ Threshold validation passed")
+
+    def validate_horizon_override_structure(self):
+        """✅ Phase 1.5 FIX: Catch misnested 'opportunity' gates at startup."""
+        setup_matrix = self.sections.get("setup_pattern_matrix")
+        if not setup_matrix or not setup_matrix.data:
+            return
+
+        for setup_name, setup_cfg in setup_matrix.data.items():
+            horizon_overrides = setup_cfg.get("horizon_overrides", {})
+            for horizon, override in horizon_overrides.items():
+                ctx = override.get("context_requirements", {})
+                if "opportunity" in ctx:
+                    msg = (
+                        f"CRITICAL CONFIG ERROR: Setup '{setup_name}' has 'opportunity' "
+                        f"nested inside 'context_requirements' in horizon override '{horizon}'. "
+                        f"Opportunity gates MUST be at the top level of the override."
+                    )
+                    self.logger.critical(msg)
+                    raise ConfigurationError(msg)
+
+    def validate_confidence_penalty_signs(self):
+        """✅ Phase 1.5 FIX: Catch positive confidence penalties at startup."""
+        if not self.has_confidence_config:
+            return
+
+        horizons = self.confidence_config.get("horizons", {})
+        for h_name, h_cfg in horizons.items():
+            adj = h_cfg.get("conditional_adjustments", {})
+            # Check penalties
+            for p_name, p_cfg in adj.get("penalties", {}).items():
+                val = p_cfg.get("confidence_penalty")
+                if val is not None and float(val) > 0:
+                    msg = (
+                        f"CRITICAL CONFIG ERROR: confidence_config.horizons.{h_name}.penalties.{p_name}: "
+                        f"confidence_penalty={val} is positive. Penalties MUST be negative."
+                    )
+                    self.logger.critical(msg)
+                    raise ConfigurationError(msg)
+            
+            # Check adx penalties
+            adx_pen = h_cfg.get("adx_confidence_penalties", {})
+            for p_name, p_cfg in adx_pen.items():
+                val = p_cfg.get("confidence_penalty")
+                if val is not None and float(val) > 0:
+                   msg = (
+                       f"CRITICAL CONFIG ERROR: confidence_config.horizons.{h_name}.adx_confidence_penalties.{p_name}: "
+                       f"confidence_penalty={val} is positive. Penalties MUST be negative."
+                   )
+                   self.logger.critical(msg)
+                   raise ConfigurationError(msg)
 
     # ═══════════════════════════════════════════════════════════════════════
     # HELPER METHODS
