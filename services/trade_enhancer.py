@@ -53,6 +53,12 @@ from services.patterns.horizon_constants import HORIZON_WINDOWS_SECONDS as HORIZ
 from config.config_helpers import get_resolver
 from services.patterns.pattern_velocity_tracking import get_pattern_velocity_stats
 from services.patterns.utils import _classify_volatility
+from services.patterns.pattern_state_manager import (
+    get_breakdown_state,
+    save_breakdown_state,
+    update_breakdown_state,
+    delete_breakdown_state
+)
 logger = logging.getLogger(__name__)
 def adjust_targets_for_market_conditions(
     risk_data: Dict[str, Any],
@@ -829,10 +835,11 @@ def enhance_execution_context(
         risk = exec_ctx.get("risk", {})
         if risk:
             market_adjusted = adjust_targets_for_market_conditions(
-                risk_data=risk,
+                risk_data=exec_ctx["risk"],
                 indicators=indicators,
                 fundamentals=eval_ctx.get("fundamentals", {}),
-                horizon=horizon
+                horizon=horizon,
+                extractor=extractor
             )
 
             if market_adjusted.get("adjusted"):
@@ -922,24 +929,24 @@ def calculate_adaptive_spread_cost(
         extractor = resolver.extractor
     
     risk_mgmt = extractor.get_risk_management_config()
-    spread_cfg = risk_mgmt.get("adaptive_spread", {})
+    spread_cfg = risk_mgmt.get("spread_adjustment", {})
     
     # Base spread by market cap
-    # Config format: {"large": {"threshold": 50000, "pct": 0.05}, ...}
-    mc_cfg = spread_cfg.get("market_cap_tiers", {})
-    large_cap = mc_cfg.get("large", {"threshold": 50000, "pct": 0.05})
-    mid_cap = mc_cfg.get("mid", {"threshold": 10000, "pct": 0.15})
-    small_cap_pct = mc_cfg.get("small", {"pct": 0.25})["pct"]
+    # Config format: {"market_cap_brackets": {"large_cap": {"min": 100000, "spread_pct": 0.001}, ...}}
+    brackets = spread_cfg.get("market_cap_brackets", {})
+    large_cap = brackets.get("large_cap", {"min": 100000, "spread_pct": 0.001})
+    mid_cap = brackets.get("mid_cap", {"min": 10000, "max": 100000, "spread_pct": 0.002})
+    small_cap = brackets.get("small_cap", {"max": 10000, "spread_pct": 0.005})
 
-    if market_cap > large_cap["threshold"]:
-        base_spread_pct = large_cap["pct"]
-    elif market_cap > mid_cap["threshold"]:
-        base_spread_pct = mid_cap["pct"]
+    if market_cap >= large_cap.get("min", 100000):
+        base_spread_pct = large_cap.get("spread_pct", 0.001)
+    elif market_cap >= mid_cap.get("min", 10000):
+        base_spread_pct = mid_cap.get("spread_pct", 0.002)
     else:
-        base_spread_pct = small_cap_pct
+        base_spread_pct = small_cap.get("spread_pct", 0.005)
     
-    # Adjust for volume surge
-    vol_cfg = spread_cfg.get("volume_adjustments", {})
+    # Adjust for volume surge (fallback to defaults if missing in config)
+    vol_cfg = risk_mgmt.get("adaptive_spread", {}).get("volume_adjustments", {})
     high_vol = vol_cfg.get("high", {"threshold": 3.0, "factor": 0.7})
     norm_vol = vol_cfg.get("normal", {"threshold": 1.5, "factor": 1.0})
     low_vol_factor = vol_cfg.get("low", {"factor": 1.3})["factor"]
@@ -1120,14 +1127,30 @@ def calculate_pattern_timeline(
         
         # ✅ Fix 11: NSE session = 9:15–15:30 = 375 min = exactly 25 × 15-min candles.
         # Old value was 26, creating a 390-min (6.5h) phantom day.
+        # ✅ Fix 5.5-1: Corrected comment to reflect 1 trading day (25-26 bars of 15m)
         bars_per_unit = {
-            "intraday": 25,      # 25 bars = 1 trading day (15-min candles, NSE session)
-            "short_term": 1,     # 1 bar = 1 day
-            "long_term": 1       # 1 bar = 1 week  (was 0.2 → 5× inflation)
+            "intraday": 25,   # ~1 trading day (15min candles, 09:15-15:30 IST)
+            "short_term": 1, 
+            "long_term": 1,
+            "multibagger": 1
         }.get(horizon, 1)
         
         # 🆕 MODIFY: Adjust duration multiplier with historical data
         if historical_stats and historical_stats.get("sample_size", 0) >= 10:
+            learned_multiplier = historical_stats["avg_duration_mult"]
+            n = historical_stats["sample_size"]
+            
+            # ✅ Fix 5.5-2: Continuous scaling formula for historical weight
+            # Ramps from 30% (at n=10) to 90% (at n=100)
+            hist_weight = min(0.90, 0.3 + 0.6 * (n - 10) / 90)
+            duration_mult = (learned_multiplier * hist_weight + config_duration_mult * (1 - hist_weight))
+            
+            logger.info(
+                f"[{exec_ctx.get('symbol', 'UNKNOWN')}] Applied historical velocity (n={n}, "
+                f"weight={hist_weight:.2f}): {duration_mult:.2f}"
+            )
+            data_source = f"historical (n={historical_stats['sample_size']})"
+
             actual_median_days = historical_stats.get("median_days_to_t1", 0)
             
             if actual_median_days and actual_median_days > 0:

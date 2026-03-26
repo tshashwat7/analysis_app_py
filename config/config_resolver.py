@@ -2735,7 +2735,7 @@ class ConfigResolver:
         rr_source = None
         primary = None
         sl_price = None
-        pattern_targets = None
+        pattern_targets = self._calculate_pattern_targets(ctx)
         generic_targets = None
         direction = ctx.get("trend", {}).get("classification", {}).get("direction", "bullish")
         

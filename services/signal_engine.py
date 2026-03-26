@@ -1146,6 +1146,11 @@ def generate_trade_plan(
         
         # ✅ P0-1 FIX (Phase 3): Always deep-copy eval_ctx before enhancement
         # Prevents execution-phase state (e.g. adjustments) from leaking back into the pure evaluation context.
+        
+        # ✅ Fix 5.1-2: Architectural Isolation.
+        # The enhancer (Stage 2) is designed to run on a COPY of the evaluation context.
+        # This prevents real-time invalidation or pattern-expiry penalties from 
+        # dirtying the primary context used for downstream diagnostic logging or caching.
         eval_ctx_for_enhancement = copy.deepcopy(eval_ctx)
         
         # ✅ P3-3 FIX (Phase 3): Add compatibility shim for signature changes
