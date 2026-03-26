@@ -3554,6 +3554,7 @@ class ConfigResolver:
         # 1. Get Core Data
         sl_price = risk_data.get("sl_price")
         rr = risk_data.get("rrRatio")
+        rr_t2 = risk_data.get("rrRatioT2")  # ✅ Fix 9A.3: Surface T2 RR
         targets = risk_data.get("pattern_targets") or risk_data.get("generic_targets")
         
         # 2. Validate Price Logic – short-circuit safely
@@ -3648,6 +3649,7 @@ class ConfigResolver:
             
             # Metadata
             "rrRatio": rr,
+            "rrRatioT2": rr_t2,  # ✅ Fix 9A.3: Pass T2 RR to final model
             "targets": normalized_targets,
             "confidence": confidence,
             "setup": eval_ctx["setup"]["type"]

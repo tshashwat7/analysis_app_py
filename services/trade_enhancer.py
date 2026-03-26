@@ -65,7 +65,8 @@ def adjust_targets_for_market_conditions(
     indicators: Dict[str, Any],
     fundamentals: Dict[str, Any],
     horizon: str,
-    extractor: Optional[Any] = None
+    extractor: Optional[Any] = None,
+    exec_ctx: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     STATELESS market adjustment of resolver's pattern-based targets.
@@ -164,6 +165,14 @@ def adjust_targets_for_market_conditions(
         # === Target Selection: Prioritize Structural vs Market ===
         target_factor = targ_adj_factors.get(volatility_regime, 1.0)
         
+        # ✅ Fix 9A.4: Apply RR Regime Multipliers (t1_mult/t2_mult)
+        if exec_ctx:
+            regime_cfg = exec_ctx.get("rr_regime", {})
+            t1_regime_mult = regime_cfg.get("t1_multiplier", 1.0) or 1.0
+            t2_regime_mult = regime_cfg.get("t2_multiplier", 1.0) or 1.0
+        else:
+            t1_regime_mult = t2_regime_mult = 1.0
+        
         # Calculate RR for structural targets first
         if direction == "LONG":
             struct_risk = current_price - execution_sl
@@ -191,17 +200,17 @@ def adjust_targets_for_market_conditions(
             # Stretch targets based on market volatility, anchored to current price.
             t1_distance = abs(pattern_t1 - current_price)
             if direction == "LONG":
-                execution_t1 = current_price + (t1_distance * target_factor)
+                execution_t1 = current_price + (t1_distance * target_factor * t1_regime_mult)
             else:
-                execution_t1 = current_price - (t1_distance * target_factor)
+                execution_t1 = current_price - (t1_distance * target_factor * t1_regime_mult)
             
             execution_t2 = None
             if pattern_t2:
                 t2_distance = abs(pattern_t2 - current_price)
                 if direction == "LONG":
-                    execution_t2 = current_price + (t2_distance * target_factor)
+                    execution_t2 = current_price + (t2_distance * target_factor * t2_regime_mult)
                 else:
-                    execution_t2 = current_price - (t2_distance * target_factor)
+                    execution_t2 = current_price - (t2_distance * target_factor * t2_regime_mult)
             target_source = "market_adjusted"
         
         # Spread Cost
@@ -839,7 +848,8 @@ def enhance_execution_context(
                 indicators=indicators,
                 fundamentals=eval_ctx.get("fundamentals", {}),
                 horizon=horizon,
-                extractor=extractor
+                extractor=extractor,
+                exec_ctx=exec_ctx  # ✅ Pass exec_ctx for RR Regime multipliers
             )
 
             if market_adjusted.get("adjusted"):
@@ -1132,7 +1142,7 @@ def calculate_pattern_timeline(
             "intraday": 25,   # ~1 trading day (15min candles, 09:15-15:30 IST)
             "short_term": 1, 
             "long_term": 1,
-            "multibagger": 1
+            "multibagger": 4  # ✅ Fix 9B.4: 4 weekly bars = ~1 month
         }.get(horizon, 1)
         
         # 🆕 MODIFY: Adjust duration multiplier with historical data
@@ -1217,9 +1227,10 @@ def calculate_pattern_timeline(
         # STEP 3: Calculate unit names (already have bars_per_unit above)
         # ===================================================================
         unit_name = {
-            "intraday": "days",    # ✅ Correction: 26 bars = 1 day in Indian market context (Issue 5)
-            "short_term": "days",
-            "long_term": "weeks"
+            "intraday": "trading days",
+            "short_term": "trading days",
+            "long_term": "weeks",
+            "multibagger": "months"  # ✅ Fix 9B.4: Multibagger uses months
         }.get(horizon, "days")
         
         # ===================================================================
@@ -1239,7 +1250,17 @@ def calculate_pattern_timeline(
         # STEP 5: Convert to readable units
         # ===================================================================
         t1_units = max(1, int(t1_bars / bars_per_unit))
+        
+        # ✅ Fix 9B.5: Cap t1_units by pattern expiry
+        original_t1_units = t1_units
+        if invalidation_timeline:
+            remaining = invalidation_timeline - age_candles
+            remaining_units = max(1, int(remaining / bars_per_unit))
+            t1_units = min(t1_units, remaining_units)
+        
         t1_estimate = f"{t1_units} {unit_name}"
+        if t1_units < original_t1_units:
+             t1_estimate += " (pattern near expiry)"
         
         t2_estimate = None
         if t2_bars:
