@@ -217,6 +217,8 @@ def mb_compute_technical_score(indicators: dict, horizon: str) -> dict:
         MB_TECH_BONUSES,
         MB_LIQUIDITY_PENALTY_RULE,
     )
+    # ✅ Fix 7.1-4: CAUTION: Private API dependency. 
+    # extract_metric_score and _extract_raw_value are needed for MB tech scoring.
     from config.technical_score_config import extract_metric_score, _extract_raw_value
     from config.gate_evaluator import evaluate_gates
 

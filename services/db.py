@@ -4,6 +4,7 @@ import os
 from datetime import datetime as _dt
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, Text, JSON, event
+from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import text
@@ -449,4 +450,26 @@ def get_db():
 
 if __name__ == "__main__":
     init_db()
-    # migrate_add_selected_horizon()
+    
+@backoff_retry_db(retries=5)
+def _write_signal_cache_with_retry(symbol: str, writer_fn: Callable[[Session, SignalCache], None]):
+    """
+    Retry-safe atomic writer for SignalCache.
+    Encapsulates session management and backoff logic.
+    """
+    from services.db import SessionLocal, SignalCache
+    db = SessionLocal()
+    try:
+        entry = db.query(SignalCache).filter_by(symbol=symbol).first()
+        if not entry:
+            entry = SignalCache(symbol=symbol)
+            db.add(entry)
+        
+        writer_fn(db, entry)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"DB Write failed for {symbol}: {e}")
+        raise
+    finally:
+        db.close()

@@ -42,7 +42,7 @@ from services.world_bank_provider import get_macro_metrics
 from services.summaries import build_all_summaries
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
-from services.db import SessionLocal, SignalCache, init_db, PaperTrade, FundamentalCache
+from services.db import SessionLocal, SignalCache, init_db, PaperTrade, FundamentalCache, get_db
 from config.multibagger.mb_routes import mb_router
 from config.multibagger.mb_scheduler import start_mb_scheduler
 
@@ -1450,18 +1450,19 @@ async def analyze_common(
                 for h in ["intraday", "short_term", "long_term"]
             }
             
-            # ✅ ADDITION: Also fetch Multibagger score from DB for dash "confluence dots"
+        # ✅ ADDITION: Also fetch Multibagger score from DB for dash "confluence dots"
+        try:
+            from config.multibagger.mb_db_model import MultibaggerCandidate
+            from services.db import SessionLocal
+            _mb_db = SessionLocal()
             try:
-                from config.multibagger.mb_db_model import MultibaggerCandidate
-                _mb_db = SessionLocal()
-                try:
-                    mb_cand = _mb_db.query(MultibaggerCandidate).filter_by(symbol=symbol).first()
-                    FULL_HORIZON_SCORES[symbol]["multibagger"] = mb_cand.final_score or 0 if mb_cand else 0
-                finally:
-                    _mb_db.close()
-            except Exception as e:
-                logger.warning(f"[{symbol}] Failed to fetch MB score for cache: {e}")
-                FULL_HORIZON_SCORES[symbol]["multibagger"] = 0
+                mb_cand = _mb_db.query(MultibaggerCandidate).filter_by(symbol=symbol).first()
+                FULL_HORIZON_SCORES[symbol]["multibagger"] = mb_cand.final_score or 0 if mb_cand else 0
+            finally:
+                _mb_db.close()
+        except Exception as e:
+            logger.warning(f"[{symbol}] Failed to fetch MB score for cache: {e}")
+            FULL_HORIZON_SCORES[symbol]["multibagger"] = 0
         
         # ✅ Extract data for template
         full_report = analysis_data.get("full_report", {})

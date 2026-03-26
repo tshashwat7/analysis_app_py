@@ -12,7 +12,7 @@ display multibagger conviction alongside other horizons.
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
-from main import _write_signal_cache_with_retry
+from services.db import _write_signal_cache_with_retry
 from config.config_utility.market_utils import get_current_utc
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def hydrate_mb_score_to_signal_cache(
     Uses the Orchestrator's retry-safe writer to avoid lock contention.
     """
     try:
-        def _writer(db: Session, entry):
+        def _writer(db, entry):
             # entry is a SignalCache instance
             horizon_scores = entry.horizon_scores or {}
             
@@ -41,12 +41,12 @@ def hydrate_mb_score_to_signal_cache(
             # Update the JSON column
             entry.horizon_scores = horizon_scores
             
-            # If the currently selected horizon is multibagger, update top-level fields too
+            # If the currently selected horizon is multibagger, update score/conf/rec
+            # ✅ Fix 7.1-2: Remove illegal signal_text overwrite (signal_text must be BUY/SELL/etc)
             if entry.selected_horizon == "multibagger":
                 entry.score = round(score, 2)
                 entry.conf_score = int(conf)
                 entry.recommendation = f"MB_{tier}"
-                entry.signal_text = f"MB_SETUP:{setup}"
                 entry.updated_at = get_current_utc()
 
         _write_signal_cache_with_retry(symbol, _writer)

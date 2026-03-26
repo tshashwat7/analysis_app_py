@@ -58,6 +58,7 @@ MULTIBAGGER_CONFIG = {
             "HIGH":   {"score_min": 8.5, "confidence_min": 75},
             "MEDIUM": {"score_min": 7.5, "confidence_min": 65},
             "LOW":    {"score_min": 6.5, "confidence_min": 60},
+            "WATCH":  {"score_min": 0,   "confidence_min": 0},  # Explicit fallback state
         }
     },
 }

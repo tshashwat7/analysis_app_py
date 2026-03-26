@@ -47,7 +47,9 @@
 
 Pro Stock Analyzer v15.0 is an institutional-grade algorithmic trading signal engine targeting NSE-listed equities across four time horizons: `intraday`, `short_term`, `long_term`, and `multibagger`. The system ingests raw OHLCV data, evaluates multi-layered structural gate conditions, detects chart patterns with full lifecycle tracking, computes confidence-adjusted trade plans, and persists results with retry-safe database writes.
 
-The core philosophy distinguishes stock *quality* (structural eligibility — "is this stock worth watching?") from trade *timing* (execution context — "can I enter right now?"). These are computed in two explicit, decoupled phases: a `build_evaluation_context_only` pass that produces indicators, scores, gates, confidence, and setup classification; followed by a `build_execution_context_from_evaluation` pass that layers position sizing, order model, and real-time RR validation on top of the already-computed evaluation. A weekly multibagger pipeline runs independently with its own isolated extractor stack, scoring weights, and conviction-tier output.
+The core philosophy distinguishes stock *quality* (structural eligibility — "is this stock worth watching?") from trade *timing* (execution context — "can I enter right now?"). These are computed in two explicit, decoupled phases: a `build_evaluation_context_only` pass that produces indicators, scores, gates, confidence, and setup classification; followed by a `build_execution_context_from_evaluation` pass that layers position sizing, order model, and real-time RR validation on top of the already-computed evaluation. 
+
+**Multibagger Pipeline Isolation**: The weekly multibagger pipeline runs independently with its own isolated extractor stack, scoring weights, and conviction-tier output. It shares zero code paths with the main day-trading pipeline's scoring logic. A specific, one-way bridge exists via `mb_main_patches.py` solely for hydrating Multibagger scores into the `signal_cache` for UI persistence.
 
 ---
 
