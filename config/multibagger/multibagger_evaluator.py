@@ -150,8 +150,6 @@ def mb_compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
         metric_data = fundamentals.get(rule["metric"])
         if isinstance(metric_data, dict):
             actual = metric_data.get("raw")
-            if actual is None:
-                actual = metric_data.get("score")
         else:
             actual = metric_data
         if actual is None:
@@ -279,7 +277,7 @@ def mb_compute_technical_score(indicators: dict, horizon: str) -> dict:
         if metric_data is None:
             continue
         is_pt = rule.get("is_passthrough", False)
-        actual = extract_metric_score(metric_data, rule["metric"], indicators) if is_pt else _extract_raw_value(metric_data)
+        actual = extract_metric_score(metric_data, rule["metric"], indicators) if is_pt else _extract_raw_value(metric_data, fallback_to_score=False)
         if actual is None:
             continue
         op, thresh = rule["operator"], rule["threshold"]

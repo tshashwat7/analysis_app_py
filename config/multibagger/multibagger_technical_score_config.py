@@ -105,7 +105,7 @@ MB_TECHNICAL_PENALTIES = {
             "metric":    "trendStrength",
             "operator":  "<",
             "threshold": 4.0,
-            "penalty":   0.25,
+            "penalty":   2.5,
             "is_passthrough": True,  # Use score value, not raw
             "reason":    "Multi-year trend too weak",
         },
@@ -114,7 +114,7 @@ MB_TECHNICAL_PENALTIES = {
             "operator":  "<",
             "threshold": 0,
             "is_passthrough": False,  # Use raw value
-            "penalty":   0.20,
+            "penalty":   2.0,
             "reason":    "Underperforming Nifty",
         },
         {
@@ -122,7 +122,7 @@ MB_TECHNICAL_PENALTIES = {
             "operator":  ">",
             "threshold": 92,
             "is_passthrough": False,
-            "penalty":   0.10,
+            "penalty":   1.0,
             "reason":    "Overextended — >92% of 52W high",
         },
     ]
@@ -135,22 +135,22 @@ MB_TECHNICAL_PENALTIES = {
 MB_TECH_BONUSES = [
     {
         "gates": {"trendStrength": {"min": 8.0}, "relStrengthNifty": {"min": 15}},
-        "bonus":  0.20,
+        "bonus":  2.0,
         "reason": "Strong trend + Nifty outperformance",
     },
     {
         "gates": {"rvol": {"min": 1.5}},
-        "bonus":  0.12,
+        "bonus":  1.2,
         "reason": "Weekly accumulation volume",
     },
     {
         "gates": {"position52w": {"min": 85, "max": 95}},
-        "bonus":  0.15,
+        "bonus":  1.5,
         "reason": "Near 52W high breakout zone",
     },
     {
         "gates": {"relStrengthNifty": {"min": 20}},
-        "bonus":  0.12,
+        "bonus":  1.2,
         "reason": "Significant Nifty outperformance",
     },
 ]
@@ -162,7 +162,7 @@ MB_TECH_BONUSES = [
 MB_LIQUIDITY_PENALTY_RULE = {
     "multibagger": {
         "min_avg_volume":    10000,   # Weekly — far lower than intraday 100k
-        "penalty_multiplier": 0.10,
+        "penalty_multiplier": 1.0,
         "reason":            "Small-cap weekly liquidity risk",
     }
 }

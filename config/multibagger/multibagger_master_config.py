@@ -20,7 +20,6 @@ TIMEFRAME: Weekly (1wk).
 MA KEYS: maFast=MMA(6w), maMid=MMA(12w), maSlow=MMA(24w).
 """
 
-from config.master_config import HYBRID_METRIC_REGISTRY, GATE_METRIC_REGISTRY
 
 # ============================================================================
 # MODULE-LEVEL CONSTANTS
@@ -468,6 +467,38 @@ MB_MASTER_CONFIG = {
                     "gates": {"deRatio": {"max": 0.5}},
                     "points": 25,
                     "reason": "Low debt improves margin of safety",
+                },
+            },
+        "turnaround_specialist": {
+            "enabled":     True,
+            "description": "Deep value with turnaround potential.",
+            "preferred_setups": ["VALUE_TURNAROUND", "DEEP_VALUE_PLAY"],
+            "avoid_setups":     ["MOMENTUM_BREAKOUT"],
+            "horizon_fit_multipliers": {
+                "intraday":    0.0,
+                "short_term":  0.4,
+                "long_term":   1.0,
+                "multibagger": 1.4,
+            },
+            "fit_threshold":         50,
+            "estimated_hold_months": 18,
+            "scoring_rules_max_bonus": 100,
+            "fit_indicators": {
+                "piotroskiF": {"min": 6,    "weight": 0.30},
+                "deRatio":    {"max": 1.3,  "weight": 0.30},
+                "roe":        {"min": 12,   "weight": 0.20},
+                "roce":       {"min": 12,   "weight": 0.20},
+            },
+            "scoring_rules": {
+                "turnaround_momentum": {
+                    "gates": {"maTrendSignal": {"min": 0}, "trendStrength": {"min": 3.0}},
+                    "points": 30,
+                    "reason": "Technical trend bottoming out",
+                },
+                "valuation_support": {
+                    "gates": {"priceToIntrinsicValue": {"max": 0.9}},
+                    "points": 30,
+                    "reason": "Supportive valuations for turnaround",
                 },
             },
         },

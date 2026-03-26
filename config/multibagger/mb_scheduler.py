@@ -142,12 +142,10 @@ def _determine_conviction_tier(result: dict) -> Optional[str]:
     return "WATCH"
 
 
-def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str]):
-    """Write or update a MultibaggerCandidate row."""
-    from services.db import SessionLocal
-    from config.multibagger.mb_db_model import MultibaggerCandidate
+from services.db import SessionLocal, backoff_retry_db
 
-    db = SessionLocal()
+@backoff_retry_db(retries=5)
+def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str]):
     try:
         now  = get_current_utc()
         row  = db.query(MultibaggerCandidate).filter_by(symbol=symbol).first()
@@ -176,14 +174,13 @@ def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str])
 
         # ✅ P3-2 FIX: Clean up thesis_json to remove internal exposure
         opp = result.get("opportunity", {})
-        eval_ctx_keys = list((result.get("eval_ctx") or {}).keys())
-        # Filter out sensitive or redundant keys for dashboard
-        public_keys = [k for k in eval_ctx_keys if not k.startswith("_")]
+        eval_ctx = result.get("eval_ctx") or {}
+        public_keys = [k for k in eval_ctx.keys() if not k.startswith("_")]
 
         row.thesis_json = {
-            "public_context":   public_keys,
+            "public_context":   {k: eval_ctx.get(k) for k in public_keys},
             "opportunity":      opp,
-            "scoring_breakdown": (result.get("eval_ctx") or {}).get("scoring", {}),
+            "scoring_breakdown": eval_ctx.get("scoring", {}),
         }
 
         # Track tier changes
@@ -203,6 +200,7 @@ def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str])
         db.close()
 
 
+@backoff_retry_db(retries=5)
 def _reject_candidate(symbol: str, reason: str):
     """Write Phase 1 rejection to DB (preserves historical record)."""
     from services.db import SessionLocal
@@ -282,7 +280,7 @@ def _run_mb_cycle_internal():
             meta_map[m.symbol] = {
                 "sector": m.sector,
                 "industry": m.industry,
-                "listing_days": None
+                "listing_days": None # Default — updated per batch from yf firstTradeDate
             }
     finally:
         db.close()
@@ -299,6 +297,21 @@ def _run_mb_cycle_internal():
 
         batch_symbols = symbols[i:i + INTERNAL_BATCH]
         
+        # 1.1 Hydrate listing_days from fundamentals (yfinance gap fix)
+        from services.fundamentals import compute_fundamentals
+        for sym in batch_symbols:
+            if sym in meta_map:
+                f_data = compute_fundamentals(sym)
+                # firstTradeDateEpochUtc is absolute seconds
+                first_trade = f_data.get("firstTradeDateEpochUtc")
+                if first_trade:
+                    try:
+                        ft_dt = datetime.fromtimestamp(float(first_trade), tz=timezone.utc)
+                        days = (get_current_utc() - ft_dt).days
+                        meta_map[sym]["listing_days"] = days
+                    except (ValueError, TypeError):
+                        pass
+
         # Phase 1: Robust Bulk Scan
         batch_results = run_bulk_screener(batch_symbols, max_workers=10, meta_map=meta_map)
         

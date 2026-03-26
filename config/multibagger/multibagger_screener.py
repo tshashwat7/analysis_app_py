@@ -92,8 +92,10 @@ def _check_universe_filters(symbol: str, meta: Dict, fundamentals: Dict = None) 
             mcap_val = mcap_data
         if mcap_val is not None:
             try:
-                if float(mcap_val) < min_mcap:
-                    return f"MCAP_TOO_LOW:{mcap_val:.0f}<{min_mcap}"
+                # Normalize absolute rupees to Crores (1e7)
+                mcap_crores = float(mcap_val) / 10000000.0
+                if mcap_crores < min_mcap:
+                    return f"MCAP_TOO_LOW:{mcap_crores:.0f}Cr<{min_mcap}Cr"
             except (ValueError, TypeError):
                 pass
 
