@@ -52,9 +52,14 @@ class PatternAnalyzer:
             BearishNecklinePattern(),
             MomentumFlowPattern(),
         ]
-        # ✅ P3-2: Circuit breaker for failing detectors
-        self.failure_counts: Dict[str, int] = {}
         self.max_failures = 3
+        self.failure_counts = {}
+        
+        # ✅ ARCHITECTURAL NOTE: Process-Level Isolation.
+        # failure_counts is process-resident state. Under ProcessPoolExecutor (main.py), 
+        # each worker process has its own singleton. This is INTENTIONAL: it prevents 
+        # a poisoned ticker from globally disabling a detector while allowing 
+        # recovery in other worker processes.
 
     @classmethod
     def get_active_aliases(cls) -> list:
@@ -100,7 +105,9 @@ class PatternAnalyzer:
         return raw_results
 
 
-# Singleton — avoids re-initialising detector instances on every call
+# Singleton — avoids re-initialising detector instances on every call.
+# NOTE: Under ProcessPoolExecutor, each worker gets its own fresh singleton. 
+# This ensures memory isolation and prevents state leak across symbol batches.
 analyzer = PatternAnalyzer()
 
 
