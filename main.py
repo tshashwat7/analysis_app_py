@@ -113,6 +113,7 @@ _SHUTDOWN_LOCK = threading.Lock()
 # ✅ FIX P1-6: In-flight request deduplication
 _IN_FLIGHT_ANALYSES = set()
 _IN_FLIGHT_LOCK = threading.Lock()
+_SHUTDOWN_IN_PROGRESS = False # ✅ FIX 8.5-2: Defined at module level to prevent NameError
 
 # Lazy Loaded Stock Lists (P1-7: Moved loading logic to index_utils)
 from services.index_utils import (
@@ -385,7 +386,7 @@ async def lifespan(app: FastAPI):
     global cache_warmer_task, _SHUTDOWN_IN_PROGRESS, _CORP_ACTIONS_CACHE_READY
     
     # 1. Startup
-    _SHUTDOWN_IN_PROGRESS = False
+    # _SHUTDOWN_IN_PROGRESS = False (Now at module level)
     
     # Phase 6 P1-4: Initialize DB at the very beginning of startup
     init_db()
@@ -480,19 +481,8 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("[STARTUP] Corp actions cache build failed: %s", e)
         
-        # ✅ W59 FIX: Restore FULL_HORIZON_SCORES from SignalCache on startup
-        logger.info("[STARTUP] Restoring FULL_HORIZON_SCORES from database...")
-        db_session = SessionLocal()
-        try:
-            cached_signals = db_session.query(SignalCache).all()
-            for s in cached_signals:
-                if s.horizon_scores:
-                    FULL_HORIZON_SCORES[s.symbol] = s.horizon_scores
-            logger.info(f"[STARTUP] Restored scores for {len(cached_signals)} symbols.")
-        except Exception as e:
-            logger.warning(f"[STARTUP] Score restoration failed: {e}")
-        finally:
-            db_session.close()
+            # ✅ Fix 8.4-1: Removed duplicate score restoration block.
+            # Restoration now happens exclusively in lifespan() with _stale flag.
 
         # Phase 4 P1-6: Activate pattern config validation
         from config.config_extractor import startup_config_validation
@@ -709,6 +699,11 @@ def get_cached(symbol: str):
 
         # Prefer the dedicated DB column over legacy JSON shadow data.
         flat_data["direction"] = entry.direction or flat_data.get("direction", "neutral")
+        
+        # ✅ Fix 8.4-2: Surface _stale flag from memory
+        from_memory = FULL_HORIZON_SCORES.get(symbol, {})
+        flat_data["_stale"] = from_memory.get("_stale", False)
+        
         return flat_data
     except Exception as e:
         logger.error(f"DB Read Error {symbol}: {e}")
@@ -769,7 +764,7 @@ def set_cached(symbol: str, value: Dict[str, Any]):
             entry.selected_horizon = value.get("selected_horizon")
             entry.score = value.get("score", 0)
             entry.recommendation = value.get("recommendation", "N/A")
-            entry.signal_text = value.get("bull_signal", "HOLD")
+            entry.signal_text = value.get("bull_signal", "INCOMPLETE")
             entry.conf_score = value.get("confidence", 0)
             entry.rr_ratio = value.get("rr_ratio")
             entry.entry_price = value.get("entry_trigger")
@@ -854,6 +849,12 @@ def run_analysis(
         else:
             # ✅ OPTIMIZED: Exclude multibagger from full scan (it's now a specialized weekly flow)
             horizons_to_compute = ["intraday", "short_term", "long_term"]
+            # ✅ Fix 8.2-2: Suppress intraday if market is closed or holiday
+            from config.config_utility.market_utils import get_current_session
+            if get_current_session() in ("after_hours", "holiday"):
+                horizons_to_compute = [h for h in horizons_to_compute if h != "intraday"]
+                logger.info(f"[{symbol}] Off-hours status: intraday suppressed.")
+            
             logger.info(f"[{symbol}] 🔄 FULL-HORIZON MODE | Horizons: {horizons_to_compute}")
         
         # =====================================================================
@@ -1982,22 +1983,20 @@ async def get_paper_trade_cmp(symbols: str = Query(""), api_key: str = Depends(g
         return {}
     
     try:
-        loop = asyncio.get_running_loop()
-        def _fetch_cmp():
-            res = {}
-            for s in sym_list:
-                try:
-                    tkr = yf.Ticker(s)
-                    h = tkr.history(period="1d")
-                    if not h.empty:
-                        res[s] = float(h['Close'].iloc[-1])
-                except:
-                    pass
-            return res
-            
-        prices = await loop.run_in_executor(get_api_executor(), _fetch_cmp)
-        return prices
+        from services.data_fetch import get_history_for_horizon
+        res = {}
+        for s in sym_list:
+            try:
+                # Use short_term (1d) horizon to get latest close
+                df = get_history_for_horizon(s, "short_term")
+                if df is not None and not df.empty:
+                    res[s] = float(df['Close'].iloc[-1])
+            except Exception as e:
+                logger.warning(f"Failed to fetch CMP for {s}: {e}")
+                pass
+        return res
     except Exception as e:
+        logger.error(f"CMP API Error: {e}")
         return {}
 
 if __name__ == "__main__":

@@ -101,6 +101,54 @@ def get_current_ist() -> datetime:
     return utc_to_ist(get_current_utc())
 
 
+# NSE Holidays 2024-2025 (Simplified Canonical List)
+NSE_HOLIDAYS = {
+    (1, 26),   # Republic Day
+    (3, 8),    # Mahashivratri
+    (3, 25),   # Holi
+    (3, 29),   # Good Friday
+    (4, 11),   # Eid-ul-Fitr
+    (4, 17),   # Shri Ram Navami
+    (5, 1),    # Maharashtra Day
+    (6, 17),   # Bakri Id
+    (7, 17),   # Muharram
+    (8, 15),   # Independence Day
+    (10, 2),   # Gandhi Jayanti
+    (11, 1),   # Diwali Laxmi Pujan
+    (11, 15),  # Gurunanak Jayanti
+    (12, 25),  # Christmas
+}
+
+def get_current_session(check_time: datetime = None) -> str:
+    """
+    Returns the current market session category.
+    Possible values: "open", "pre_market", "after_hours", "holiday"
+    """
+    if check_time is None:
+        check_time = datetime.now(UTC)
+    
+    ist_dt = utc_to_ist(check_time)
+    
+    # 1. Holiday/Weekend Check
+    if ist_dt.weekday() >= 5:
+        return "holiday"
+    if (ist_dt.month, ist_dt.day) in NSE_HOLIDAYS:
+        return "holiday"
+    
+    # 2. Time Range Check
+    curr_time = ist_dt.time()
+    
+    # Pre-market: 09:00 - 09:15
+    if time(9, 0) <= curr_time < MARKET_OPEN_IST:
+        return "pre_market"
+        
+    # Open: 09:15 - 15:30
+    if MARKET_OPEN_IST <= curr_time <= MARKET_CLOSE_IST:
+        return "open"
+        
+    # Default to after hours
+    return "after_hours"
+
 def format_ist_for_display(utc_dt: datetime) -> str:
     """
     Formats UTC datetime as IST string for logs/UI.

@@ -265,6 +265,10 @@ def enforce_timezone_on_paper_trade(target, context):
 # Tracks which raw-SQL ALTER migrations have been applied so that
 # run_migrations() is idempotent and auditable — no Alembic required.
 # -----------------------------------------------------------------------
+def _is_retryable_sqlite_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "locked" in msg or "busy" in msg
+
 class SchemaMigration(Base):
     """One row per applied migration. migration_name is the primary key."""
     __tablename__ = "schema_migrations"
@@ -293,7 +297,7 @@ def backoff_retry_db(retries: int = 5, base_delay: float = 0.1, max_delay: float
                             raise
                         
                         delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
-                        jitter = random.uniform(0, 0.1 * delay)
+                        jitter = random.uniform(0, 0.5 * delay)
                         final_delay = delay + jitter
                         
                         logger.warning(
@@ -302,7 +306,15 @@ def backoff_retry_db(retries: int = 5, base_delay: float = 0.1, max_delay: float
                         time.sleep(final_delay)
                         continue
                     raise # Non-retryable operational error
-                except Exception as e:
+                except (Exception, OperationalError) as e:
+                    # ✅ Fix 8.1-2: Widen retryable check for lock errors in general Exceptions
+                    if _is_retryable_sqlite_error(e):
+                        delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
+                        jitter = random.uniform(0, 0.5 * delay)
+                        final_delay = delay + jitter
+                        logger.warning(f"DB locked/busy (Exc). Retry {attempt}/{retries} in {final_delay:.2f}s...")
+                        time.sleep(final_delay)
+                        continue
                     logger.error(f"Unexpected DB error: {e}")
                     raise
             if last_exc:
@@ -422,15 +434,17 @@ def migrate_add_pattern_breakdown_lifecycle(migration_name: str = "add_pattern_b
                 return
             result = conn.execute(text("PRAGMA table_info(pattern_breakdown_state)"))
             columns = [row[1] for row in result.fetchall()]
-            logger.warning(f"[MIGRATION] Running: {migration_name}")
             if "status" not in columns:
+                logger.warning(f"[MIGRATION] Adding status column: {migration_name}")
                 conn.execute(text("ALTER TABLE pattern_breakdown_state ADD COLUMN status VARCHAR"))
                 conn.execute(
                     text("UPDATE pattern_breakdown_state SET status = 'active' WHERE status IS NULL")
                 )
             if "resolved_at" not in columns:
+                logger.warning(f"[MIGRATION] Adding resolved_at column: {migration_name}")
                 conn.execute(text("ALTER TABLE pattern_breakdown_state ADD COLUMN resolved_at DATETIME"))
             if "resolution_reason" not in columns:
+                logger.warning(f"[MIGRATION] Adding resolution_reason column: {migration_name}")
                 conn.execute(
                     text("ALTER TABLE pattern_breakdown_state ADD COLUMN resolution_reason VARCHAR")
                 )
