@@ -723,29 +723,6 @@ def compute_all_profiles(
             "metric_details": []
         }
     
-# ============================================================================
-# 2. TRADE PLAN GENERATION (Clean Orchestrator with Extractor)
-# ============================================================================
-
-def reconcile_direction(resolver_dir: str, market_dir: str, market_adjusted: Dict[str, Any]) -> str:
-    """
-    ✅ B4 FIX: Reconcile direction between resolver and market adjustment.
-    """
-    resolver_dir = str(resolver_dir or "neutral").upper()
-    market_dir = str(market_dir or "neutral").upper()
-    
-    if resolver_dir == market_dir:
-        return resolver_dir
-    
-    # If conflict, prefer market_dir only if market_adjusted has high confidence
-    # (market_adjusted["confidence"] is not standard yet, so we use 'adjusted' flag as proxy for now)
-    if market_adjusted.get("adjusted") and market_adjusted.get("confidence", 0) > 60:
-        logger.warning(f"Direction conflict: Resolver={resolver_dir}, Market={market_dir} | Choosing Market due to adjustments.")
-        return market_dir
-        
-    logger.warning(f"Direction conflict: Resolver={resolver_dir}, Market={market_dir} | Falling back to Resolver.")
-    return resolver_dir
-
 def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extractor=None) -> None:
     """
     SETUP SIGNAL: Execution-based trade decision.
@@ -986,6 +963,15 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
         "reason":        reason,
     })
 
+    # ✅ Phase 11 P1-2 FIX: Sync execution flags for rescued trades.
+    # If the signal was rescued to BUY/SELL, we MUST allow trading UI.
+    if final_status == "READY" and final_signal in ["BUY", "SELL"]:
+        plan["can_trade"] = True
+        plan["execution_blocked"] = False
+        plan["gates_passed"] = True
+        if "execution_failures" in plan:
+            plan.pop("execution_failures", None)
+
     plan["signal_context"] = {
         "direction":        direction,
         "confidence":       confidence,
@@ -1039,7 +1025,7 @@ def generate_trade_plan(
         "symbol": symbol,
         "horizon": horizon,
         "status": "PENDING",
-        "trade_signal": "HOLD",
+        "trade_signal": "WATCH",
         "signal": "NA_CALC",
         "reason": "Initializing...",
         
@@ -1144,25 +1130,18 @@ def generate_trade_plan(
         exec_ctx_raw = build_execution_context(eval_ctx, capital)
         plan["metadata"]["exec_ctx_raw"] = exec_ctx_raw.copy()  # ✅ Store structural baseline
         
-        # ✅ P0-1 FIX (Phase 3): Always deep-copy eval_ctx before enhancement
-        # Prevents execution-phase state (e.g. adjustments) from leaking back into the pure evaluation context.
-        
-        # ✅ Fix 5.1-2: Architectural Isolation.
-        # The enhancer (Stage 2) is designed to run on a COPY of the evaluation context.
-        # This prevents real-time invalidation or pattern-expiry penalties from 
-        # dirtying the primary context used for downstream diagnostic logging or caching.
-        eval_ctx_for_enhancement = copy.deepcopy(eval_ctx)
-        
-        # ✅ P3-3 FIX (Phase 3): Add compatibility shim for signature changes
+        # ✅ C11 FIX (Phase 3): Capture enhanced evaluation context.
+        # The enhancer (Stage 2) produces a derivative context (penalties, state).
+        # Capture it instead of discarding it to avoid "silent trap" where metadata is lost.
         try:
-            exec_ctx, _ = enhance_execution_context(
-                eval_ctx_for_enhancement, exec_ctx_raw, indicators, symbol, horizon,
+            exec_ctx, eval_ctx = enhance_execution_context(
+                copy.deepcopy(eval_ctx), exec_ctx_raw, indicators, symbol, horizon,
                 extractor=extractor
             )
         except TypeError:
             # Fallback if enhance_execution_context doesn't accept extractor kwarg yet
-            exec_ctx, _ = enhance_execution_context(
-                eval_ctx_for_enhancement, exec_ctx_raw, indicators, symbol, horizon
+            exec_ctx, eval_ctx = enhance_execution_context(
+                copy.deepcopy(eval_ctx), exec_ctx_raw, indicators, symbol, horizon
             )
 
         # ✅ B2 FIX (Refined): Check for stale context after execution context is built
@@ -1172,6 +1151,7 @@ def generate_trade_plan(
             plan["trade_signal"] = "WATCH"
             plan["reason"] = "Stale evaluation context — monitor for refresh."
             logger.warning(f"[{symbol}] Stale evaluation context detected. Downgrading to WATCH.")
+            return plan  # ✅ Phase 11 P1-1 FIX: Terminal return to prevent overwrite.
 
         # Refresh plan confidence after enhancement (B5 Fix)
         # We now keep eval_ctx pure and merge exec_ctx adjustments here

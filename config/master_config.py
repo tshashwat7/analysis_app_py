@@ -165,6 +165,14 @@ GATE_METRIC_REGISTRY = {
         "context_paths": [("indicators", "maTrendSignal")],
         "optional": True
     },
+    "ichimokuSignals": {
+        "type": "numeric",
+        "category": "trend",
+        "validation_type": "threshold",
+        "description": "Ichimoku cloud and TK signal strength",
+        "context_paths": [("indicators", "ichimokuSignals")],
+        "optional": True
+    },
     "prev_supertrend": {
         "type": "text",
         "category": "trend",
@@ -499,7 +507,7 @@ GATE_METRIC_REGISTRY = {
         "description": "Risk-reward ratio",
         "context_paths": [("risk_model", "rrRatio")],
         "optional": True,
-        "skip_reason": "deferred_to_stage2_enhancer"
+        "skip_reason": "deferred_to_stage2"
     },
     
     "technicalScore": {
@@ -551,12 +559,12 @@ GATE_METRIC_REGISTRY = {
         "fallback": 5.0    # ✅ Default neutral value
     },
     
-    "relativeStrength": {
+    "relStrengthNifty": {
         "type": "numeric",
         "category": "market",
         "validation_type": "threshold",
-        "description": "Relative strength vs benchmark",
-        "context_paths": [("indicators", "relativeStrength")],
+        "description": "Relative strength vs benchmark (Nifty)",
+        "context_paths": [("indicators", "relStrengthNifty")],
         "optional": True,
         "fallback": 0.0
     },
@@ -899,7 +907,16 @@ MASTER_CONFIG = {
             "base_spread_pct": {
                 'intraday': 0.0015, 'short_term': 0.001, 'long_term': 0.0008
             },
-            "expiry_penalty": -20.0
+            "expiry_penalty": -20.0,
+            
+            # ✅ PHASE 5 FIX: Adaptive Spread Cost Configuration
+            "adaptive_spread": {
+                "volume_adjustments": {
+                    "high": {"threshold": 3.0, "factor": 0.7},
+                    "normal": {"threshold": 1.5, "factor": 1.0},
+                    "low": {"factor": 1.3}
+                }
+            }
         },
         
         "execution": {

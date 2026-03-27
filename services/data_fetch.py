@@ -621,9 +621,12 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
             if ENABLE_CACHE:
                 with CACHE_LOCK:
                     cached_df = _enforce_cache_limits(df, interval)
-                    GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-            # ✅ Fix 2: Return cached_df (trimmed) — not the raw df
-            return cached_df
+                    GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "expiry": time.time() + OHLC_CACHE_TTL}
+                logger.debug(f"[CACHE MISS] {symbol} ({interval}) from Yahoo (Trimmed to {len(cached_df)} rows)")
+                return cached_df
+            else: # If cache is disabled, still return the (potentially trimmed) df
+                cached_df = _enforce_cache_limits(df, interval) # Ensure trimming even without caching
+                return cached_df
             
         # Yahoo returned empty — degrade gracefully
         if stale_parquet_fallback is not None:

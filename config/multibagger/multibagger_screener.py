@@ -240,14 +240,13 @@ def evaluate_single_screener(
 ) -> Tuple[bool, str]:
     """
     Run Phase 1 gatekeeper on a single stock.
+    """
+    # ✅ 10.1.1 P2 FIX: Verify MA key contract at runtime
+    # If indicators.py changes key names, the screener must fail explicitly, not silently.
+    required_keys = ["maFast", "maMid", "maSlow"]
+    if not any(k in indicators for k in required_keys):
+        return False, f"MA_DATA_MISSING:Indicators keys {list(indicators.keys())} mismatch {required_keys}"
 
-    Args:
-        symbol:       NSE symbol
-        fundamentals: Output of compute_fundamentals()
-        indicators:   Output of compute_indicators_cached("multibagger")
-        meta:         Optional StockMeta row dict for sector/listing checks
-
-    Returns:
         (passed: bool, rejection_reason: str)
         rejection_reason is "" when passed=True.
     """
@@ -323,9 +322,9 @@ def worker_eval_single(symbol: str, meta: Dict = None) -> Dict[str, Any]:
 
 
 def run_bulk_screener(
-    symbols: List[str], 
-    max_workers: int = 5,
-    meta_map: Dict[str, Dict] = None
+    symbols:      List[str],
+    meta_map:     Dict[str, Dict] = None,
+    max_workers:  int = 10,
 ) -> List[Dict[str, Any]]:
     """
     Leverage multithreading to scan a bulk list of stocks for yfinance data.

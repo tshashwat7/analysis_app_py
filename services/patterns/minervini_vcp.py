@@ -8,12 +8,11 @@ trade_enhancer (via raw.meta path):
   • meta["formation_time"]    – real-time age recalculation
 
 setup_pattern_matrix PATTERN_METADATA (minerviniStage2) invalidation:
-  • meta["contraction_pct"]   – metadata_keys analytics + resolver _calculate_pattern_targets L3825
+  • meta["contraction_pct"]   – metadata_keys analytics + adaptive target scaling
   • meta["volatility_quality"] – metadata_keys analytics (flat scalar for namespace eval)
 
-config_resolver _calculate_pattern_targets (minerviniStage2 block L3821):
-  • meta["contraction_pct"]   – depth = entry * (contraction_pct / 100.0)
-  → MUST be present for correct SL/T1/T2 calculation
+# Target calculation now handled by Stage 2 (TradeEnhancer) via Market-Adaptive Adjustment.
+# Resolver provides structural baseline; Enhancer optimizes based on volatility/regime.
 
 Alias fix applied
 ─────────────────
@@ -116,8 +115,8 @@ class MinerviniVCPPattern(BasePattern):
             # ── Fields read by trade_enhancer ────────────────────────────────
             "age_candles":    len(df) - formation_index,
             "formation_time": float(df.index[formation_index].timestamp()),
-            # ── Fields read by resolver _calculate_pattern_targets L3825 ─────
-            "contraction_pct": round(range_recent * 100, 2),   # depth = entry * (contraction_pct/100)
+            # ── Fields read by Stage 2 (TradeEnhancer) Target Scaling ──────────
+            "contraction_pct": round(range_recent * 100, 2),
             # ── Fields in PATTERN_METADATA invalidation metadata_keys analytics ─
             "volatility_quality": volatility_quality,           # flat scalar for namespace eval
             # ── Structural / UI fields ────────────────────────────────────────

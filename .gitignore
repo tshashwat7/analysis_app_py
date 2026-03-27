@@ -148,3 +148,6 @@ data_cache/
 # Secrets
 secrets.json
 config/secrets.py
+
+# Temporary files
+tmp/

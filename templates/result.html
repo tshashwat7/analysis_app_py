@@ -2424,19 +2424,25 @@
                     {% endif %}
                   </div>
                   {% endfor %}
-                  <div class="gate-section-lbl gate-section-lbl-mt">Opportunity</div>
-                  {% for gate_name, result in profile_report.eval_ctx.opportunity_gates.gates.items() %}
-                  <div class="gate-item">
-                    <span class="gate-name">{{ gate_name | replace('_',' ') | title }}</span>
-                    {% if result.status == 'passed' %}<span class="gate-pass"><i
-                        class="bi bi-check-circle-fill"></i></span>
-                    {% elif result.status == 'skipped' %}<span class="gate-skip"><i class="bi bi-dash-circle"
-                        title="Optional — data unavailable"></i></span>
-                    {% else %}<span class="gate-fail"><i class="bi bi-x-circle-fill"
-                        title="{{ result.reason }}"></i></span>
-                    {% endif %}
-                  </div>
-                  {% endfor %}
+                   <div class="gate-section-lbl gate-section-lbl-mt">Opportunity</div>
+                   {% if profile_report.eval_ctx.opportunity_gates and profile_report.eval_ctx.opportunity_gates.gates %}
+                   {% for gate_name, result in profile_report.eval_ctx.opportunity_gates.gates.items() %}
+                   <div class="gate-item">
+                     <span class="gate-name">{{ gate_name | replace('_',' ') | title }}</span>
+                     {% if result.status == 'passed' %}<span class="gate-pass"><i
+                         class="bi bi-check-circle-fill"></i></span>
+                     {% elif result.status == 'skipped' %}<span class="gate-skip"><i class="bi bi-dash-circle"
+                         title="Optional — data unavailable"></i></span>
+                     {% else %}<span class="gate-fail"><i class="bi bi-x-circle-fill"
+                         title="{{ result.reason }}"></i></span>
+                     {% endif %}
+                   </div>
+                   {% endfor %}
+                   {% else %}
+                   <div class="gate-item">
+                     <span class="gate-name text-muted">No opportunity gates evaluated</span>
+                   </div>
+                   {% endif %}
                   {% else %}{{ summaries.gate_validation | safe }}{% endif %}
                 </div>
               </div>

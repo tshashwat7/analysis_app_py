@@ -114,7 +114,7 @@ MB_TECHNICAL_PENALTIES = {
             "operator":  "<",
             "threshold": 0,
             "is_passthrough": False,  # Use raw value
-            "penalty":   2.0,
+            "penalty":   1.5,
             "reason":    "Underperforming Nifty",
         },
         {

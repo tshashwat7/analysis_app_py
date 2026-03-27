@@ -379,6 +379,10 @@ MB_MASTER_CONFIG = {
         },
     },
 
+    "global": {
+        "estimated_hold_months": 18,  # ✅ P2 FIX: Global fallback for GENERIC setups
+    },
+
     # ========================================================================
     # STRATEGY MATRIX (root level — read by MBConfigExtractor)
     # ========================================================================

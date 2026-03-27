@@ -1180,6 +1180,13 @@ class QueryOptimizedExtractor:
                 'trendStrength': {'min': 5.0}  # ← Preserved from base
             }
         """
+        # ✅ Finding 1.5-B FIX: Fail-Fast if setup is unknown
+        if f"setup_{setup_name}" not in self.base_extractor.sections:
+            from config.config_extractor import ConfigurationError
+            msg = f"ARCHITECTURAL VIOLATION: Requested context requirements for UNKNOWN setup '{setup_name}'"
+            self.logger.error(msg)
+            raise ConfigurationError(msg)
+
         # Get base context requirements
         base_context = self.base_extractor.get(f"setup_context_{setup_name}", {})
         
@@ -1886,7 +1893,7 @@ class QueryOptimizedExtractor:
                 for k, v in nested.items():
                     if k not in namespace:  # don't override top-level
                         namespace[k] = (
-                            v.get("value") if isinstance(v, dict) and "value" in v and not isinstance(v.get("value"), str) else
+                            v.get("value") if isinstance(v, dict) and v.get("value") is not None and not isinstance(v.get("value"), str) else
                             v.get("raw") if isinstance(v, dict) and "raw" in v else
                             v.get("score") if isinstance(v, dict) and "score" in v else
                             v

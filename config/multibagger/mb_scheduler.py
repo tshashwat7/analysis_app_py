@@ -67,22 +67,34 @@ def _now_ist() -> datetime:
 def _next_sunday_ist() -> datetime:
     """
     Return the next Sunday midnight IST.
-
-    If called on a Sunday (weekday == 6), returns today at midnight IST
-    (days_ahead = 0 → scheduled for today, not next week)
     """
-    now        = _now_ist()
-    # ✅ P1-5 FIX: Ensure Sunday 00:01 doesn't skip a week
+    now = _now_ist()
     # weekday() is 6 for Sunday. 
     days_ahead = 6 - now.weekday()
     if days_ahead < 0:              # Past Sunday (e.g. Monday=0)
         days_ahead += 7
-    elif days_ahead == 0 and now.hour >= 1: # Already Sunday but past midnight
-        days_ahead += 7
-
-    # Replace to midnight of target day
+    
     target = now + timedelta(days=days_ahead)
-    return target.replace(hour=0, minute=0, second=0, microsecond=0)
+    target = target.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # ✅ P1-5 FIX: If it's already Sunday and we already ran today, skip to next week
+    last_run_str = cycle_status.get("last_run_at")
+    if last_run_str:
+        try:
+            # last_run_at is UTC ISO string
+            last_run = datetime.fromisoformat(last_run_str).replace(tzinfo=timezone.utc)
+            # Compare target (IST midnight) with last run (converted to IST)
+            # If last_run was today (Sunday), we must skip
+            if last_run.astimezone(IST).date() == target.date():
+                target += timedelta(days=7)
+        except (ValueError, TypeError):
+            pass
+
+    # Final guard: if target is in the past (e.g. 00:05 and target is 00:00 today), skip
+    if (target - now).total_seconds() < 0:
+        target += timedelta(days=7)
+
+    return target
 
 
 def _seconds_until(target: datetime) -> float:
@@ -177,10 +189,15 @@ def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str])
         eval_ctx = result.get("eval_ctx") or {}
         public_keys = [k for k in eval_ctx.keys() if not k.startswith("_")]
 
+        # ✅ P3 FIX: Store actual values in public_context, not just keys
+        eval_ctx_data = result.get("eval_ctx") or {}
+        public_context = {k: eval_ctx_data.get(k) for k in public_keys}
+        scoring_breakdown = eval_ctx.get("scoring", {})
+        
         row.thesis_json = {
-            "public_context":   {k: eval_ctx.get(k) for k in public_keys},
-            "opportunity":      opp,
-            "scoring_breakdown": eval_ctx.get("scoring", {}),
+            "public_context":    public_context,
+            "opportunity":       opp,
+            "scoring_breakdown": scoring_breakdown,
         }
 
         # Track tier changes
@@ -189,8 +206,16 @@ def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str])
             row.tier_changed_at      = now
 
         # Estimate re-evaluation date (4 weeks)
-        row.re_evaluate_date = now + timedelta(weeks=4)
-
+        # ✅ P3 FIX: Tier-based re-evaluation scaling
+        tier_weeks = {
+            "HIGH":  8,
+            "MED":   4,
+            "LOW":   2,
+            "WATCH": 4
+        }
+        weeks = tier_weeks.get(conviction_tier, 4)
+        row.re_evaluate_date = now + timedelta(weeks=weeks)
+        
         db.commit()
         logger.info(f"[MB] ✅ {symbol} upserted | tier={conviction_tier}")
     except Exception as e:

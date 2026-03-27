@@ -12,12 +12,8 @@ setup_pattern_matrix PATTERN_METADATA invalidation namespace (bullish/bearishNec
   • meta["peak_similarity"]     – entry gates: {"max": 0.02}
   • meta["pattern_height_pct"]  – analytics field in metadata_keys
 
-config_resolver _calculate_pattern_targets (neckline block L3676):
-  • meta["target"]              – pre-calculated pattern target price
-  • meta["neckline"]            – SL anchored just above/below neckline
-  • meta["type"]                – "bullish" | "bearish" branch selector
-
-All three must be present or target calculation falls through to ATR fallback.
+# Target calculation handled by Stage 2 (TradeEnhancer) via Market-Adaptive Adjustment.
+# Resolver provides structural baseline; Enhancer optimizes based on volatility/regime.
 
 Alias fixes applied
 ───────────────────
@@ -122,7 +118,7 @@ class BullishNecklinePattern(BasePattern):
             return {"found": False, "score": 0, "quality": 0, "meta": {}}
 
         height = neckline - price1
-        target = neckline + height                      # resolver reads meta["target"]
+        target = neckline + height                      # Structural baseline
         first_point_index = t1
         entry_conditions_met = current_price > neckline
 
@@ -152,10 +148,10 @@ class BullishNecklinePattern(BasePattern):
                 # ── Fields read by trade_enhancer ────────────────────────────
                 "age_candles":    window_size - first_point_index,
                 "formation_time": formation_ts.timestamp(),    # key read by enhancer L374/946
-                # ── Fields read by resolver _calculate_pattern_targets L3677 ─
-                "target":    round(target, 2),          # resolver: depth = abs(target - neckline)
-                "neckline":  round(neckline, 2),        # resolver: SL = neckline * 0.99
-                "type":      "bullish",                 # resolver: branch selector
+                # ── Fields read by Stage 2 (TradeEnhancer) Target Scaling ──────────
+                "target":    round(target, 2),
+                "neckline":  round(neckline, 2),
+                "type":      "bullish",
                 # ── Fields in PATTERN_METADATA invalidation namespace ─────────
                 # Invalidation gates use "neckline" as max_metric/min_metric key
                 # Entry gates use "peak_similarity" as a max gate
@@ -195,10 +191,8 @@ class BearishNecklinePattern(BasePattern):
     Detects Double Top (bearish) pattern using pure NumPy.
     Alias: "bearishNecklinePattern" — matches SETUP_PATTERN_MATRIX key.
 
-    Note: system is currently long-only; _calculate_pattern_targets in
-    config_resolver returns None for the bearish branch (L3688).  This class
-    still detects the pattern so it appears in CONFLICTING lists and can
-    suppress bullish setups when a double-top breakdown is active.
+    Note: system is currently long-only; Bearish signals are used in
+    CONFLICTING lists to suppress bullish setups.
     """
 
     def __init__(self, config: Dict[str, Any] = None):
@@ -280,10 +274,10 @@ class BearishNecklinePattern(BasePattern):
                 # ── Fields read by trade_enhancer ────────────────────────────
                 "age_candles":    window_size - first_point_index,
                 "formation_time": formation_ts.timestamp(),    # key read by enhancer L374/946
-                # ── Fields read by resolver _calculate_pattern_targets L3677 ─
-                "target":    round(target, 2),          # resolver reads this even for bearish
-                "neckline":  round(neckline, 2),        # resolver: returns None for bearish branch
-                "type":      "bearish",                 # resolver: branch selector → returns None
+                # ── Fields read by Stage 2 (TradeEnhancer) Target Scaling ──────────
+                "target":    round(target, 2),
+                "neckline":  round(neckline, 2),
+                "type":      "bearish",
                 # ── Fields in PATTERN_METADATA invalidation namespace ─────────
                 "peak_similarity":    round(peak_similarity, 4),
                 "pattern_height_pct": round(((price1 - neckline) / neckline) * 100, 2),

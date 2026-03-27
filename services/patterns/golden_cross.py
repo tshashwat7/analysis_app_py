@@ -13,9 +13,8 @@ setup_pattern_matrix PATTERN_METADATA (goldenCross / deathCross):
   • invalidation gates reference maMid, maSlow, adx, rsi, price — all from indicators.
     No meta keys needed here either.
 
-config_resolver _calculate_pattern_targets (goldenCross block L3806):
-  • reads maFast / maSlow from indicators (ind / price_data) — NOT from meta
-  → no meta fields needed for target calculation
+# Target calculation handled by Stage 2 (TradeEnhancer) via RR Regime Multipliers
+# No meta fields needed for structural baseline in ConfigResolver
 
 Alias fixes applied
 ───────────────────

@@ -1,18 +1,16 @@
 # services/db.py
 
 import os
-from datetime import datetime as _dt
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, DateTime, Text, JSON, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import text
 import logging
 import time
 import random
 import functools
-from typing import Callable, Any
+from typing import List, Dict, Any, Callable, Optional
 from sqlalchemy.exc import OperationalError
 from config.config_utility.market_utils import get_current_utc
 logger = logging.getLogger(__name__)
@@ -267,7 +265,7 @@ def enforce_timezone_on_paper_trade(target, context):
 # -----------------------------------------------------------------------
 def _is_retryable_sqlite_error(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return "locked" in msg or "busy" in msg
+    return any(s in msg for s in ["locked", "busy", "timeout", "resource temporarily unavailable"])
 
 class SchemaMigration(Base):
     """One row per applied migration. migration_name is the primary key."""
@@ -276,7 +274,7 @@ class SchemaMigration(Base):
     applied_at = Column(DateTime, default=utc_now, nullable=False)
 
 
-def backoff_retry_db(retries: int = 5, base_delay: float = 0.1, max_delay: float = 2.0):
+def backoff_retry_db(retries: Optional[int] = None, base_delay: float = 0.1, max_delay: float = 2.0):
     """
     Decorator for database write operations with exponential backoff and jitter.
     Specifically targets SQLite "database is locked" errors.
@@ -284,39 +282,41 @@ def backoff_retry_db(retries: int = 5, base_delay: float = 0.1, max_delay: float
     def decorator(func: Callable):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            # ✅ Fix 8.1-1: Resolve retries at call-time if not explicitly passed
+            actual_retries = retries
+            if actual_retries is None:
+                try:
+                    actual_retries = int(os.getenv("SIGNAL_CACHE_WRITE_RETRIES", "5"))
+                except (ValueError, TypeError):
+                    actual_retries = 5
+            
             last_exc = None
-            for attempt in range(1, retries + 1):
+            for attempt in range(1, actual_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except OperationalError as e:
+                except Exception as e:
                     last_exc = e
-                    msg = str(e).lower()
-                    if "locked" in msg or "busy" in msg:
-                        if attempt == retries:
-                            logger.error(f"DB Max retries ({retries}) reached: {e}")
+                    # ✅ Fix 8.1-2: Use consolidated retryable check
+                    if _is_retryable_sqlite_error(e):
+                        if attempt == actual_retries:
+                            logger.error(f"DB Max retries ({actual_retries}) reached: {e}")
                             raise
                         
                         delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
-                        jitter = random.uniform(0, 0.5 * delay)
+                        # ✅ Fix 8.1-1: Widen jitter range to prevent synchronized retry collisions
+                        jitter = random.uniform(0.1, 0.5 * delay)
                         final_delay = delay + jitter
                         
                         logger.warning(
-                            f"DB locked/busy. Retry {attempt}/{retries} in {final_delay:.2f}s..."
+                            f"DB locked/busy. Retry {attempt}/{actual_retries} in {final_delay:.2f}s..."
                         )
                         time.sleep(final_delay)
                         continue
-                    raise # Non-retryable operational error
-                except (Exception, OperationalError) as e:
-                    # ✅ Fix 8.1-2: Widen retryable check for lock errors in general Exceptions
-                    if _is_retryable_sqlite_error(e):
-                        delay = min(max_delay, base_delay * (2 ** (attempt - 1)))
-                        jitter = random.uniform(0, 0.5 * delay)
-                        final_delay = delay + jitter
-                        logger.warning(f"DB locked/busy (Exc). Retry {attempt}/{retries} in {final_delay:.2f}s...")
-                        time.sleep(final_delay)
-                        continue
-                    logger.error(f"Unexpected DB error: {e}")
+                    
+                    # Non-retryable error
+                    logger.error(f"Non-retryable DB error: {e}")
                     raise
+            
             if last_exc:
                 raise last_exc
         return wrapper
@@ -465,7 +465,7 @@ def get_db():
 if __name__ == "__main__":
     init_db()
     
-@backoff_retry_db(retries=5)
+@backoff_retry_db()
 def _write_signal_cache_with_retry(symbol: str, writer_fn: Callable[[Session, SignalCache], None]):
     """
     Retry-safe atomic writer for SignalCache.

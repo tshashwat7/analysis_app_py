@@ -393,7 +393,7 @@ def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
     rr_label = "Excellent" if rr >= 2.0 else ("Good" if rr >= 1.5 else "Marginal")
     narrative += f"<br><b>Risk/Reward Ratio:</b> {rr:.2f}:1 ({rr_label})<br>"
     
-    capital_at_risk = qty * (entry - sl)
+    capital_at_risk = qty * abs(entry - sl)
     narrative += f"<br><b>Position Size:</b> {qty} shares (₹{qty * entry:,.0f} investment)<br>"
     narrative += f"<b>Capital at Risk:</b> ₹{capital_at_risk:,.0f}<br>"
     

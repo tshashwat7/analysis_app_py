@@ -11,9 +11,8 @@ setup_pattern_matrix PATTERN_METADATA entry_rules / invalidation gates (namespac
   • meta["squeeze_duration"]    – entry gate {"min": 5.0} intraday, {"min": 3.0} short_term
   • meta["squeeze_strength"]    – analytics field in breakdown_threshold metadata_keys
 
-config_resolver _calculate_pattern_targets (bollingerSqueeze block):
-  • reads bbHigh / bbLow / bbMid from price_data (indicators), NOT from meta
-  → no meta fields needed for target calculation
+# Target calculation handled by Stage 2 (TradeEnhancer) via RR Regime Multipliers
+# No meta fields needed for structural baseline in ConfigResolver
 
 Fixes applied
 ─────────────

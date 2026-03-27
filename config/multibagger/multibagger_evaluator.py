@@ -152,6 +152,8 @@ def mb_compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
             actual = metric_data.get("raw")
         else:
             actual = metric_data
+            
+        # ✅ P3 FIX: Skip if raw is None — never fall back to 'score' for penalties
         if actual is None:
             continue
         try:

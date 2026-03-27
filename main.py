@@ -42,7 +42,11 @@ from services.world_bank_provider import get_macro_metrics
 from services.summaries import build_all_summaries
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
-from services.db import SessionLocal, SignalCache, init_db, PaperTrade, FundamentalCache, get_db
+from services.db import (
+    SessionLocal, SignalCache, init_db, PaperTrade, 
+    FundamentalCache, get_db, _write_signal_cache_with_retry, 
+    backoff_retry_db
+)
 from config.multibagger.mb_routes import mb_router
 from config.multibagger.mb_scheduler import start_mb_scheduler
 
@@ -712,34 +716,7 @@ def get_cached(symbol: str):
         db.close()
 
 
-def _is_retryable_sqlite_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return "database is locked" in msg or "database table is locked" in msg or "busy" in msg
-
-
-# ✅ Phase 6 P0-2: Implement exponential backoff with jitter (delegated to db.py decorator)
-from services.db import backoff_retry_db
-
-@backoff_retry_db(retries=SIGNAL_CACHE_WRITE_RETRIES, base_delay=SIGNAL_CACHE_RETRY_SLEEP_SEC)
-def _write_signal_cache_with_retry(symbol: str, writer_fn):
-    """
-    Execute a SignalCache write with a fresh DB session per attempt.
-    """
-    db: Session = SessionLocal()
-    try:
-        entry = db.query(SignalCache).filter(SignalCache.symbol == symbol).first()
-        if not entry:
-            entry = SignalCache(symbol=symbol)
-            db.add(entry)
-
-        writer_fn(db, entry)
-        db.commit()
-        return True
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+# (Retry logic and backoff are centralized in services.db)
 
 
 def set_cached(symbol: str, value: Dict[str, Any]):
@@ -1977,7 +1954,6 @@ async def view_paper_trades(request: Request, api_key: str = Depends(get_api_key
 async def get_paper_trade_cmp(symbols: str = Query(""), api_key: str = Depends(get_api_key)):
     if not symbols:
         return {}
-    import yfinance as yf
     sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
     if not sym_list:
         return {}

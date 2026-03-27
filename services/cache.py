@@ -80,7 +80,8 @@ def cached_result(ttl: int = 3600, key_fn: Optional[Callable[..., str]] = None):
                             ev.set()
                 
             except Exception as e:
-                # ✅ Fix 4: Log before fallback so caching logic failures are visible in production.
+                # This outer except block catches exceptions from the caching logic itself
+                # or re-raised exceptions from the inner computation.
                 logger.warning(
                     f"[cached_result] Caching logic failed for '{fn.__name__}', "
                     f"falling back to direct call: {e}"
