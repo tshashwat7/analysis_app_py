@@ -158,6 +158,8 @@ from services.db import SessionLocal, backoff_retry_db
 
 @backoff_retry_db(retries=5)
 def _upsert_candidate(symbol: str, result: dict, conviction_tier: Optional[str]):
+    from config.multibagger.mb_db_model import MultibaggerCandidate
+    db = SessionLocal()
     try:
         now  = get_current_utc()
         row  = db.query(MultibaggerCandidate).filter_by(symbol=symbol).first()

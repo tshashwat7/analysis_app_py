@@ -1,8 +1,8 @@
-# 📈 Pro Stock Analyzer v15.1
+# 📈 Pro Stock Analyzer v15.2
 
 > **Institutional-Grade Algorithmic Trading Signal Engine for NSE (India)**
 
-![Version](https://img.shields.io/badge/version-15.1-blue)
+![Version](https://img.shields.io/badge/version-15.2-blue)
 ![Market](https://img.shields.io/badge/market-NSE%20India-orange)
 ![Stack](https://img.shields.io/badge/stack-Python%20%7C%20FastAPI%20%7C%20SQLite-green)
 ![Status](https://img.shields.io/badge/status-Production-brightgreen)
@@ -18,7 +18,7 @@
    - [Fundamental Cache](#fundamental-cache)
    - [Indicator Polymorphism](#indicator-polymorphism)
    - [Corporate Actions](#corporate-actions)
-4. [8-Phase Pipeline](#8-phase-pipeline)
+4. [11-Phase Pipeline](#11-phase-pipeline)
    - [Phase 1 — Config Layer](#phase-1--config-layer)
    - [Phase 2 — Extraction Layer](#phase-2--extraction-layer)
    - [Phase 3 — Signal Engine](#phase-3--signal-engine)
@@ -27,6 +27,9 @@
    - [Phase 6 — Pattern Library](#phase-6--pattern-library)
    - [Phase 7 — Multibagger Pipeline](#phase-7--multibagger-pipeline)
    - [Phase 8 — Orchestrator & DB](#phase-8--orchestrator--db)
+   - [Phase 9 — Target Geometry](#phase-9--target-geometry)
+   - [Phase 10 — Multibagger Isolation](#phase-10--multibagger-isolation)
+   - [Phase 11 — Logic Refinement](#phase-11--logic-refinement)
 5. [Multi-Layer Gating System](#multi-layer-gating-system)
 6. [Config Architecture](#config-architecture)
 7. [Pattern Library](#pattern-library-1)
@@ -45,7 +48,7 @@
 
 ## Overview
 
-Pro Stock Analyzer v15.0 is an institutional-grade algorithmic trading signal engine targeting NSE-listed equities across four time horizons: `intraday`, `short_term`, `long_term`, and `multibagger`. The system ingests raw OHLCV data, evaluates multi-layered structural gate conditions, detects chart patterns with full lifecycle tracking, computes confidence-adjusted trade plans, and persists results with retry-safe database writes.
+Pro Stock Analyzer v15.2 is an institutional-grade algorithmic trading signal engine targeting NSE-listed equities across four time horizons: `intraday`, `short_term`, `long_term`, and `multibagger`. The system ingests raw OHLCV data, evaluates multi-layered structural gate conditions, detects chart patterns with full lifecycle tracking, computes confidence-adjusted trade plans, and persists results with retry-safe database writes.
 
 The core philosophy distinguishes stock *quality* (structural eligibility — "is this stock worth watching?") from trade *timing* (execution context — "can I enter right now?"). These are computed in two explicit, decoupled phases: a `build_evaluation_context_only` pass that produces indicators, scores, gates, confidence, and setup classification; followed by a `build_execution_context_from_evaluation` pass that layers position sizing, order model, and real-time RR validation on top of the already-computed evaluation. 
 
@@ -148,8 +151,10 @@ The codebase has undergone a significant architectural "wash" across 9 major aud
 | **P6** | **Hardening** | Concurrency Guards + Jittered Retries | ACID compliant DB writes; no lock contention |
 | **P7** | **Multibagger** | Isolate Pipeline + Scheduled Cycles | Passive scanning without impacting trade engine |
 | **P8** | **Security/UI** | XSS Protection + API Versioning (v1) | Production-ready web interface & endpoints |
-| **P9** | **Refinement** | Final naming alignment + Unit standard | 0 NameErrors; unified bar-vs-seconds units |
-| **v15.1**| **Modernization**| README/Artifact Auto-Sync | Real-time technical documentation for reviewers |
+| **P9** | **Refinement** | Target Geometry & RR Integrity | 0 UnboundLocalErrors; unified bars_per_unit |
+| **P10**| **Multibagger** | Scale Normalization (Crores) | Accurate fundamental scoring for large-cap MBs |
+| **P11**| **Signal Logic**| Neutral-to-WATCH standard | Removed 'HOLD' leakage for neutral trends |
+| **v15.2**| **Stability**| Session Management & Bug Fixes | Robust parallel writes; 0 NameErrors in scheduler |
 
 ---
 
@@ -178,7 +183,7 @@ Tier 3 — Yahoo Finance (network, ~300–800 ms)
 
 `cache.py` is a **thread-safe LRU wrapper** for the in-process RAM store. Its role is strictly bounded to providing a concurrency-safe in-memory cache with size eviction; it does not orchestrate the Parquet tier or the network fallback — those are handled entirely inside `data_fetch.py`.
 
-**Why this matters:** A full market scan across 200+ symbols processes each symbol in a `ProcessPoolExecutor` worker. Without a Parquet tier, every cold start would fan out 200+ simultaneous Yahoo Finance requests, overwhelming rate limits and inflating scan time by an order of magnitude. With warm Parquet cache, a full scan runs entirely from disk.
+**Why this matters:** A full market scan across 500+ NSE tickers processes each symbol in a `ProcessPoolExecutor` worker. This architecture guarantees memory isolation and prevents a "poisoned" ticker (e.g., one with malformed OHLCV data) from cascading failures across the entire pipeline. Without a Parquet tier, every cold start would fan out 500+ simultaneous Yahoo Finance requests, overwhelming rate limits and inflating scan time by an order of magnitude. With warm Parquet cache, a full scan runs entirely from disk concurrently without rate-limit breaches.
 
 ---
 
@@ -278,8 +283,18 @@ If the library is not available, the system emits a `WARNING` at startup and fal
 | Mode | Sources | Use Case |
 |---|---|---|
 | `mode="upcoming"` | NSE lib → Equitymaster | Index dashboard, corp actions column |
-| `mode="past"` / `"single"` | yfinance (7d cached) | `/analyze` detail view |
+| `mode="past"` / `"single"` | yfinance (7d cac- **ACTION**: Any nested list within a "DEFAULT" dict (like `horizons_supported`) must be treated as **read-only**. If a detector or resolver attempts to `.append()` or `.extend()` a physics list in-place, flag it as a **P2 Structural Risk** (state leak across patterns).
 
+### 4. Scale Normalization (P1 Critical)
+Fundamental scoring expects input metrics to be on a 0-10 or 0-100 scale. Market Cap is often provided in Crores (1e7) for the Indian market.
+- **RULE**: Any fundamental rule that uses Market Cap MUST ensure the input is normalized to the expected pillar scale (e.g., Crores for multibagger).
+- **ACTION**: If a scoring function subtracts an absolute penalty (e.g., `-0.5`) from a raw Crore value without normalization, flag it as a **P1 Logic Error**.
+
+### 5. Session Initialization (P2 Structural)
+Concurrent database writes in a multi-process environment require fresh sessions per transaction to avoid `NameError` or session pollution.
+- **RULE**: Functions decorated with `@backoff_retry_db` or similar high-concurrency writers MUST initialize their own `db = SessionLocal()` inside the function scope.
+- **ACTION**: If a retry-wrapped function uses a global `db` session, flag it as a **P2 Structural Risk** (Database Lock Collision).
+hed) | `/analyze` detail view |
 - **Dividends** — ex-dividend price gap displayed with `Rs<amount>`
 - **Bonus issues** — displayed as `Bonus <ratio>`
 - **Stock splits** — displayed as `Split <ratio>`
@@ -648,7 +663,7 @@ Phase 6 has three distinct sub-components that execute in sequence:
 
 #### `pattern_analyzer.py` — Detector Orchestrator
 
-`pattern_analyzer.py` is the single entry point for all pattern detection. It iterates the full set of 10 detector classes, calls each `detect(df, indicators, horizon)` method, and collects every result into a unified `pattern_results` dict keyed by pattern name. It owns the try/except boundary around each detector call so that a failure in one detector (e.g., a malformed DataFrame slice in `cup_handle.py`) does not abort the remaining nine.
+`pattern_analyzer.py` is the single entry point for all pattern detection. It iterates the full set of 12 detector classes. Detectors run within a `ProcessPoolExecutor`, guaranteeing memory isolation and preventing a poisoned ticker from cascading failures across the pipeline. It owns the try/except boundary around each detector call so that a failure in one detector (e.g., a malformed DataFrame slice in `cup_handle.py`) does not abort the remaining nine.
 
 ```
 pattern_analyzer.analyze(df, indicators, horizon)
@@ -768,7 +783,7 @@ Deep MB resolver using the isolated extractor stack:
 
 #### Scheduler (`mb_scheduler.py`)
 
-Daemon thread started in FastAPI lifespan. Calculates next Sunday midnight IST, sleeps, then runs the full cycle. Supports manual trigger via `POST /multibagger/run`. Updates `cycle_status` dict imported by `mb_routes.py` for the `/multibagger/status` endpoint.
+Daemon thread started in FastAPI lifespan. Calculates next Sunday midnight IST, sleeps, then runs the full cycle. Supports manual trigger via `POST /multibagger/run`. Database locking is managed via the `@backoff_retry_db` decorator, solving SQLite lock collisions during high-concurrency batch writes. Updates `cycle_status` dict imported by `mb_routes.py` for the `/multibagger/status` endpoint.
 
 ---
 
@@ -1114,8 +1129,8 @@ All five signal states are **first-class outputs** with explicit semantics. No s
 |---|---|---|
 | `STRONG_BUY` / `BUY` | All gates pass, confidence ≥ threshold, RR valid | Entry is structurally sound and timing is right. Execute. |
 | `SELL` | Bearish direction, all gates pass | Short/exit entry. Direction-aware mirror of BUY. |
-| `WATCH` | Strong profile but no active entry structure | Stock quality is good but pattern/setup alignment is absent. Monitor for formation. Layer 0 block. |
-| `HOLD` | Active position management signal | Not a new entry. Only generated for positions already open. |
+| `WATCH` | Neutral trend or no active entry structure | DEFAULT fallback for neutral trends/failed scans. Stock quality is good but pattern/setup alignment is absent. Layer 0 block. |
+| `HOLD` | Active position management only | Strictly for existing trades. Not a neutral fallback. |
 | `BLOCKED` | Setup + pattern present but execution gate failed | Entry structure exists but a hard gate (spread, volume, RR floor) prevents execution. Includes first-class `block_reason`. |
 | `AVOID` | Fundamental or macro red flags | Fundamental score too low or macro conditions adverse. Not generated by technical analysis path. |
 

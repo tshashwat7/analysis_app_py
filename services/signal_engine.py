@@ -389,8 +389,7 @@ def _create_fallback_profile(
             }
         },
         "final_decision_score": eligibility_base,
-        "final_score": eligibility_base,
-        "category": "HOLD",
+        "category": "WATCH", # Changed from HOLD (Phase 11 P3 FIX)
         "can_trade": False,
         "eval_ctx": {
             "stub": True, 
@@ -795,7 +794,8 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
 
     # ── Setup intent classification ──────────────────────────────────────
     is_rr_failure = any(any(s in f for s in ["RR", "Target", "SL"]) for f in failures)
-    suffix = "BUY" if direction == "bullish" else "SELL" if direction == "bearish" else "HOLD"
+    # ✅ Phase 11 P2-1 FIX: Neutral trend should be WATCH, not HOLD.
+    suffix = "BUY" if direction == "bullish" else "SELL" if direction == "bearish" else "WATCH"
     signal_intent = f"{setup_type}_{suffix}"
 
     # ── Resolve primary pattern presence ─────────────────────────────────

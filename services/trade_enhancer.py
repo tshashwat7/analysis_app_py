@@ -1252,6 +1252,9 @@ def calculate_pattern_timeline(
         t1_units = max(1, int(t1_bars / bars_per_unit))
         
         # ✅ Fix 9B.5: Cap t1_units by pattern expiry
+        invalidation_timeline = pattern_meta.get("invalidation_timeline")
+        age_candles = pattern_meta.get("age_candles", 0)
+        
         original_t1_units = t1_units
         if invalidation_timeline:
             remaining = invalidation_timeline - age_candles
@@ -1285,8 +1288,6 @@ def calculate_pattern_timeline(
         # STEP 7: Add invalidation warning
         # ===================================================================
         invalidation_warning = None
-        invalidation_timeline = pattern_meta.get("invalidation_timeline")
-        age_candles = pattern_meta.get("age_candles", 0)
         
         if invalidation_timeline:
             remaining = invalidation_timeline - age_candles

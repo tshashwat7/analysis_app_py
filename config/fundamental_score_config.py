@@ -876,8 +876,20 @@ def _normalize_market(metric: str, val: float) -> float:
         return min(10.0, max(0.0, val / 10.0))
     
     elif metric == "marketCap":
-        # Handled by fallback or custom logic if needed
-        return min(10.0, max(0.0, val / 1e11)) # Very generic placeholder
+        # ✅ P10-1 FIX: Standardize Market Cap to Crores (INR).
+        # Normalization: 0 to 20,000 Crores range for Multibaggers.
+        # For Multibaggers, smaller often scores higher (agile growth).
+        if horizon == "multibagger":
+            # 10.0 score for < 500 Cr, 5.0 for 5,000 Cr, 0.0 for > 20,000 Cr
+            if val <= 500: return 10.0
+            if val >= 20000: return 0.0
+            return round(10.0 - (val / 2000.0), 2)  # Linear decay
+        
+        # Generic fallback for other horizons (assuming absolute Rupees or large values)
+        if val > 1e7: # Likely absolute Rupees
+            val = val / 1e7 # Convert to Crores
+        
+        return min(10.0, max(0.0, val / 10000.0)) # 10.0 = 100,000 Cr
         
     return 5.0
 
