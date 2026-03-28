@@ -382,12 +382,16 @@ def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
         narrative += f"<b>Target 1:</b> ₹{targets[0]:,.2f}"
         if timeline.get("available"):
             narrative += f" (~{timeline.get('t1_estimate', 'N/A')})"
+        else:
+            narrative += " (~Waiting for pattern)"
         narrative += "<br>"
         
         if len(targets) > 1:
             narrative += f"<b>Target 2:</b> ₹{targets[1]:,.2f}"
             if timeline.get("available"):
                 narrative += f" (~{timeline.get('t2_estimate', 'N/A')})"
+            else:
+                narrative += " (~Waiting for pattern)"
             narrative += "<br>"
     
     rr_label = "Excellent" if rr >= 2.0 else ("Good" if rr >= 1.5 else "Marginal")

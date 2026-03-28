@@ -1204,9 +1204,9 @@ def generate_trade_plan(
 
         # ✅ POPULATE ESTIMATED TIME
         if "timeline" in exec_ctx and exec_ctx["timeline"].get("available"):
-            plan["est_time_str"] = exec_ctx["timeline"].get("t1_estimate", "NA")
+            plan["est_time_str"] = exec_ctx["timeline"].get("t1_estimate", "Waiting for primary pattern")
         else:
-            plan["est_time_str"] = "NA"
+            plan["est_time_str"] = "Waiting for primary pattern"
 
 
         # ✅ POPULATE GATE STATUS

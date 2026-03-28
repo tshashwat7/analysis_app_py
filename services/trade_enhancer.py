@@ -173,6 +173,15 @@ def adjust_targets_for_market_conditions(
         else:
             t1_regime_mult = t2_regime_mult = 1.0
         
+        # ✅ DEFENSIVE: If ATR fallback (from resolver), disable stretching
+        # Rationale: ATR (3*ATR, 5*ATR) is already "market-scaled" enough.
+        # Doubling it via volatilty/regime leads to unrealistic 3x price targets.
+        if risk_data.get("is_atr_fallback"):
+            target_factor = 1.0
+            t1_regime_mult = 1.0
+            t2_regime_mult = 1.0
+            logger.debug(f"[{ticker}] ATR fallback detected - skipping target stretching.")
+        
         # Calculate RR for structural targets first
         if direction == "LONG":
             struct_risk = current_price - execution_sl

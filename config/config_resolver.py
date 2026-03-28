@@ -3639,6 +3639,9 @@ class ConfigResolver:
                      normalized_targets = [price - (atr * 3.0), price - (atr * 5.0)]
                  else:
                      normalized_targets = [price + (atr * 3.0), price + (atr * 5.0)]
+                 
+                 # ✅ Mark as fallback so enhancer doesn't over-stretch
+                 risk_data["is_atr_fallback"] = True
 
         # 5. Return Final Model
         return {
@@ -3657,6 +3660,7 @@ class ConfigResolver:
             "rrRatio": rr,
             "rrRatioT2": rr_t2,  # ✅ Fix 9A.3: Pass T2 RR to final model
             "targets": normalized_targets,
+            "is_atr_fallback": risk_data.get("is_atr_fallback", False),  # ✅ EXPLICIT: Pass fallback status
             "confidence": confidence,
             "setup": eval_ctx["setup"]["type"]
         }
