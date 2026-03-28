@@ -29,7 +29,7 @@ from config.multibagger.mb_db_model import MultibaggerCandidate
 # cycle_status is owned by mb_scheduler (the authoritative writer).
 # Imported here so /status reads live values without a circular import.
 from config.multibagger.mb_scheduler import cycle_status
-from main import get_api_key
+from services.auth_utils import get_api_key
 
 logger    = logging.getLogger(__name__)
 mb_router = APIRouter(prefix="/multibagger", tags=["Multibagger"])

@@ -247,10 +247,9 @@ def evaluate_single_screener(
     if not any(k in indicators for k in required_keys):
         return False, f"MA_DATA_MISSING:Indicators keys {list(indicators.keys())} mismatch {required_keys}"
 
-        (passed: bool, rejection_reason: str)
-        rejection_reason is "" when passed=True.
-    """
     meta = meta or {}
+
+
 
     reason = _check_universe_filters(symbol, meta, fundamentals)
     if reason:

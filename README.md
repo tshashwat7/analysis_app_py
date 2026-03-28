@@ -803,7 +803,8 @@ market_utils.get_current_session()
     → "holiday"     (NSE holiday calendar lookup)
 ```
 
-**Why this matters for the pipeline:** If `get_current_session()` returns `"after_hours"` or `"holiday"`, the orchestrator suppresses intraday horizon analysis entirely — there is no live price action to evaluate. Attempting an intraday scan on stale EOD data would produce gate evaluations against yesterday's closes dressed up as real-time signals. `market_utils.py` is the single authoritative check that prevents this.
+**Why this matters for the pipeline:** Market status is used for data tagging and "stale data" warnings, but the orchestrator no longer suppresses analysis. This ensures that users can evaluate all horizons (including intraday) against the latest available data at any time, including weekends and holidays.
+
 
 #### `main.py` — FastAPI Application
 

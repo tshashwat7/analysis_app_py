@@ -1591,8 +1591,7 @@ indicators_keys = {
         'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal', 'ema20_50Cross',
         'maFastSlope', 'maSlowSlope', 'ema20Slope', 'ema50Slope', 'trueRange',
         'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_200ema_pct', 'priceAction',
-        'cmfSignal', 'bollingerSqueeze', 'bollinger_squeeze_short_term', 'minerviniStage2',
-        'minervini_stage2_short_term', 'ichimokuSignals', 'ichimoku_signals_short_term',
+        'cmfSignal', 'bollingerSqueeze', 'minerviniStage2', 'ichimokuSignals',
         'technicalScore', 'Horizon'
     ],
     'long_term': [
@@ -1610,8 +1609,7 @@ indicators_keys = {
         'atrPct', 'atrSmaRatio', 'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal',
         'wma_10_40_cross', 'maFastSlope', 'maSlowSlope', 'wma_20_slope', 'wma50Slope',
         'trueRange', 'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_50wma_pct',
-        'priceAction', 'cmfSignal', 'flagPennant', 'flag_pennant_long_term', 'cupHandle',
-        'cup_handle_long_term', 'ichimokuSignals', 'ichimoku_signals_long_term',
+        'priceAction', 'cmfSignal', 'flagPennant', 'cupHandle', 'ichimokuSignals',
         'technicalScore', 'Horizon'
     ],
     'multibagger': [
@@ -1629,7 +1627,7 @@ indicators_keys = {
         'atrPct', 'atrSmaRatio', 'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal',
         'mma_6_12_cross', 'maFastSlope', 'maSlowSlope', 'mma_20_slope', 'mma_50_slope',
         'trueRange', 'trueRangePct', 'priceVsPrimaryTrendPct', 'price_vs_12mma_pct',
-        'priceAction', 'cmfSignal', 'ichimokuSignals', 'ichimoku_signals_multibagger',
+        'priceAction', 'cmfSignal', 'ichimokuSignals',
         'technicalScore', 'Horizon'
     ]
 }

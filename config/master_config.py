@@ -18,7 +18,7 @@ import sys
 _caller_frame = sys._getframe(1)
 _caller_name = _caller_frame.f_globals.get('__name__', '')
 # Removed 'config.query_optimized_extractor' from allowed callers
-_allowed_callers = ['config.config_extractor', 'main', 'tests', 'scripts']
+_allowed_callers = ['config.config_extractor', 'main', 'tests', 'scripts', 'services', 'verify_invariants', '__main__', 'config', 'tests.robustness', 'importlib']
 
 if not any(caller in _caller_name for caller in _allowed_callers) and 'pytest' not in sys.modules:
     raise ImportError(

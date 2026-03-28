@@ -24,6 +24,24 @@ from typing import Dict, List, Literal, Tuple, Any, Optional
 
 PatternRole = Literal["PRIMARY", "CONFIRMING", "CONFLICTING"]
 
+# ✅ NEW: Pattern Indicator Registry (Refactors v15.2)
+# Maps detector keys in 'indicators' dict to their supported horizons.
+PATTERN_INDICATOR_MAPPINGS = {
+    "darvasBox": {"intraday": True, "short_term": True, "long_term": True},
+    "cupHandle": {"intraday": True, "short_term": True, "long_term": True},
+    "minerviniStage2": {"short_term": True, "long_term": True, "multibagger": True},
+    "bollingerSqueeze": {"intraday": True, "short_term": True, "long_term": True},
+    "ichimokuSignals": {"short_term": True, "long_term": True},
+    "threeLineStrike": {"intraday": True, "short_term": True},
+    "goldenCross": {"short_term": True, "long_term": True},
+    "deathCross": {"short_term": True, "long_term": True},
+    "bullishNecklinePattern": {"intraday": True, "short_term": True, "long_term": True},
+    "bearishNecklinePattern": {"intraday": True, "short_term": True, "long_term": True},
+    "doubleTopBottom": {"intraday": True, "short_term": True, "long_term": True},
+    "flagPennant": {"intraday": True, "short_term": True},
+    "momentumFlow": {"intraday": True, "short_term": True},
+}
+
 # ============================================================
 # GLOBAL PATTERN PHYSICS
 # ============================================================

@@ -79,14 +79,8 @@ WARMER_RATE_LIMIT_COOLDOWN_SEC = int(os.getenv("WARMER_RATE_LIMIT_COOLDOWN_SEC",
 CORP_ACTIONS_STARTUP_TIMEOUT_SEC = int(os.getenv("CORP_ACTIONS_STARTUP_TIMEOUT_SEC", "120"))
 IST = pytz.timezone("Asia/Kolkata")
 
-# --- SECURITY ---
-API_KEY = os.getenv("SIGNAL_API_KEY", "pro-signal-v15-secret")  # Default for dev
-api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
-
-async def get_api_key(header_key: str = Security(api_key_header)):
-    if header_key == API_KEY:
-        return header_key
-    raise HTTPException(status_code=403, detail="Invalid API Key")
+# --- SECURITY (Moved to services/auth_utils.py) ---
+from services.auth_utils import get_api_key, api_key_header, API_KEY
 
 def sanitize_index_name(name: str) -> str:
     """Fix P3-1: Prevent path traversal by allowing only alphanumeric and underscores."""
@@ -130,6 +124,27 @@ from services.index_utils import (
 
 ALL_STOCKS_LIST = None
 ALL_STOCKS_MAP = None
+
+def _ensure_stocks_loaded():
+    """
+    Lazily loads the global stock universe (NSEStock) into memory.
+    Ensures that ALL_STOCKS_LIST and ALL_STOCKS_MAP are populated once.
+    """
+    global ALL_STOCKS_LIST, ALL_STOCKS_MAP
+    if ALL_STOCKS_LIST is None:
+        try:
+            ALL_STOCKS_LIST = load_or_create_global_stocks()
+            if ALL_STOCKS_LIST:
+                ALL_STOCKS_MAP = {s[0]: s[1] for s in ALL_STOCKS_LIST}
+                logger.info(f"✅ Loaded {len(ALL_STOCKS_LIST)} stocks into global universe.")
+            else:
+                ALL_STOCKS_LIST = []
+                ALL_STOCKS_MAP = {}
+                logger.warning("⚠️  Stock universe (NSEStock) is EMPTY.")
+        except Exception as e:
+            logger.error(f"❌ Failed to load stock universe: {e}", exc_info=True)
+            ALL_STOCKS_LIST = []
+            ALL_STOCKS_MAP = {}
 
 # ✅ In-memory cache: stores all 4 horizon scores from the last full-mode analysis
 # Keyed by symbol. Persists across horizon toggles until a new full analysis runs.
@@ -289,7 +304,12 @@ async def periodic_warmer():
                     if COMPUTE_EXECUTOR:
                         COMPUTE_EXECUTOR.shutdown(wait=False)
                     safe_cpu_count = min(4, os.cpu_count() or 4)
-                    COMPUTE_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=safe_cpu_count)
+                    
+                    if os.name == 'nt':
+                        COMPUTE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=safe_cpu_count, thread_name_prefix="Compute_Worker")
+                    else:
+                        COMPUTE_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=safe_cpu_count)
+                        
                     await asyncio.sleep(5)
                     continue
                 except Exception as e:
@@ -418,15 +438,29 @@ async def lifespan(app: FastAPI):
     build_smart_index_map()
     _ensure_stocks_loaded()
     
-    # P1-1: Pre-warm Parquet cache barrier before executors start (Non-blocking)
-    if ALL_STOCKS_LIST:
-        await asyncio.to_thread(prewarm_parquet_cache, [s[0] for s in ALL_STOCKS_LIST], ["intraday", "short_term", "long_term"])
+    # P1-1: Pre-warm Parquet cache barrier (NON-BLOCKING background task)
+    # ✅ FIX: Guard with ENABLE_CACHE_WARMER — true kill switch for background activity
+    if ENABLE_CACHE_WARMER and ALL_STOCKS_LIST:
+        asyncio.create_task(asyncio.to_thread(
+            prewarm_parquet_cache, 
+            [s[0] for s in ALL_STOCKS_LIST[:50]], 
+            ["intraday", "short_term", "long_term"]
+        ))
+        logger.info("⚡ Background pre-warming initiated (Warmer KILL-SWITCH is ON).")
+    else:
+        logger.info("⏸️  Background pre-warming skipped (Warmer KILL-SWITCH is OFF).")
     
     safe_cpu_count = min(4, os.cpu_count() or 4)
     logger.info(f"Starting Executors (Compute Workers: {safe_cpu_count})...")
     
     API_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=5, thread_name_prefix="API_Worker")
-    COMPUTE_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=safe_cpu_count)
+    
+    if os.name == 'nt':
+        # ✅ FIX: Windows process cloning locks up system; fallback to threads for stability
+        COMPUTE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=safe_cpu_count, thread_name_prefix="Compute_Worker")
+    else:
+        COMPUTE_EXECUTOR = concurrent.futures.ProcessPoolExecutor(max_workers=safe_cpu_count)
+        
     BACKGROUND_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="BG_Worker")
 
     if ENABLE_CACHE_WARMER:
@@ -825,12 +859,9 @@ def run_analysis(
             logger.info(f"[{symbol}] 🎯 SINGLE-HORIZON MODE | Horizons: {horizons_to_compute}")
         else:
             # ✅ OPTIMIZED: Exclude multibagger from full scan (it's now a specialized weekly flow)
+            # ✅ Restored: Compute all primary horizons regardless of market hours
             horizons_to_compute = ["intraday", "short_term", "long_term"]
-            # ✅ Fix 8.2-2: Suppress intraday if market is closed or holiday
-            from config.config_utility.market_utils import get_current_session
-            if get_current_session() in ("after_hours", "holiday"):
-                horizons_to_compute = [h for h in horizons_to_compute if h != "intraday"]
-                logger.info(f"[{symbol}] Off-hours status: intraday suppressed.")
+
             
             logger.info(f"[{symbol}] 🔄 FULL-HORIZON MODE | Horizons: {horizons_to_compute}")
         
@@ -1424,9 +1455,10 @@ async def analyze_common(
             # ✅ Cache ALL horizon scores from the full analysis
             profiles = full_report.get("profiles", {})
             FULL_HORIZON_SCORES[symbol] = {
-                h: profiles[h].get("final_score", 0)
+                h: profiles.get(h, {}).get("final_score", 0)
                 for h in ["intraday", "short_term", "long_term"]
             }
+
             
         # ✅ ADDITION: Also fetch Multibagger score from DB for dash "confluence dots"
         try:
@@ -1724,6 +1756,7 @@ async def get_quick_scores(req: QuickScoresRequest, api_key: str = Depends(get_a
             "api_v": API_VERSION,
             "ts": get_current_utc().isoformat()
         }
+    return scores
         
 @app.get("/api/v1/scores", response_class=JSONResponse)
 async def get_all_scores_v1(api_key: str = Depends(get_api_key)):

@@ -219,7 +219,13 @@ class ConfigResolver:
         ctx["fundamentals"] = safe_fund.raw
         ctx["indicators"] = safe_ind.raw
         ctx["price_data"] = safe_price.raw
-        ctx["patterns"] = detected_patterns
+        # ✅ FIX: Filter out patterns unsupported by the current horizon
+        filtered_patterns = {}
+        if detected_patterns:
+            for pat_name, pat_data in detected_patterns.items():
+                if self.extractor.is_pattern_supported_for_horizon(pat_name):
+                    filtered_patterns[pat_name] = pat_data
+        ctx["patterns"] = filtered_patterns
         ctx["trend"] = self._build_trend_context(ctx["indicators"])
         ctx["momentum"] = self._build_momentum_context(ctx["indicators"])
 

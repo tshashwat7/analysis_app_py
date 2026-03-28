@@ -170,12 +170,18 @@ class QueryOptimizedExtractor:
                 return None
             return override
         
+        # ✅ FIX: Check global baseline floors (hierarchy step 2)
+        global_floors = self.base_extractor.get("setup_baseline_floors", {})
+        if setup_name in global_floors:
+            return global_floors[setup_name]
+
         # ✅ Phase 3 P1-1 FIX: Fail-Fast for unknown setup types.
         # Fallback to 40 is dangerous in production.
         raise ConfigurationError(
             f"ARCHITECTURAL VIOLATION: Horizon '{self.horizon}' or Global config "
             f"is missing baseline confidence floor for setup '{setup_name}'."
         )
+
 
     def get_base_confidence_adjustment(self) -> float:
         """

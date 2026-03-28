@@ -601,14 +601,15 @@ def get_history_for_horizon(symbol: str, horizon: str = "short_term", auto_adjus
         # VALIDATION CHECK: Needs 'Close' column to be useful
         if df_parquet is not None and not df_parquet.empty and "Close" in df_parquet.columns:
             if _check_freshness(df_parquet, interval):
-                with CACHE_LOCK:
-                    # 🔥 FIX: Trim before caching
-                    cached_df = _enforce_cache_limits(df_parquet, interval)
-                    GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-                # Fix 2: Return cached_df (trimmed) -- not the raw df_parquet
+                # 🔥 FIX: Trim before caching
+                cached_df = _enforce_cache_limits(df_parquet, interval)
+                if ENABLE_CACHE:
+                    with CACHE_LOCK:
+                        GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
                 return cached_df
             else:
                 stale_parquet_fallback = df_parquet  # Keep as emergency fallback
+
 
     # --- TIER 3: L3 YAHOO API ---
     try:
@@ -689,12 +690,13 @@ def get_benchmark_data(horizon: str = "short_term", benchmark_symbol: str = "^NS
             if _validate_ohlcv_schema(df, benchmark_symbol, "yfinance"):
                 ParquetStore.save_ohlcv(benchmark_symbol, df, interval)
             
+            # 🔥 FIX: Trim before return/cache
+            cached_df = _enforce_cache_limits(df, interval)
             if ENABLE_CACHE:
                 with CACHE_LOCK:
-                    cached_df = _enforce_cache_limits(df, interval)
                     GLOBAL_OHLC_CACHE[key] = {"df": cached_df, "ts": time.time(), "interval": interval}
-            # ✅ Fix 2: Return cached_df (trimmed) so benchmark callers are consistent.
             return cached_df
+
             
         if stale_benchmark_fallback is not None:
             logger.warning(f"[{benchmark_symbol}] Yahoo returned empty benchmark, using stale fallback")

@@ -776,6 +776,25 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
     execution_blocked = not can_execute.get("can_execute", True)
     failures        = can_execute.get("failures", [])
     is_hard_blocked_flag = can_execute.get("is_hard_blocked", False)
+    invariant_failure = exec_ctx.get("invariant_failure", False)
+
+    # ════════════════════════════════════════════════════════════════════
+    # LAYER -1: ROBUSTNESS OVERRIDE (v15.2+)
+    # "Is the trade geometry mathematically impossible?"
+    # ════════════════════════════════════════════════════════════════════
+    if invariant_failure:
+        reason = next((f for f in failures if "Invariant" in f), "Invalid trade geometry")
+        plan.update({
+            "trade_signal":      "ERROR",
+            "setup_signal":      "ERROR",
+            "signal":            "INVALID_GEOMETRY",
+            "status":            "MATHEMATICAL_ERROR",
+            "note":              f"CRITICAL: {reason}. Signal blocked by robustness invariants.",
+            "execution_blocked": True,
+            "can_trade":         False,
+        })
+        logger.error(f"[{plan.get('symbol')}] 🛑 SIGNAL BLOCKED: {reason}")
+        return
 
     market          = exec_ctx.get("market_adjusted_targets", {})
     rr_t1           = market.get("execution_rr_t1", 0)

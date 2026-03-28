@@ -89,9 +89,15 @@ def _check_single_metric(
     # equals
     if "equals" in thresholds:
         eq_val = thresholds["equals"]
-        if abs(value - eq_val) > _FLOAT_EPSILON:  # ✅ P2-5 FIX
+        # ✅ P2-5 FIX: Ensure numeric types before subtraction
+        if not isinstance(value, (int, float)) or not isinstance(eq_val, (int, float)):
+            if value != eq_val:
+                passed = False
+                failures.append(f"{metric}: {value} != {eq_val} (non-numeric match failed)")
+        elif abs(value - eq_val) > _FLOAT_EPSILON:
             passed = False
             failures.append(f"{metric}: {value} != {eq_val}")
+
 
     # min_metric — value must be >= ref_metric * multiplier
     if "min_metric" in thresholds:

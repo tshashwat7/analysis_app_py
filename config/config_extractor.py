@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import copy
 import logging
 
-from config.master_config import HORIZON_PILLAR_WEIGHTS, HYBRID_METRIC_REGISTRY, HYBRID_PILLAR_COMPOSITION
+from config.master_config import HORIZON_PILLAR_WEIGHTS, HYBRID_METRIC_REGISTRY, HYBRID_PILLAR_COMPOSITION, GATE_METRIC_REGISTRY
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -677,6 +677,12 @@ class ConfigExtractor:
         self.sections["horizon_execution_rules"] = ConfigSection(
             data=horizon_gates.get("execution_rules", {}),
             source=f"horizons.{self.horizon}.entry_gates.execution_rules"
+        )
+        
+        # ✅ NEW: Extract GATE_METRIC_REGISTRY
+        self.sections["gate_metric_registry"] = ConfigSection(
+            data=GATE_METRIC_REGISTRY,
+            source="master_config.GATE_METRIC_REGISTRY"
         )
 
         # ❌ REMOVED: setup_gate_specifications extraction

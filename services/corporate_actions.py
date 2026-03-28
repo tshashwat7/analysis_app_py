@@ -70,8 +70,10 @@ NSE_LIB_CACHE_PATH = "cache/nse_corp_actions_lib.json"
 NSE_LIB_CACHE_TTL_HOURS = 24
 
 _lib_lock = threading.Lock()
+_lib_client = None
 
 def _get_lib_client():
+
     """Return a cached IndiaCorpActions client instance with thread-safety."""
     global _lib_client
     if _lib_client is None:

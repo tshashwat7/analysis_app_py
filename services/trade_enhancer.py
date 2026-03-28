@@ -742,7 +742,7 @@ def enhance_execution_context(
                 trend = eval_ctx.get("trend", {})
 
                 timeline = calculate_pattern_timeline(
-                    pattern_meta, risk, trend, horizon
+                    pattern_meta, risk, trend, horizon, exec_ctx=exec_ctx
                 )
 
                 if timeline.get("available"):
@@ -904,6 +904,22 @@ def enhance_execution_context(
             logger.warning(
                 f"[{symbol}] DIRECTION CONFLICT | "
                 f"Eval: {eval_direction} ({eval_dir_norm}) vs Execution: {execution_direction} | BLOCKING"
+            )
+
+        # ===================================================================
+        # 5. FINAL CHECK: Mathematical Invariants (v15.2+)
+        # ===================================================================
+        invariant_check = validate_mathematical_invariants(exec_ctx)
+        if not invariant_check["valid"]:
+            exec_ctx["invariant_failure"] = True
+            exec_ctx.setdefault("can_execute", {})
+            exec_ctx["can_execute"]["can_execute"] = False
+            exec_ctx["can_execute"]["is_hard_blocked"] = True
+            exec_ctx["can_execute"].setdefault("failures", []).append(
+                f"Mathematical Invariant Failure: {invariant_check['reason']}"
+            )
+            logger.error(
+                f"[{symbol}] ❌ INVARIANT FAILURE: {invariant_check['reason']} | BLOCKING"
             )
 
         return exec_ctx, eval_ctx
@@ -1448,3 +1464,59 @@ def validate_execution_rr(
         f"T2={rrt2:.2f} (<{min_t2}) | "
         f"Structural={structural_rr:.2f} (<{min_structural})"
     ), None
+
+def validate_mathematical_invariants(exec_ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ensures the trade plan is geometrically consistent.
+    Rule: SL < Entry < T1 < T2 (Long) or SL > Entry > T1 > T2 (Short).
+    """
+    # 1. Extract Direction (Normalized)
+    mat = exec_ctx.get("market_adjusted_targets", {})
+    risk = exec_ctx.get("risk", {})
+    
+    direction = mat.get("direction", risk.get("direction", "neutral")).upper()
+    if direction not in ["LONG", "SHORT", "BULLISH", "BEARISH"]:
+        return {"valid": True} # Neutral/Unknown skip geometry check
+
+    # 2. Extract Prices
+    entry = mat.get("entry_price") or risk.get("entry_price")
+    sl = mat.get("stop_loss") or risk.get("stop_loss")
+    targets = mat.get("targets", risk.get("targets", []))
+    
+    if not entry or not sl or not targets:
+        return {"valid": False, "reason": "Missing core price levels (Entry/SL/Targets)"}
+    
+    if entry <= 0 or sl <= 0:
+        return {"valid": False, "reason": "Negative or zero price level detected"}
+
+    t1 = targets[0]
+    t2 = targets[1] if len(targets) > 1 else None
+    
+    # 3. Validation Logic
+    if direction in ["LONG", "BULLISH"]:
+        # Entry must be above SL
+        if entry <= sl:
+            return {"valid": False, "reason": f"Entry ({entry}) <= SL ({sl}) in LONG setup"}
+        
+        # T1 must be above Entry
+        if t1 <= entry:
+            return {"valid": False, "reason": f"T1 ({t1}) <= Entry ({entry}) in LONG setup"}
+            
+        # T2 must be above T1
+        if t2 and t2 <= t1:
+            return {"valid": False, "reason": f"T2 ({t2}) <= T1 ({t1}) in LONG setup"}
+
+    elif direction in ["SHORT", "BEARISH"]:
+        # Entry must be below SL
+        if entry >= sl:
+            return {"valid": False, "reason": f"Entry ({entry}) >= SL ({sl}) in SHORT setup"}
+        
+        # T1 must be below Entry
+        if t1 >= entry:
+            return {"valid": False, "reason": f"T1 ({t1}) >= Entry ({entry}) in SHORT setup"}
+            
+        # T2 must be below T1
+        if t2 and t2 >= t1:
+            return {"valid": False, "reason": f"T2 ({t2}) >= T1 ({t1}) in SHORT setup"}
+
+    return {"valid": True, "reason": None}

@@ -644,6 +644,8 @@ def _format_pattern_name(pattern: str) -> str:
         "flagPennant": "Flag/Pennant",
         "goldenCross": "Golden Cross",
         "threeLineStrike": "Three Line Strike",
+        "bullishNecklinePattern": "Double Bottom",
+        "bearishNecklinePattern": "Double Top",
         "doubleTopBottom": "Double Top/Bottom",
         "ichimokuSignals": "Ichimoku Signal",
     }
@@ -708,15 +710,14 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
     for k in keys:
         p = indicators.get(k, {})
         if p.get("found"):
-            key = _format_metric_name(k)
-            name = key.replace("_", " ").title()
+            name = _format_pattern_name(k)
             meta = p.get("meta", {})
             desc = f"<b>{name}</b>"
             
             if k == "cupHandle":
                 desc += f" (Depth: {meta.get('depth_pct')}%)"
             elif k == "minerviniStage2":
-                # ✅ P1-6: Use contraction_pct with ATR fallback
+                # ✅ P1-1: Use contraction_pct with ATR fallback
                 c_pct = meta.get('contraction_pct')
                 if c_pct:
                     desc += f" (Contraction: {c_pct}%)"
@@ -724,6 +725,8 @@ def summarize_patterns(indicators: Dict[str, Any]) -> str:
                     desc += " (Tight Consolidation)"
             elif k == "bollingerSqueeze":
                 desc += " (Volatility Compression)"
+            elif k == "ichimokuSignals":
+                desc += f" ({meta.get('signal', 'Support')})"
                 
             active_patterns.append(desc)
             

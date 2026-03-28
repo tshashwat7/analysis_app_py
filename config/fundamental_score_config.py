@@ -739,24 +739,26 @@ def _normalize_fundamental_metric(
     
     # Apply category-specific normalization
     if category == "valuation":
-        return _normalize_valuation(metric_name, raw_value)
+        return _normalize_valuation(metric_name, raw_value, horizon)
     elif category == "profitability":
-        return _normalize_profitability(metric_name, raw_value)
+        return _normalize_profitability(metric_name, raw_value, horizon)
     elif category == "growth":
-        return _normalize_growth(metric_name, raw_value)
+        return _normalize_growth(metric_name, raw_value, horizon)
     elif category in ["financial_health", "quality"]:
-        return _normalize_health_quality(metric_name, raw_value)
+        return _normalize_health_quality(metric_name, raw_value, horizon)
     elif category == "ownership":
-        return _normalize_ownership(metric_name, raw_value)
+        return _normalize_ownership(metric_name, raw_value, horizon)
     elif category == "market":
-        return _normalize_market(metric_name, raw_value)
+        return _normalize_market(metric_name, raw_value, horizon)
+
     else:
         # Generic linear scaling for unknown categories
         return min(10.0, max(0.0, raw_value / 10))
 
 
 # Helper normalization functions (extract from fundamentals.py)
-def _normalize_valuation(metric: str, val: float) -> float:
+def _normalize_valuation(metric: str, val: float, horizon: str = None) -> float:
+
     """Lower is better for valuation metrics"""
     if val is None: return 0.0
     if metric == "peRatio":
@@ -787,7 +789,8 @@ def _normalize_valuation(metric: str, val: float) -> float:
     return 5.0
 
 
-def _normalize_profitability(metric: str, val: float) -> float:
+def _normalize_profitability(metric: str, val: float, horizon: str = None) -> float:
+
     """Higher is better"""
     if val is None: return 0.0
     if metric in ["roe", "roce", "roic"]:
@@ -806,7 +809,8 @@ def _normalize_profitability(metric: str, val: float) -> float:
     return 5.0
 
 
-def _normalize_growth(metric: str, val: float) -> float:
+def _normalize_growth(metric: str, val: float, horizon: str = None) -> float:
+
     """Higher is better"""
     if val is None: return 0.0
     if val >= 30: return 10
@@ -817,7 +821,8 @@ def _normalize_growth(metric: str, val: float) -> float:
     else: return max(0, val / 2)
 
 
-def _normalize_health_quality(metric: str, val: float) -> float:
+def _normalize_health_quality(metric: str, val: float, horizon: str = None) -> float:
+
     if val is None: return 0.0
     if metric == "fcfYield":        # Higher is better
         if val >= 10: return 10
@@ -866,7 +871,8 @@ def _normalize_health_quality(metric: str, val: float) -> float:
     return 5.0  # Neutral for marketCap, position52w, etc.
 
 
-def _normalize_market(metric: str, val: float) -> float:
+def _normalize_market(metric: str, val: float, horizon: str = None) -> float:
+
     """Normalize market related metrics like position52w"""
     if val is None: return 0.0
     
@@ -893,7 +899,8 @@ def _normalize_market(metric: str, val: float) -> float:
         
     return 5.0
 
-def _normalize_ownership(metric: str, val: float) -> float:
+def _normalize_ownership(metric: str, val: float, horizon: str = None) -> float:
+
     """Context-dependent scoring"""
     if val is None: return 0.0
     if metric == "promoterHolding":
