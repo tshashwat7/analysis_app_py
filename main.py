@@ -7,6 +7,7 @@ import concurrent.futures
 import multiprocessing
 from typing import List, Tuple, Dict, Any, Optional
 from fastapi import FastAPI, Request, Form, Query, Security, HTTPException, Depends
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.security.api_key import APIKeyHeader
@@ -603,6 +604,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(mb_router)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 def enrich_json_sync(index_name: str, symbol: str, name: str):
