@@ -165,7 +165,7 @@ TECHNICAL_WEIGHTS = {
 TECHNICAL_METRIC_MAP = {
     # Price / meta
     "price": "Current Price",
-    "prev_close": "Previous Close",
+    "prevClose": "Previous Close",
 
     # Trend / Moving averages “DMA” should be considered Daily Moving Average (SMA),But your dynamic logic never generates dma_XX anymore we're using:EMA for daily (intraday/short_term) WMA-label for weekly (long_term) MMA-label for monthly (multibagger)
     "dma20": "20 DMA",
@@ -221,7 +221,7 @@ TECHNICAL_METRIC_MAP = {
     "macd": "MACD",
     "macdCross": "MACD Cross",
     "macdHistZ": "MACD Hist Z-Score",
-    "macdhistogram": "MACD Histogram (Raw)",
+    "macdHistogram": "MACD Histogram (Raw)",
     "mfi": "MFI",
     "stochK": "Stoch %K",
     "stochD": "Stoch %D",
@@ -346,7 +346,7 @@ FUNDAMENTAL_WEIGHTS = {
     "pbRatio": 0.04,
     "pegRatio": 0.03,
     "fcfYield": 0.05,
-    "dividendyield": 0.03,
+    "dividendYield": 0.03,
     # --- Profitability / Returns (25%) ---
     "roe": 0.10,
     "roce": 0.07,
@@ -386,7 +386,7 @@ FUNDAMENTAL_ALIAS_MAP = {
     "psRatio": "Price-to-Sales (P/S)",
     "peVsSector": "P/E vs Sector",
     "fcfYield": "FCF Yield (%)",
-    "dividendyield": "Dividend Yield (%)",
+    "dividendYield": "Dividend Yield (%)",
     "dividendPayout": "Dividend Payout (%)",
     "marketCap": "Market Cap",
     "marketCapCagr": "Market Cap CAGR (%)",
@@ -621,7 +621,7 @@ FUNDAMENTAL_FIELD_CANDIDATES = {
         "institutionsPercent",
         "Institutional Ownership",
     ],
-    "dividendyield": ["dividendYield"],
+    "dividendYield": ["dividendYield"],
     "analystRating": ["recommendations", "recommendationKey", "recommendationMean"],
     "quarterlyGrowth": ["earningsQuarterlyGrowth", "revenueQuarterlyGrowth"],
     "shortInterest": ["shortRatio", "sharesPercentSharesOut", "shortPercentOfFloat"],
@@ -810,7 +810,7 @@ VALUE_WEIGHTS = {
     "pegRatio": {"weight": 1.0, "direction": "normal"},
     "peVsSector": {"weight": 1.0, "direction": "normal"},
     "fcfYield": {"weight": 1.0, "direction": "normal"},
-    "dividendyield": {"weight": 1.0, "direction": "normal"},
+    "dividendYield": {"weight": 1.0, "direction": "normal"},
 }
 
 MOMENTUM_WEIGHTS = {  # 🆕 CORE COMPOSITES (PRIORITY)
@@ -1725,9 +1725,9 @@ TRADE_ENHANCER = {
     # Pattern reference levels for invalidation checks (NEW)
     # ---------------------------------------------------------
     "PATTERN_REFERENCE_LEVELS": {  # ✅ ADD THIS
-        "darvasBox": "box_low",
-        "cupHandle": "handle_low",
-        "flagPennant": "flag_low",
+        "darvasBox": "boxLow",
+        "cupHandle": "handleLow",
+        "flagPennant": "flagLow",
         "minerviniStage2": "pivotPoint",
         "bollingerSqueeze": "bbLow",
         "threeLineStrike": "entry",
@@ -1764,7 +1764,7 @@ TRADE_ENHANCER = {
     # Pattern-specific stop loss adjustments (NEW)
     # ---------------------------------------------------------
     "PATTERN_STOP_LOSS_MULTIPLIERS": {  # ✅ ADD THIS
-        "darvasBox": 0.995  # 0.5% below box_low
+        "darvasBox": 0.995  # 0.5% below boxLow
     },
 }
 

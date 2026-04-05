@@ -206,59 +206,68 @@ def generate_gate_validation_narrative(eval_ctx: Dict[str, Any]) -> str:
     else:
         narrative = "<b>⛔ Gate Failures Detected</b><br><br>"
 
-    # ── Structural Gates ─────────────────────────────────────────────────
-    by_gate = structural_gates.get("by_gate", {})
-    if by_gate:
-        narrative += "<b>Structural Gates:</b><br>"
-        for gate_name, result in by_gate.items():
+    def _format_gate_lines(gate_dict) -> Tuple[List[str], List[str], List[str]]:
+        passed, failed, skipped = [], [], []
+        for gate_name, result in gate_dict.items():
             status = result.get("status", "skipped")
             actual = result.get("actual")
             required = result.get("required") or {}
 
             icon = "✅" if status == "passed" else ("⚠️" if status == "skipped" else "❌")
-            narrative += f"&nbsp;&nbsp;{icon} {_format_gate_name(gate_name)}"
-
-            if actual is not None:
-                if isinstance(actual, (int, float)):
-                    narrative += f": {actual:.2f}"
-                else:
-                    narrative += f": {escape(str(actual))}"
-                if isinstance(required, dict):
-                    if required.get("min") is not None:
-                        narrative += f" (need ≥{required['min']})"
-                    elif required.get("max") is not None:
-                        narrative += f" (need ≤{required['max']})"
-
-            if status == "failed" and gate_name in GATE_GUIDANCE:
-                narrative += f'<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#92400e;font-size:0.8em;">💡 {GATE_GUIDANCE[gate_name]}</span>'
-            narrative += "<br>"
-        narrative += "<br>"
-
-    # ── Opportunity Gates ────────────────────────────────────────────────
-    opp_gates = opportunity_gates.get("gates", {})
-    if opp_gates:
-        narrative += "<b>Opportunity Gates:</b><br>"
-        for gate_name, result in opp_gates.items():
-            status = result.get("status", "skipped")
-            actual = result.get("actual")
-            required = result.get("required") or {}
-
-            icon = "✅" if status == "passed" else ("⚠️" if status == "skipped" else "❌")
-            narrative += f"&nbsp;&nbsp;{icon} {_format_gate_name(gate_name)}"
+            line = f"&nbsp;&nbsp;{icon} {_format_gate_name(gate_name)}"
 
             if actual is not None:
                 if isinstance(actual, (int, float)):
                     fmt = f"{actual:.0f}%" if gate_name == "confidence" else f"{actual:.2f}"
-                    narrative += f": {fmt}"
+                    line += f": {fmt}"
                 else:
-                    narrative += f": {escape(str(actual))}"
-                if isinstance(required, dict) and required.get("min") is not None:
-                    narrative += f" (need ≥{required['min']})"
+                    line += f": {escape(str(actual))}"
+                
+                if isinstance(required, dict):
+                    if required.get("min") is not None:
+                        line += f" (need ≥{required['min']})"
+                    elif required.get("max") is not None:
+                        line += f" (need ≤{required['max']})"
 
             if status == "failed" and gate_name in GATE_GUIDANCE:
-                narrative += f'<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#92400e;font-size:0.8em;">💡 {GATE_GUIDANCE[gate_name]}</span>'
+                line += f'<br>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#92400e;font-size:0.8em;">💡 {GATE_GUIDANCE[gate_name]}</span>'
+            line += "<br>"
+            
+            if status == "passed":
+                passed.append(line)
+            elif status == "failed":
+                failed.append(line)
+            else:
+                skipped.append(line)
+        return passed, failed, skipped
+
+    # ── Structural Gates ─────────────────────────────────────────────────
+    by_gate = structural_gates.get("by_gate", {})
+    if by_gate:
+        passed, failed, skipped = _format_gate_lines(by_gate)
+        if passed or failed or skipped:
+            narrative += "<b>Structural Gates:</b><br>"
+            if failed:
+                narrative += '<span style="color:#ef4444;">• Failed:</span><br>' + "".join(failed)
+            if skipped:
+                narrative += '<span style="color:#6b7280;">• Skipped:</span><br>' + "".join(skipped)
+            if passed:
+                narrative += '<span style="color:#22c55e;">• Passed:</span><br>' + "".join(passed)
             narrative += "<br>"
-        narrative += "<br>"
+
+    # ── Opportunity Gates ────────────────────────────────────────────────
+    opp_gates = opportunity_gates.get("gates", {})
+    if opp_gates:
+        passed, failed, skipped = _format_gate_lines(opp_gates)
+        if passed or failed or skipped:
+            narrative += "<b>Opportunity Gates:</b><br>"
+            if failed:
+                narrative += '<span style="color:#ef4444;">• Failed:</span><br>' + "".join(failed)
+            if skipped:
+                narrative += '<span style="color:#6b7280;">• Skipped:</span><br>' + "".join(skipped)
+            if passed:
+                narrative += '<span style="color:#22c55e;">• Passed:</span><br>' + "".join(passed)
+            narrative += "<br>"
 
     # ── Execution Rules ─────────────────────────────────────────────────
     exec_summary = execution_rules.get("summary", {})
@@ -353,14 +362,20 @@ def generate_trade_plan_narrative(exec_ctx: Dict[str, Any], ticker: str) -> str:
     Returns HTML-safe string.
     """
     risk = exec_ctx.get("risk", {})
+    market_adj = exec_ctx.get("market_adjusted_targets", {})
     timeline = exec_ctx.get("timeline", {})
     pattern_meta = exec_ctx.get("pattern_meta", {})
     
-    entry = risk.get("entry_price")
-    sl = risk.get("stop_loss")
-    targets = risk.get("targets", [])
+    entry = market_adj.get("entry_price", risk.get("entry_price"))
+    sl = market_adj.get("stop_loss", risk.get("stop_loss"))
+    targets = market_adj.get("targets") or risk.get("targets", [])
     qty = risk.get("quantity", 0)
-    rr = risk.get("rrRatio") or 0.0
+    rr = (
+        market_adj.get("rrRatioT2")
+        or market_adj.get("rrRatio")
+        or risk.get("rrRatio")
+        or 0.0
+    )
     
     if not entry or not sl:
         return "No actionable trade plan available."

@@ -30,6 +30,7 @@ import pandas as pd
 from typing import Dict, Any
 from services.patterns.base import BasePattern
 from services.patterns.horizon_constants import HORIZON_WINDOWS_BARS
+from services.patterns.utils import _build_formation_context
 
 
 # ─────────────────────────────────────────────────────────────────────────────

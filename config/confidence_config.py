@@ -162,8 +162,8 @@ CONFIDENCE_CONFIG = {
         # Setup-specific baseline confidence floors (inherited unless overridden)
         "setup_baseline_floors": {
             "MOMENTUM_BREAKOUT": 55,
-            "MOMENTUM_BREAKDOWN": 48,
-            "MOMENTUM_FLOW_BREAKDOWN": 48,
+            "MOMENTUM_BREAKDOWN": 55,
+            "MOMENTUM_FLOW_BREAKDOWN": 55,
             "MOMENTUM_FLOW_CONTINUATION": 52,
             "VOLATILITY_SQUEEZE": 50,
             "QUALITY_ACCUMULATION": 45,
@@ -406,7 +406,7 @@ CONFIDENCE_CONFIG = {
                     # ✅ MIGRATED FROM master_config.py (Short Term)
                     # ============================================================
                     "pattern_confluence": {
-                        "gates": {"pattern_count": {"min": 2}},
+                        "gates": {"patternCount": {"min": 2}},
                         "confidence_boost": 12.0,
                         "reason": "Multiple patterns confirm swing setup"
                     },
@@ -440,6 +440,16 @@ CONFIDENCE_CONFIG = {
                             "QUALITY_ACCUMULATION"
                         ],
                         "reason": "Quality business for swing trade"
+                    },
+                    "bearish_conviction": {
+                        "gates": {
+                            "deathCross": {"min": 6.0},
+                            "bearishNecklinePattern": {"min": 6.0},
+                            "_logic": "OR"
+                        },
+                        "confidence_boost": 10,
+                        "apply_to_setups": ["MOMENTUM_BREAKDOWN", "MOMENTUM_FLOW_BREAKDOWN", "BEAR_TREND_FOLLOWING"],
+                        "reason": "Strong bearish pattern confirmation"
                     }
                 }
             },

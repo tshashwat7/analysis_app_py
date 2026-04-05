@@ -35,8 +35,12 @@ from config.config_utility.logger_config import (
     track_performance
 )
 from services.data_fetch import _get_val, _safe_float, _safe_get_raw_float, ensure_numeric
+from config.gate_evaluator import evaluate_gates
 
-MIN_FIT_SCORE = 55.0  # ✅ Phase 3 P2-3 FIX: Effective threshold against 50.0 base
+MIN_FIT_SCORE = 55.0  # Global floor: setup fit_score (0-100 normalized) must exceed this.
+                      # Per-setup min_setup_score in setup_pattern_matrix_config.py overrides
+                      # this when stricter (e.g. DARVAS=85, VCP=80). Both are on the same
+                      # 0-100 normalized scale as _calculate_setup_fit_quality output.
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -382,7 +386,23 @@ class ConfigResolver:
         - returns regime/adx/slope, classification details for advanced usage
         """        
         adx = ensure_numeric(indicators.get("adx")) or 0
-        slope = ensure_numeric(indicators.get("regSlope")) or 0
+        slope = ensure_numeric(indicators.get("regSlope"))
+
+        if slope in (None, 0):
+            slope = ensure_numeric(indicators.get("maFastSlope"))
+        if slope in (None, 0):
+            slope = ensure_numeric(indicators.get("maTrendSignal"))
+        if slope in (None, 0):
+            trend_label = indicators.get("trend_direction")
+            if isinstance(trend_label, dict):
+                trend_label = trend_label.get("value", trend_label.get("raw"))
+            trend_label = str(trend_label or "").upper()
+            if trend_label == "BULLISH":
+                slope = 1.0
+            elif trend_label == "BEARISH":
+                slope = -1.0
+            else:
+                slope = 0.0
         
         thresholds = self.extractor.get_trend_thresholds()
         slope_thresholds = thresholds.get("slope", {})
@@ -486,7 +506,7 @@ class ConfigResolver:
         
         # Get actual values
         rsi_slope = ensure_numeric(indicators.get("rsislope", 0))
-        macd_hist = ensure_numeric(indicators.get("macdhistogram", 0))
+        macd_hist = ensure_numeric(indicators.get("macdHistogram", 0))
         
         # Classify RSI momentum state
         if rsi_slope >= rsi_accel:
@@ -618,14 +638,30 @@ class ConfigResolver:
         safe_ind = SafeDict(indicators, context="hybrid_indicators")
         
         # Extract raw values
-        roe = _get_val(safe_fund.raw, "roe") or _safe_get_raw_float(safe_fund.raw.get("roe"))
-        pe = _get_val(safe_fund.raw, "peRatio") or _safe_get_raw_float(safe_fund.raw.get("peRatio"))
-        eps_5y = _get_val(safe_fund.raw, "epsGrowth5y") or _safe_get_raw_float(safe_fund.raw.get("epsGrowth5y"))
-        q_growth = _get_val(safe_fund.raw, "quarterlyGrowth") or _safe_get_raw_float(safe_fund.raw.get("quarterlyGrowth"))
-        net_margin = _get_val(safe_fund.raw, "netProfitMargin") or _safe_get_raw_float(safe_fund.raw.get("netProfitMargin"))
-        fcf_yield = _get_val(safe_fund.raw, "fcfYield") or _safe_get_raw_float(safe_fund.raw.get("fcfYield"))
-        atr_pct = _get_val(safe_ind.raw, "atrPct") or _safe_get_raw_float(safe_ind.raw.get("atrPct"))
-        price = _get_val(safe_ind.raw, "price") or _safe_get_raw_float(safe_ind.raw.get("price"))
+        roe = _get_val(safe_fund.raw, "roe")
+        if roe is None: roe = _safe_get_raw_float(safe_fund.raw.get("roe"))
+        
+        pe = _get_val(safe_fund.raw, "peRatio")
+        if pe is None: pe = _safe_get_raw_float(safe_fund.raw.get("peRatio"))
+        
+        eps_5y = _get_val(safe_fund.raw, "epsGrowth5y")
+        if eps_5y is None: eps_5y = _safe_get_raw_float(safe_fund.raw.get("epsGrowth5y"))
+        
+        q_growth = _get_val(safe_fund.raw, "quarterlyGrowth")
+        if q_growth is None: q_growth = _safe_get_raw_float(safe_fund.raw.get("quarterlyGrowth"))
+        
+        net_margin = _get_val(safe_fund.raw, "netProfitMargin")
+        if net_margin is None: net_margin = _safe_get_raw_float(safe_fund.raw.get("netProfitMargin"))
+        
+        fcf_yield = _get_val(safe_fund.raw, "fcfYield")
+        if fcf_yield is None: fcf_yield = _safe_get_raw_float(safe_fund.raw.get("fcfYield"))
+        
+        atr_pct = _get_val(safe_ind.raw, "atrPct")
+        if atr_pct is None: atr_pct = _safe_get_raw_float(safe_ind.raw.get("atrPct"))
+        
+        price = _get_val(safe_ind.raw, "price")
+        if price is None: price = _safe_get_raw_float(safe_ind.raw.get("price"))
+        
         ma_slow = _get_val(safe_ind.raw, "maSlow") or _get_val(safe_ind.raw, "ema_200")
         adx = _get_val(safe_ind.raw, "adx")
         
@@ -783,7 +819,7 @@ class ConfigResolver:
 
             # Fundamental conditions
             if fundamental_gates:
-                passes, failures = self.extractor.evaluate_confidence_gates(
+                passes, failures = evaluate_gates(
                     fundamental_gates, fund, empty_gates_pass=False
                 )
                 if not passes:
@@ -795,7 +831,7 @@ class ConfigResolver:
 
             # Technical conditions
             if technical_gates:
-                passes, failures = self.extractor.evaluate_confidence_gates(
+                passes, failures = evaluate_gates(
                     technical_gates, tech_namespace, empty_gates_pass=False
                 )
                 if not passes:
@@ -841,17 +877,114 @@ class ConfigResolver:
                 })
                 continue
 
+            # ── Enforce min_pattern_quality before candidate admission ──
+            # The config declares min_pattern_quality per pattern-driven setup but it was
+            # never consumed. A darvasBox with score 2.0 would pass the boolean found check
+            # and enter as a candidate. Enforce it now, after pattern_detection passes.
+            min_pat_quality = rules.get("min_pattern_quality", 0)
+            if min_pat_quality > 0:
+                quality_violated = False
+                for pat_name, required in rules.get("pattern_detection", {}).items():
+                    if not required:
+                        continue
+                    pat_data = patterns.get(pat_name) or ind.get(pat_name)
+                    if not isinstance(pat_data, dict):
+                        pat_score = 0
+                    else:
+                        # min_pattern_quality is 0-10 scale (detector output).
+                        # Read raw.score (0-10); fall back to value (0-10 quality float).
+                        raw = pat_data.get("raw", pat_data)
+                        pat_score = raw.get("score", pat_data.get("value", 0))
+                    if pat_score < min_pat_quality:
+                        rejected.append({
+                            "type": setup_name,
+                            "reason": f"{pat_name} quality {pat_score:.1f} < min_pattern_quality {min_pat_quality}"
+                        })
+                        quality_violated = True
+                        break
+                if quality_violated:
+                    continue
+
+            # ── Enforce per-setup min_setup_score ──
+            # min_setup_score is declared in setup_pattern_matrix_config.py per setup
+            # (e.g., 85 for DARVAS, 80 for VCP) but was silently ignored. The global
+            # MIN_FIT_SCORE=55 is a floor; the per-setup value is the real threshold.
+            setup_config_raw = self.extractor.get(f"setup_{setup_name}", {})
+            min_setup_score = setup_config_raw.get("min_setup_score", MIN_FIT_SCORE)
+            effective_min = max(min_setup_score, MIN_FIT_SCORE)  # never go below global floor
+            if fit_score < effective_min:
+                rejected.append({
+                    "type": setup_name,
+                    "reason": f"fit_score {fit_score:.1f} < min_setup_score {effective_min:.1f}"
+                })
+                continue
+
+            # ✅ PATTERN PRESENCE BOOST (Issue 1 fix: additive bounded boost, not raw multiply)
+            # Mirrors the strategy horizon_mult pattern exactly:
+            #   horizon_bonus = (horizon_mult - 1.0) * 30  → clamped 0-100
+            # Here:
+            #   priority_bonus = (pattern_mult - 1.0) * PRIORITY_BOOST_RANGE → clamped 0-100
+            #
+            # This keeps priority on the same 0-100 scale as fit_score so the
+            # composite blend (0.7 × priority + 0.3 × fit) is always 0-100.
+            # A raw multiply (98 × 1.25 = 122.5) breaks the blend entirely.
+            #
+            # Rules:
+            #   - Only pattern-driven setups define pattern_presence_multiplier (>1.0)
+            #   - Indicator-led setups return multiplier=1.0 → bonus=0 → no-op
+            #   - Boost applies to priority only; fit_score stays pure (indicator alignment)
+            #   - Only one PRIMARY pattern needs to qualify to trigger the boost
+            #   - Qualifying condition: found=True AND (score >= threshold OR quality=="high")
+            PRIORITY_BOOST_RANGE = 20  # max pts a pattern confirmation can add (tunable)
+
+            boost_config = self.extractor.get_pattern_boost_config(setup_name)
+            primary_patterns = boost_config.get("primary_patterns", [])
+            multiplier = boost_config.get("multiplier", 1.0)
+
+            boosted_priority = float(setup_priority)
+            pattern_boost_applied = False
+            pattern_boost_reason = None
+
+            if primary_patterns and multiplier > 1.0:
+                # boost_threshold is on 0-10 scale (same as min_pattern_quality in config).
+                # Read raw.score (0-10) from detector output, not the fused score (0-100).
+                boost_threshold = self.extractor.get_config_value(
+                    "risk_management", "pattern_boost_min_score", 6.0, "float"
+                )
+                for pat_name in primary_patterns:
+                    pat_data = ind.get(pat_name) or patterns.get(pat_name)
+                    if not isinstance(pat_data, dict):
+                        continue
+                    # Unwrap raw first — "found" lives inside raw, not at top level
+                    raw = pat_data.get("raw", pat_data)
+                    pat_found = raw.get("found", False)
+                    pat_score = raw.get("score", pat_data.get("value", 0.0))
+                    pat_quality = pat_data.get("quality", "")
+                    if pat_found and (pat_score >= boost_threshold or pat_quality == "high"):
+                        priority_bonus = (multiplier - 1.0) * PRIORITY_BOOST_RANGE
+                        boosted_priority = min(setup_priority + priority_bonus, 100.0)
+                        pattern_boost_applied = True
+                        pattern_boost_reason = (
+                            f"{pat_name} score={pat_score:.1f} quality={pat_quality} "
+                            f"bonus=+{priority_bonus:.1f}pts"
+                        )
+                        break  # First qualifying PRIMARY pattern is sufficient
+
             candidates.append({
                 "type": setup_name,
                 "fit_score": round(fit_score, 1),
-                "priority": setup_priority,
-                "confidence_floor": self.extractor.get_setup_baseline_floor(setup_name),
+                "priority": round(boosted_priority, 1),
+                "base_priority": setup_priority,
+                "pattern_boost_applied": pattern_boost_applied,
+                "pattern_boost_reason": pattern_boost_reason,
+                "confidence_floor": self.extractor.get_setup_confidence_floor(setup_name),
                 "require_fundamentals": require_fund
             })
 
         # ✅ NEW: Rank by WEIGHTED combination of priority + fit
         for candidate in candidates:
-            # Composite score: 70% priority, 30% fit
+            # Composite score: 70% priority (already boosted if pattern present), 30% fit.
+            # base_priority is preserved for audit; boosted priority drives ranking.
             candidate["composite_score"] = (
                 (candidate["priority"] * 0.7) + 
                 (candidate["fit_score"] * 0.3)
@@ -870,9 +1003,17 @@ class ConfigResolver:
                     f"  ↳ Setup rejected: {r['type']} | reason={r['reason']}"
                 )
             for c in ranked:
+                boost_tag = (
+                    f" | ⚡ pattern_boost={c['pattern_boost_reason']}"
+                    if c.get("pattern_boost_applied") else ""
+                )
                 self.logger.debug(
-                    f"  ↳ Setup candidate: {c['type']} | priority={c['priority']} | "
-                    f"fit={c['fit_score']:.1f} | composite={c['composite_score']:.1f}"
+                    f"  ↳ Setup candidate: {c['type']} | "
+                    f"base_priority={c['base_priority']} | "
+                    f"priority={c['priority']:.1f} | "
+                    f"fit={c['fit_score']:.1f} | "
+                    f"composite={c['composite_score']:.1f}"
+                    f"{boost_tag}"
                 )
 
         # ✅ S13 FIX: Increased discovery depth to 3
@@ -899,11 +1040,14 @@ class ConfigResolver:
                 trend_ctx["regime"] = trend_ctx.get("regime_for_bullish", trend_ctx.get("regime"))
 
             setup_patterns = self.extractor.get_setup_patterns(setup_type)
-            confidence_floor = self.extractor.get_setup_confidence_floor(setup_type)
+            confidence_floor = best["confidence_floor"]
 
             best_setup = {
                 "type": setup_type,
                 "priority": best["priority"],
+                "base_priority": best["base_priority"],
+                "pattern_boost_applied": best.get("pattern_boost_applied", False),
+                "pattern_boost_reason": best.get("pattern_boost_reason"),
                 "fit_score": best["fit_score"],  # ✅ NEW
                 "composite_score": best["composite_score"],  # ✅ NEW
                 "confidence_floor": confidence_floor,
@@ -911,14 +1055,25 @@ class ConfigResolver:
                 "patterns_primary": setup_patterns.get("PRIMARY", []),
                 "patterns_confirming": setup_patterns.get("CONFIRMING", []),
                 "patterns_conflicting": setup_patterns.get("CONFLICTING", []),
-                "reasoning": f"Top ranked setup (priority={best['priority']}, fit={best['fit_score']:.1f})"
+                "reasoning": (
+                    f"Top ranked setup (base_priority={best['base_priority']}, "
+                    f"boosted_priority={best['priority']:.1f}, fit={best['fit_score']:.1f})"
+                    + (f" | pattern_boost: {best['pattern_boost_reason']}" if best.get("pattern_boost_applied") else "")
+                )
             }
             
             # ✅ IMPROVED LOGGING
+            boost_log = (
+                f" PatternBoost={best['pattern_boost_reason']}"
+                if best.get("pattern_boost_applied") else ""
+            )
             self.logger.info(
                 f"✅ SETUP SELECTED: {setup_type} | "
-                f"Priority={best['priority']} | Fit={best['fit_score']:.1f} | "
+                f"BasePriority={best['base_priority']} | "
+                f"Priority={best['priority']:.1f} | "
+                f"Fit={best['fit_score']:.1f} | "
                 f"Composite={best['composite_score']:.1f}"
+                f"{boost_log}"
             )
         else:
             best_setup = {
@@ -952,52 +1107,108 @@ class ConfigResolver:
         patterns: Dict
     ) -> float:
         """
-        ✅ NEW: Calculate how well indicators match setup requirements.
-        
+        Calculate how well the current market state fits a setup's requirements.
+
+        Normalization mirrors _calculate_strategy_fit_via_extractor exactly:
+        every component is independently normalized to 0-100 BEFORE blending,
+        so the weighted sum is always 0-100 with no arbitrary base or hard cap.
+
+        Strategy reference:
+            base_score     = weighted_pass_ratio × 100          → 0-100
+            rule_score_pct = bonus_pts / max_bonus × 100        → 0-100
+            final_score    = base_score × 0.65 + rule_pct × 0.35
+
+        Setup equivalent (3 components, weights sum to 1.0):
+            tech_score   = tech_pass_ratio × 100                → 0-100  (C1)
+            fund_score   = fund_pass_ratio × 100                → 0-100  (C2)
+            pat_score    = primary_pat_score / 10 × 100         → 0-100  (C3)
+            fit_score    = C1×0.60 + C2×0.15 + C3×0.25
+
+        Weight rationale (parallel to strategy's 0.65 / 0.35 split):
+          0.60 — technical gate alignment: primary evidence for all setups
+                 (strategy's "DNA fit" — does the stock have the right character?)
+          0.25 — pattern quality: "is it well set up RIGHT NOW?"
+                 (strategy's "scoring rules bonus" — current opportunity quality)
+          0.15 — fundamental gate alignment: secondary for most setups
+                 (many setups have require_fundamentals=False; lower weight reflects this)
+
+        For indicator-led setups (no PRIMARY patterns), C3=0 and the blend
+        effectively becomes C1×0.60 + C2×0.15, scaled naturally within 0-75.
+        This is intentional — a setup without pattern confirmation genuinely
+        scores lower than one with a confirmed high-quality pattern.
+
         Returns:
-            Score from 0-100
+            float: Fit score 0-100, always on the same scale as priority
         """
         rules = self.extractor.get_setup_classification_rules(setup_name)
         if not rules:
             return 0.0
 
-        score = 50.0  # Base score
-
-        # Check technical conditions
+        # ── Component 1: Technical gate pass ratio → 0-100 ──────────────────
+        tech_score = 0.0
         technical_gates = rules.get("technical_gates", {})
         if technical_gates:
             passed = 0
             gate_count = 0
             for metric, gate in technical_gates.items():
-                if metric.startswith("_"): continue
+                if metric.startswith("_"):
+                    continue
                 gate_count += 1
-                # ✅ Phase 3 P2-2 FIX: Do not inflate fit score if gates are missing/empty
-                metric_passes, _ = self.extractor.evaluate_confidence_gates(
+                metric_passes, _ = evaluate_gates(
                     {metric: gate}, tech_namespace, empty_gates_pass=False
                 )
                 if metric_passes:
                     passed += 1
             if gate_count > 0:
-                score += (passed / gate_count) * 30
+                tech_score = (passed / gate_count) * 100.0  # normalized 0-100
 
-        # Check fundamental conditions
+        # ── Component 2: Fundamental gate pass ratio → 0-100 ────────────────
+        fund_score = 0.0
         fundamental_gates = rules.get("fundamental_gates", {})
         if fundamental_gates:
             passed = 0
             gate_count = 0
             for metric, gate in fundamental_gates.items():
-                if metric.startswith("_"): continue
+                if metric.startswith("_"):
+                    continue
                 gate_count += 1
-                # ✅ Phase 3 P2-2 FIX: Do not inflate fit score if gates are missing/empty
-                metric_passes, _ = self.extractor.evaluate_confidence_gates(
+                metric_passes, _ = evaluate_gates(
                     {metric: gate}, fundamentals, empty_gates_pass=False
                 )
                 if metric_passes:
                     passed += 1
             if gate_count > 0:
-                score += (passed / gate_count) * 20
+                fund_score = (passed / gate_count) * 100.0  # normalized 0-100
 
-        return min(score, 100.0)
+        # ── Component 3: PRIMARY pattern quality → 0-100 ────────────────────
+        # The fused indicators dict (post pattern_fusion) stores two score fields:
+        #   pat_data["score"]       — already normalized 0-100 by pattern_fusion
+        #   pat_data["raw"]["score"]— raw detector output, 0-10 scale
+        # We normalize from raw (0-10) to keep the math consistent with the
+        # boost block and with min_pattern_quality (which is also 0-10 scale).
+        pat_quality_score = 0.0
+        primary_patterns = self.extractor.get_setup_patterns(setup_name).get("PRIMARY", [])
+        for pat_name in primary_patterns:
+            pat_data = patterns.get(pat_name) or tech_namespace.get(pat_name)
+            if not isinstance(pat_data, dict):
+                continue
+            # "found" lives inside raw, not at top level — mirrors evaluate_pattern_detection
+            raw = pat_data.get("raw", pat_data)
+            if raw.get("found", False):
+                raw_score = raw.get("score", pat_data.get("value", 0.0))
+                pat_quality_score = min((raw_score / 10.0) * 100.0, 100.0)
+                break
+
+        # ── Weighted blend — both parallel structure and scale to strategy ───
+        # All three components are 0-100. Weights sum to 1.0.
+        # Output is naturally 0-100 with no base offset and no hard cap needed.
+        fit_score = (
+            tech_score        * 0.60 +
+            fund_score        * 0.15 +
+            pat_quality_score * 0.25
+        )
+
+        return round(fit_score, 1)
     
     def _validate_context_requirements_via_extractor(
         self, setup_name: str, fundamentals: Dict, price_data: Dict, indicators: Dict = None, scoring: Dict = None
@@ -1603,7 +1814,8 @@ class ConfigResolver:
         # ===================================================================
         # Scoring rules (bonus points)
         # ===================================================================
-        scoring_rules = self.extractor.get_strategy_scoring_rules(strategy_name)
+        _strat_cfg = self.extractor.get(f"strategy_{strategy_name}") or {}
+        scoring_rules = _strat_cfg.get("scoring_rules", {})
         bonus_points = 0
         scoring_rule_results = {}
         
@@ -1632,7 +1844,7 @@ class ConfigResolver:
                         found = pat_data
                     else:
                         found = bool(pat_data)
-                    pattern_flags[f"{pat_name}_found"] = found
+                    pattern_flags[f"{pat_name}Found"] = found
                 namespace.update(pattern_flags)
             
             for rule_name, rule_config in scoring_rules.items():
@@ -1643,7 +1855,7 @@ class ConfigResolver:
                 matched = False
                 if gates:
                     try:
-                        matched, _ = self.extractor.evaluate_confidence_gates(gates, namespace, empty_gates_pass=True)
+                        matched, _ = evaluate_gates(gates, namespace, empty_gates_pass=True)
                     except Exception as e:
                         self.logger.debug(
                             f"[{strategy_name}] Rule '{rule_name}' gates eval failed: {e}"
@@ -1687,9 +1899,9 @@ class ConfigResolver:
         # Fallback: derive max from the rules themselves if not declared
         if not max_bonus_declared and scoring_rules:
             max_bonus_declared = sum(
-                r.get("points", 0)
-                for r in scoring_rules.values()
-                if r.get("points", 0) > 0
+                (lambda rule: rule.get("points", 0))(rule)
+                for rule in scoring_rules.values()
+                if (lambda rule: rule.get("points", 0))(rule) > 0
             )
 
         # Normalize bonus to 0-100; clamp negatives (penalties) to floor 0
@@ -1723,7 +1935,7 @@ class ConfigResolver:
                 "stats": {
                     "total_indicators": len(fit_indicators),
                     "passed_indicators": sum(
-                        1 for r in fit_indicator_results.values() if r["passed"]
+                        1 for res in fit_indicator_results.values() if res["passed"]
                     ),
                     "total_weight": round(total_weight, 3),
                     "achieved_weight": round(weighted_score, 3),
@@ -1869,7 +2081,7 @@ class ConfigResolver:
                 continue
 
             # ── Threshold check (Use Extractor) ──
-            passed, reasons = self.extractor.evaluate_confidence_gates(
+            passed, reasons = evaluate_gates(
                 {gate_name: threshold}, {gate_name: actual}
             )
             reason = reasons[0] if reasons and not passed else None
@@ -1903,6 +2115,7 @@ class ConfigResolver:
                 context=setup_type
             )
         failure_ratio = stats["failed"] / max(stats["total"], 1)
+
         overall = {
             "passed": stats["failed"] == 0,
             "failed_gates": [
@@ -1964,7 +2177,12 @@ class ConfigResolver:
             if value is not None:
                 numeric = ensure_numeric(value)
                 if numeric is not None:
+                    if "adx" in gate_name.lower():
+                        self.logger.info(f"[GATE_DEBUG] Resolved {gate_name} via {path} to {numeric}")
                     return numeric
+            else:
+                if "adx" in gate_name.lower():
+                    self.logger.info(f"[GATE_DEBUG] Failed resolving {gate_name} via {path} (value is None). Context keys: {list(ctx.keys())}")
         
         # Check if optional with fallback
         if gate_meta.get("optional", False):
@@ -2040,20 +2258,41 @@ class ConfigResolver:
             flat_data["fund_valuation_bucket"] = cat_scores.get("valuation", {}).get("score")
             flat_data["fund_dividend_bucket"] = cat_scores.get("dividend", {}).get("score")
 
-        # Inject pattern_count (Bug 4 Fix)
+        # Inject patternCount (Bug 4 Fix)
         pv = ctx.get("pattern_validation", {}).get("by_setup", {}).get(setup_type, {})
         # ✅ S14 FIX: Include primary pattern in the confluence count
         primary_found = pv.get("primary_found", [])
         confirming_found = pv.get("confirming_found", [])
-        flat_data["pattern_count"] = len(primary_found) + len(confirming_found)
+        flat_data["patternCount"] = len(primary_found) + len(confirming_found)
         
         # V15.0 Audit Fix: Inject conflict metrics for Step 8 modifier logic
         conflict_penalty = pv.get("conflict_penalty", 0)
         flat_data["conflict_penalty"] = conflict_penalty
 
-        # ✅ PATCH A: Inject divergence_type for pre-computation check
+        # ✅ PATCH A: Inject divergenceType for pre-computation check
         divergence_ctx = ctx.get("divergence", {})
-        flat_data["divergence_type"] = divergence_ctx.get("divergence_type", "none")
+        flat_data["divergenceType"] = (
+            divergence_ctx.get("divergenceType")
+            or divergence_ctx.get("divergence_type")
+            or "none"
+        )
+
+        # Inject individual pattern scores (Medium finding)
+        # Rationale: Confidence bonuses like 'bearish_conviction' reference pattern names directly.
+        detected_patterns = ctx.get("patterns", {})
+        for p_name, p_data in detected_patterns.items():
+            if not isinstance(p_data, dict):
+                continue
+
+            # Support both direct detector payloads and wrapped {"raw": {...}}
+            # shapes so pattern-aware confidence modifiers fire consistently.
+            raw_pattern = p_data.get("raw", p_data)
+            if not isinstance(raw_pattern, dict):
+                continue
+
+            if raw_pattern.get("found"):
+                pattern_quality = p_data.get("quality", raw_pattern.get("quality", 0))
+                flat_data[p_name] = pattern_quality
 
         # ==========================================================
         # STEPS 5-7: UNIVERSAL + HORIZON + CONDITIONAL MODIFIERS
@@ -2086,11 +2325,7 @@ class ConfigResolver:
             self.logger.info(
                 f"[{ctx.get('symbol', 'N/A')}] Conflict penalty applied: {conflict_penalty} for setup {setup_type}"
             )
-            breakdown.append({
-                "name": "pattern_conflict_penalty",
-                "adjustment": conflict_penalty,
-                "reason": f"Conflicting patterns detected for {setup_type}"
-            })
+            breakdown.append(f"pattern_conflict_penalty: {conflict_penalty:+.1f}")
         
         self.logger.info(
             f"[CONF_DIAG] {setup_type} ({self.horizon}): base={base}, "
@@ -2146,7 +2381,7 @@ class ConfigResolver:
 
         if setup_modifiers:
             # ✅ BUG FIX: Include price_data so conditions referencing
-            # prev_close, price, volume etc. can resolve (4 setups use these)
+            # prevClose, price, volume etc. can resolve (4 setups use these)
             price_data = ctx.get("price_data", {})
             namespace = {**ind, **fund, **price_data}
 
@@ -2167,16 +2402,18 @@ class ConfigResolver:
                         continue
 
                     try:
-                        passes, failures = self.extractor.evaluate_confidence_gates(
+                        passes, failures = evaluate_gates(
                             gates, namespace, empty_gates_pass=False
                         )
                         if passes:
                             if category == "penalties":
                                 amount = config.get("confidence_penalty", 0)
-                                raw_delta = -float(amount)
+                                # ✅ Phase 3 P2-4 FIX: Ensure penalty is ALWAYS negative
+                                raw_delta = -abs(float(amount))
                             else:
                                 amount = config.get("confidence_boost", 0)
-                                raw_delta = float(amount)
+                                # ✅ Phase 3 P2-4 FIX: Ensure bonus is ALWAYS positive
+                                raw_delta = abs(float(amount))
                                 
                             delta = float(raw_delta)
                             
@@ -2302,18 +2539,17 @@ class ConfigResolver:
         clamp = self.extractor.get_confidence_clamp()
         clamped = max(clamp[0], min(clamp[1], final))
 
-        # ✅ Phase 3 P0-4 FIX: B8 ceiling scoped to BULLISH setups only.
-        # Refined guard to exclude BREAKDOWN/SHORT setups using vocabulary mapping.
-        trend_dir = ctx.get("trend", {}).get("classification", {}).get("direction", "neutral")
+        # ✅ Phase 3 P0-4 FIX: B8 ceiling applies to bullish long-bias setups,
+        # not just names containing "BREAKOUT". Many valid bullish setups now
+        # classify as TREND_FOLLOWING / QUALITY_ACCUMULATION / pattern-specific
+        # variants and still need the low-RVOL ceiling.
+        trend_dir = str(ctx.get("trend", {}).get("classification", {}).get("direction", "neutral")).lower()
         _setup_vocab = setup_type.upper()
-        _is_bullish_setup = (
-            ("BREAKOUT" in _setup_vocab and "BREAKDOWN" not in _setup_vocab)
-            or ("MOMENTUM" in _setup_vocab and "BREAKDOWN" not in _setup_vocab 
-                and "FLOW_BREAKDOWN" not in _setup_vocab)
-        )
-        _is_bullish_momentum = _is_bullish_setup and trend_dir != "bearish"
-        
-        if _is_bullish_momentum:
+        _bearish_tokens = ("BREAKDOWN", "BEAR", "SHORT", "SELL", "DOWNTREND")
+        _is_non_bearish_setup = not any(token in _setup_vocab for token in _bearish_tokens)
+        _is_bullish_trade_context = trend_dir != "bearish" and _is_non_bearish_setup
+
+        if _is_bullish_trade_context:
             rvol = flat_data.get("rvol", 1.0)
             if rvol <= 2.0 and clamped > 90:
                 self.logger.info(
@@ -2500,8 +2736,8 @@ class ConfigResolver:
         # Aggregate risk score (NOT a decision)
         # ───────────────────────────────────────
         execution_risk = sum(
-            r["severity"] for r in rule_results.values()
-            if r["status"] in ("warning", "violation")
+            res["severity"] for res in rule_results.values()
+            if res["status"] in ("warning", "violation")
         )
         overall = {
             "passed": len(violations) == 0,
@@ -2630,10 +2866,12 @@ class ConfigResolver:
             return {"passed": True, "reason": "No SL distance rules configured"}
         
         # Get SL distance from risk model (calculated earlier)
-        risk_model = ctx.get("risk_model", {})
+        risk_model = ctx.get("risk_model", {}) or ctx.get("risk_candidates", {})
         sl_distance_pct = risk_model.get("sl_distance_pct", 0)
         if sl_distance_pct == 0 or sl_distance_pct is None:
             sl_distance_pct = ensure_numeric(ctx["indicators"].get("slDistance"))
+        if sl_distance_pct == 0 or sl_distance_pct is None:
+            sl_distance_pct = ensure_numeric(risk_model.get("atr_multiple"))
         
         # Get thresholds from config
         min_sl = sl_config.get("min_atr_multiplier", 0.5)
@@ -2643,18 +2881,21 @@ class ConfigResolver:
         if sl_distance_pct == 0:
             return {
                 "passed": False,
+                "severity": 80,
                 "reason": "SL distance not calculated in risk model"
             }
         
         if sl_distance_pct < min_sl:
             return {
                 "passed": False,
+                "severity": 80,
                 "reason": f"SL too tight: {sl_distance_pct:.2f}% < min {min_sl}%"
             }
         
         if sl_distance_pct > max_sl:
             return {
                 "passed": False,
+                "severity": 80,
                 "reason": f"SL too wide: {sl_distance_pct:.2f}% > max {max_sl}%"
             }
         
@@ -2760,11 +3001,19 @@ class ConfigResolver:
                 .get("primary_found", [])
             )
             
+            # Bucket 2: Momentum & Flow (ATR Fallback)
+            # ✅ FIX: All primary patterns now use the structural RR path.
+            # ichimokuSignals was the last holdout; routing it to generic_atr
+            # caused live-behavior changes (stricter RR floors) that were not
+            # intentional.  An empty set means "no pattern forces fallback".
+            MOMENTUM_PATTERNS = set()
+            is_momentum = any(p in MOMENTUM_PATTERNS for p in primary_patterns)
+
             rr = target_mult / atr_mult if atr_mult > 0 else 1.0
             
-            # If patterns exist, this is a structural baseline (skip Stage 1 gate)
-            # If no patterns, this is a generic ATR fallback (enforce Stage 1 gate)
-            rr_source = "atr_structural" if primary_patterns else "generic_atr"
+            # If patterns exist and ARE geometric, this is a structural baseline (skip Stage 1 gate)
+            # If no patterns OR momentum patterns, this is a generic ATR fallback (enforce Stage 1 gate)
+            rr_source = "atr_structural" if primary_patterns and not is_momentum else "generic_atr"
             
             if direction == "bearish":
                 sl_price = price + (atr * atr_mult)
@@ -2786,7 +3035,12 @@ class ConfigResolver:
         return {
             "rrRatio": round(rr, 2) if rr else None,
             "rr_source": rr_source,
+            "is_atr_fallback": rr_source == "generic_atr",
             "primary_pattern": primary if rr_source == "pattern" else None,
+            "direction": direction,
+            "entry_price": price,
+            "atr": atr,
+            "sl_distance_pct": sl_dist if sl_dist is not None else atr_mult,
             "sl_price": sl_price,
             "pattern_targets": pattern_targets,
             "generic_targets": generic_targets,
@@ -2861,7 +3115,7 @@ class ConfigResolver:
                 continue
 
             # 4. Evaluate (Use Extractor)
-            passed, reasons = self.extractor.evaluate_confidence_gates(
+            passed, reasons = evaluate_gates(
                 {gate_name: threshold}, {gate_name: actual_value}
             )
             reason = reasons[0] if reasons and not passed else None
@@ -2958,18 +3212,30 @@ class ConfigResolver:
         triggered, gate_results = self.extractor.evaluate_invalidation_gates(gates, data)
 
         for gr in gate_results:
-            # NOTE: for invalidation gates, gr["triggered"]=True means the BREAKDOWN condition
-            # fired (pattern is invalidated). We pass `passed=not gr["triggered"]` so the
-            # logger labels it consistently: GATE PASSED = pattern still healthy,
-            # GATE FAILED = breakdown condition met = pattern invalidated.
-            METRICS.log_gate_check(
-                gate_name=gr["metric"],
-                phase=f"pattern_invalidation_{pattern_name}",
-                passed=not gr["triggered"],
-                actual=data.get(gr["metric"]),
-                required=gates.get(gr["metric"]),
-                context=pattern_name,
-            )
+            phase = f"pattern_invalidation_{pattern_name}"
+            actual = data.get(gr["metric"])
+            required = gates.get(gr["metric"])
+
+            # Invalidation checks are the inverse of normal gates:
+            # "triggered=True" means the breakdown condition fired.
+            # Avoid piping healthy states through the generic gate logger,
+            # because it formats successes like "actual >= required", which
+            # is misleading when a healthy pattern simply did NOT trigger the
+            # invalidation clause.
+            if gr["triggered"]:
+                METRICS.log_gate_check(
+                    gate_name=gr["metric"],
+                    phase=phase,
+                    passed=False,
+                    actual=actual,
+                    required=required,
+                    context=pattern_name,
+                )
+            else:
+                logger.debug(
+                    f"[{pattern_name}] INVALIDATION NOT TRIGGERED [{phase}]: "
+                    f"{gr['metric']} | actual={actual} | rule={required} | reason={gr['reason']}"
+                )
 
         return triggered
     
@@ -3016,20 +3282,43 @@ class ConfigResolver:
             confirming_found = [p for p in detected if p in confirming]
             conflicting_found = [p for p in detected if p in conflicting]
 
-            # V15.0 Audit Fix: Calculate net pattern score with capped conflict penalty
-            # Rationale: Conflicting patterns should penalize, but not nuke a strong primary signal.
-            confirm_score = (50 if primary_found else 0) + (len(confirming_found) * 10)
+            # ── Quality-weighted net pattern score ──────────────────
+            # Old: flat +50 for any primary (score 2.0 == score 9.5), flat +10 per
+            #      confirming, flat -20 per conflicting.  Quality gradient completely lost.
+            # New: primary contribution scaled by pattern quality (0-10 → 0-50),
+            #      confirming scaled by quality (0-10 → 0-10 each),
+            #      conflict penalty remains flat (-20) — a conflict is a conflict.
+            confirm_score = 0.0
+            for p in primary_found:
+                pat_quality_score = detected.get(p, {}).get("score", 5.0)
+                confirm_score += (pat_quality_score / 10.0) * 50.0  # 0-50
+
+            for p in confirming_found:
+                pat_quality_score = detected.get(p, {}).get("score", 5.0)
+                confirm_score += (pat_quality_score / 10.0) * 10.0  # 0-10 each
+
             raw_conflict_penalty = len(conflicting_found) * -20
             
-            # ✅ Phase 3 P0-3 FIX: Fallback for mixed signals in GENERIC setup
+            # ── Structured direction conflict (replaces fragile string match) ──
+            # Use the 'direction' field from PATTERN_METADATA instead of heuristic
+            # substring checks like `"bullish" in p.lower()`.
             if not conflicting_found and "GENERIC" in setup_type:
-                # Check ALL detected patterns for directional mismatch if in generic setup
-                # (Simple heuristic: if both long and short patterns exist)
-                has_long = any("bullish" in p.lower() or "long" in p.lower() for p in detected)
-                has_short = any("bearish" in p.lower() or "short" in p.lower() for p in detected)
-                if has_long and has_short:
+                has_bullish = False
+                has_bearish = False
+                for p, p_data in detected.items():
+                    pat_ctx = self.extractor.get_pattern_context(p)
+                    if not pat_ctx:
+                        continue
+                    # PatternContext.physics has the direction in pattern_metadata
+                    direction = pat_ctx.physics.get("direction", "neutral")
+                    if direction == "bullish":
+                        has_bullish = True
+                    elif direction == "bearish":
+                        has_bearish = True
+                if has_bullish and has_bearish:
                     raw_conflict_penalty = -20
-            
+            # ─────────────────────────────────────────────────────────────────────
+
             capped_conflict_penalty = max(-30, raw_conflict_penalty)
             net_score = confirm_score + capped_conflict_penalty
 
@@ -3052,9 +3341,21 @@ class ConfigResolver:
                     inv_gates = pattern_ctx.invalidation.get("gates", {})
 
                     if inv_gates:
+                        raw_pattern = pattern_data.get("raw", pattern_data)
+                        pattern_meta = {}
+                        if isinstance(raw_pattern, dict):
+                            pattern_meta = raw_pattern.get("meta", {})
+                        if not pattern_meta and isinstance(pattern_data.get("meta"), dict):
+                            pattern_meta = pattern_data.get("meta", {})
+                        invalidation_data = dict(ctx.get("indicators", {}))
+                        if isinstance(pattern_meta, dict):
+                            for meta_key, meta_value in pattern_meta.items():
+                                if isinstance(meta_value, (int, float, str, bool)):
+                                    invalidation_data[meta_key] = meta_value
+
                         is_invalidated = self.validate_pattern_gates(
                             inv_gates,
-                            ctx["indicators"],
+                            invalidation_data,
                             pattern_name,
                         )
 
@@ -3080,7 +3381,7 @@ class ConfigResolver:
                         ctx, pattern_name, pattern_data
                     )
 
-                    entry_passes, _ = self.extractor.evaluate_confidence_gates(
+                    entry_passes, _ = evaluate_gates(
                         entry_gates, namespace, empty_gates_pass=True
                     )
 
@@ -3266,7 +3567,7 @@ class ConfigResolver:
         surge_config = vol_mods.get("surge_bonus", {})
         if surge_config:
             surge_gates = surge_config.get("gates", {})
-            surge_passes, _ = self.extractor.evaluate_confidence_gates(
+            surge_passes, _ = evaluate_gates(
                 surge_gates,
                 flat_indicators  # ✅ Use flattened data
             )
@@ -3283,7 +3584,7 @@ class ConfigResolver:
         drought_config = vol_mods.get("drought_penalty", {})
         if drought_config:
             drought_gates = drought_config.get("gates", {})
-            drought_passes, _ = self.extractor.evaluate_confidence_gates(
+            drought_passes, _ = evaluate_gates(
                 drought_gates,
                 flat_indicators
             )
@@ -3301,7 +3602,7 @@ class ConfigResolver:
         if climax_config:
             rsi = ensure_numeric(indicators.get("rsi", 50))
             climax_gates = climax_config.get("gates", {})
-            climax_passes, _ = self.extractor.evaluate_confidence_gates(
+            climax_passes, _ = evaluate_gates(
                 climax_gates,
                 flat_indicators
             )
@@ -3645,13 +3946,15 @@ class ConfigResolver:
 
         # 5. Return Final Model
         return {
-            "valid": valid and quantity > 0,
+            "valid": valid,
             "entry_price": price,
             "stop_loss": sl_price,
+            "direction": direction,
             "risk_per_share": round(risk_per_share, 2) if risk_per_share else 0,
             "atr": ensure_numeric(eval_ctx["indicators"].get("atrDynamic", 0)),
             # Execution Details
             "quantity": quantity,
+            "sizing_valid": quantity > 0,
             "risk_amount": round(risk_amount, 2),
             "capital_required": round(capital_required, 2),
             "limit_reason": limit_reason,  # Useful for debugging (why is qty low?)
@@ -3660,6 +3963,7 @@ class ConfigResolver:
             "rrRatio": rr,
             "rrRatioT2": rr_t2,  # ✅ Fix 9A.3: Pass T2 RR to final model
             "targets": normalized_targets,
+            "rr_source": risk_data.get("rr_source"),
             "is_atr_fallback": risk_data.get("is_atr_fallback", False),  # ✅ EXPLICIT: Pass fallback status
             "confidence": confidence,
             "setup": eval_ctx["setup"]["type"]
@@ -3786,7 +4090,7 @@ class ConfigResolver:
         if not checks["capital_available"]:
             failures.append("Capital not provided")
         if not checks["risk_valid"]:
-            failures.append("Risk model invalid: SL/entry price calculation failed")
+            failures.append("Risk model invalid: SL/entry price geometry failed")
         if not checks["quantity_available"]:
             failures.append("Position sizing failed: quantity is zero or None")
         

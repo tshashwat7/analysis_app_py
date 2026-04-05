@@ -579,11 +579,13 @@ def compute_all_profiles(
                 # Independent of patterns, gates, RR, or execution context.
                 # Answers: "Is this stock worth tracking/accumulating?"
                 # ✅ B8 FIX: Lowered STRONG threshold (8.5 -> 8.0)
-                if final_score >= 8.0:
+                # ✅ v15.2 FIX: Use eligibility_score (Stock Quality) not final_score (Trade Opportunity)
+                # to prevent high-quality stocks from being labeled 'AVOID' when blocked.
+                if eligibility_score >= 8.0:
                     profile_signal = "STRONG"
-                elif final_score >= 7.0:
+                elif eligibility_score >= 7.0:
                     profile_signal = "MODERATE"
-                elif final_score >= 5.5:
+                elif eligibility_score >= 5.5:
                     profile_signal = "WEAK"
                 else:
                     profile_signal = "AVOID"
@@ -865,9 +867,11 @@ def finalize_trade_decision(plan: dict, eval_ctx: dict, exec_ctx: dict, extracto
             "setup_signal":      "WATCH",
             "signal":            signal_intent,
             "status":            "NO_PATTERN",
+            "reason": (
                 f"No primary pattern detected for {setup_type} setup. "
                 f"Evaluation restricted. "
                 f"Monitor for pattern formation."
+            ),
             "execution_blocked": True,
             "can_trade":         False,
         })
@@ -1025,6 +1029,68 @@ def apply_rr_validation(exec_ctx: Dict[str, Any], eval_ctx: Dict[str, Any], extr
         }
     exec_ctx["can_execute"] = can_exec
 
+
+def _collect_block_gate_names(eval_ctx: Dict[str, Any], exec_ctx: Dict[str, Any], failures: List[str]) -> List[str]:
+    """
+    Build an assertion/UI-friendly flat list of gate/rule names.
+
+    The engine often stores human-readable reasons in `can_execute.failures`,
+    while the synthetic harness needs stable rule names like `sl_distance_validation`
+    or structural gate names like `rvol`. We surface both here.
+    """
+    names: List[str] = []
+
+    structural_failed = (
+        eval_ctx.get("structural_gates", {})
+        .get("overall", {})
+        .get("failed_gates", [])
+    )
+    for item in structural_failed:
+        if isinstance(item, dict):
+            gate_name = item.get("gate")
+            if gate_name:
+                names.append(str(gate_name))
+        elif item:
+            names.append(str(item))
+
+    execution_failed = (
+        eval_ctx.get("execution_rules", {})
+        .get("overall", {})
+        .get("failed_rules", [])
+    )
+    for item in execution_failed:
+        if isinstance(item, dict):
+            rule_name = item.get("rule")
+            if rule_name:
+                names.append(str(rule_name))
+        elif item:
+            names.append(str(item))
+
+    opportunity_failed = (
+        eval_ctx.get("opportunity_gates", {})
+        .get("overall", {})
+        .get("failed_gates", [])
+    )
+    for item in opportunity_failed:
+        if isinstance(item, dict):
+            gate_name = item.get("gate")
+            if gate_name:
+                names.append(str(gate_name))
+        elif item:
+            names.append(str(item))
+
+    for item in failures or []:
+        if item:
+            names.append(str(item))
+
+    seen = set()
+    flattened: List[str] = []
+    for name in names:
+        if name not in seen:
+            seen.add(name)
+            flattened.append(name)
+    return flattened
+
 def generate_trade_plan(
     symbol: str,
     winner_profile: Dict = None,
@@ -1181,6 +1247,25 @@ def generate_trade_plan(
         # Apply execution-time adjustments (Discovery vs Strategy decoupling)
         exec_adjustments = exec_ctx.get("confidence_adjustments", {})
         total_penalty = exec_adjustments.get("total_penalty", 0)
+
+        # Guardrail: if the enhancer flagged expiration but a partial/older
+        # exec_ctx failed to carry the numeric penalty, recover it here so
+        # final confidence still reflects the expired-pattern downgrade.
+        if total_penalty == 0:
+            for warning in exec_ctx.get("pattern_warnings", []) or []:
+                if isinstance(warning, dict) and warning.get("type") == "expiration":
+                    try:
+                        risk_cfg = extractor.get_risk_management_config()
+                        total_penalty = risk_cfg.get("expiry_penalty", -20)
+                    except Exception:
+                        total_penalty = -20
+                    exec_adjustments = dict(exec_adjustments)
+                    exec_adjustments["total_penalty"] = total_penalty
+                    exec_adjustments.setdefault("breakdown", []).append(
+                        f"Pattern expired ({warning.get('pattern', 'unknown')}): {total_penalty}%"
+                    )
+                    exec_ctx["confidence_adjustments"] = exec_adjustments
+                    break
         
         # C13 FIX: Get config-driven confidence floor (not hardcoded 30)
         try:
@@ -1202,6 +1287,23 @@ def generate_trade_plan(
 
         apply_rr_validation(exec_ctx, eval_ctx, extractor=extractor)  # Mutates exec_ctx["can_execute"]
 
+        pattern_validation = eval_ctx.get("pattern_validation", {}) or {}
+        primary_found = pattern_validation.get("primary_found", []) or []
+        risk_ctx = exec_ctx.get("risk", {}) or {}
+        setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
+        if primary_found or "BEAR" in str(setup_type).upper():
+            logger.info(
+                f"[{symbol}][{horizon}] [EXEC_DEBUG] "
+                f"setup={setup_type} primary={primary_found} "
+                f"direction={risk_ctx.get('direction')} "
+                f"rr_source={risk_ctx.get('rr_source')} "
+                f"entry={risk_ctx.get('entry_price')} "
+                f"sl={risk_ctx.get('stop_loss')} "
+                f"targets={risk_ctx.get('targets')} "
+                f"qty={risk_ctx.get('quantity')} "
+                f"can_execute={exec_ctx.get('can_execute', {}).get('can_execute')}"
+            )
+
         # ✅ POPULATE ESTIMATED TIME
         if "timeline" in exec_ctx and exec_ctx["timeline"].get("available"):
             plan["est_time_str"] = exec_ctx["timeline"].get("t1_estimate", "Waiting for primary pattern")
@@ -1220,7 +1322,7 @@ def generate_trade_plan(
         if execution_blocked:
             failures = can_execute.get("failures", ["Execution blocked"])
             plan["block_reason"] = failures[0]  # ✅ PRIMARY BLOCK REASON
-            plan["block_gates"] = failures  # ✅ ALL FAILED GATES
+            plan["block_gates"] = _collect_block_gate_names(eval_ctx, exec_ctx, failures)
             
             plan.update({
                 "status": "BLOCKED",
@@ -1247,16 +1349,28 @@ def generate_trade_plan(
         plan["metadata"]["direction"] = trend_classification.get("direction", "neutral")
         
         if market_adjusted.get("adjusted"):
-            plan["entry"] = market_adjusted.get("execution_entry")
-            plan["stop_loss"] = market_adjusted.get("execution_sl")
-            plan["targets"]["t1"] = market_adjusted.get("execution_t1")
-            plan["targets"]["t2"] = market_adjusted.get("execution_t2")
-            plan["rr_ratio"] = market_adjusted.get("execution_rr_t2") or market_adjusted.get("execution_rr_t1")
+            market_targets = market_adjusted.get("targets", [])
+            plan["entry"] = market_adjusted.get("entry_price", market_adjusted.get("execution_entry"))
+            plan["stop_loss"] = market_adjusted.get("stop_loss", market_adjusted.get("execution_sl"))
+            plan["targets"]["t1"] = (
+                market_adjusted.get("execution_t1")
+                or (market_targets[0] if len(market_targets) > 0 else 0)
+            )
+            plan["targets"]["t2"] = (
+                market_adjusted.get("execution_t2")
+                or (market_targets[1] if len(market_targets) > 1 else 0)
+            )
+            plan["rr_ratio"] = (
+                market_adjusted.get("rrRatioT2")
+                or market_adjusted.get("rrRatio")
+                or market_adjusted.get("execution_rr_t2")
+                or market_adjusted.get("execution_rr_t1")
+            )
             plan["position_size"] = risk.get("quantity", 0)
             
             plan["metadata"]["pattern_rr"] = market_adjusted.get("structural_rr")
-            plan["metadata"]["execution_rr_t1"] = market_adjusted.get("execution_rr_t1")
-            plan["metadata"]["execution_rr_t2"] = market_adjusted.get("execution_rr_t2")
+            plan["metadata"]["execution_rr_t1"] = market_adjusted.get("rrRatio") or market_adjusted.get("execution_rr_t1")
+            plan["metadata"]["execution_rr_t2"] = market_adjusted.get("rrRatioT2") or market_adjusted.get("execution_rr_t2")
             plan["metadata"]["volatility_regime"] = market_adjusted.get("volatility_regime")
             
             # ✅ B4 FIX: Reconcile direction and set conflict flag (Centralized in trade_enhancer)
@@ -1269,7 +1383,7 @@ def generate_trade_plan(
             # Use the direction from market adjustment (which is already reconciled in enhancer)
             plan["metadata"]["direction"] = market_adjusted.get("direction", plan["metadata"].get("direction", "neutral"))
             
-            plan["metadata"]["rr_source"] = risk.get("rr_source")  
+            plan["metadata"]["rr_source"] = market_adjusted.get("rr_source") or risk.get("rr_source")
             plan["metadata"]["atr_multiple"] = risk.get("atr_multiple")  
             plan["metadata"]["market_adjusted"] = True
         else:
@@ -1384,7 +1498,7 @@ def generate_trade_plan(
         plan["analytics"] = {
             "strategy_fit": eval_ctx.get("strategy", {}).get("fit_score", 0),
             "strategy_weighted": eval_ctx.get("strategy", {}).get("weighted_score", 0),
-            "pattern_count": len(eval_ctx.get("patterns", {})),
+            "patternCount": len(eval_ctx.get("patterns", {})),
             "hybrid_score": eval_ctx.get("scoring", {}).get("hybrid", {}).get("score", 0),
             "technical_score": eval_ctx.get("scoring", {}).get("technical", {}).get("score", 0),
             "fundamental_score": eval_ctx.get("scoring", {}).get("fundamental", {}).get("score", 0),
@@ -1521,6 +1635,11 @@ def _calculate_profile_meta_score(
         # 3. Extract normalized score (0-10)
         score = extract_normalized_score(metric_data, metric, horizon)
         
+        if score is None:
+            missing_metrics.append(metric)
+            logger.warning(f"[{profile_name}] No score for metric '{metric}' — Skipping.")
+            continue
+            
         # 4. Apply directionality (if specified)
         if isinstance(weight_spec, dict):
             direction = weight_spec.get("direction", "normal")

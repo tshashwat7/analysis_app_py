@@ -173,12 +173,12 @@ GATE_METRIC_REGISTRY = {
         "context_paths": [("indicators", "ichimokuSignals")],
         "optional": True
     },
-    "prev_supertrend": {
+    "prevSupertrend": {
         "type": "text",
         "category": "trend",
         "validation_type": "threshold",
         "description": "Previous Supertrend direction",
-        "context_paths": [("indicators", "prev_supertrend")]
+        "context_paths": [("indicators", "prevSupertrend")]
     },
     "trendStrength": {
         "type": "numeric",
@@ -229,23 +229,23 @@ GATE_METRIC_REGISTRY = {
         "category": "momentum",
         "validation_type": "threshold",
         "description": "RSI slope indicator",
-        "context_paths": [("indicators", "rsislope")]
+        "context_paths": [("indicators", "rsiSlope")]
     },
     
-    "macdhistogram": {
+    "macdHistogram": {
         "type": "numeric",
         "category": "momentum",
         "validation_type": "threshold",
         "description": "MACD histogram value",
-        "context_paths": [("indicators", "macdhistogram")]
+        "context_paths": [("indicators", "macdHistogram")]
     },
     
-    "prevmacdhistogram": {
+    "prevMacdHistogram": {
         "type": "numeric",
         "category": "momentum",
         "validation_type": "threshold",
         "description": "Previous MACD histogram value",
-        "context_paths": [("indicators", "prevmacdhistogram"), ("indicators", "prev_macdhistogram")]
+        "context_paths": [("indicators", "prevMacdHistogram")]
     },
     
     # ===========================
@@ -309,12 +309,12 @@ GATE_METRIC_REGISTRY = {
     # ===========================
     # STRUCTURE GATES
     # ===========================
-    "bbpercentb": {
+    "bbPercentB": {
         "type": "numeric",
-        "category": "structure",
+        "category": "volatility",
         "validation_type": "threshold",
-        "description": "Bollinger Band %B position",
-        "context_paths": [("indicators", "bbpercentb")],  # ✅ P2-1 FIX: Corrected path
+        "description": "Bollinger %B value",
+        "context_paths": [("indicators", "bbPercentB")],  # ✅ P2-1 FIX: Corrected path
         "optional": True                                    # ✅ P2-1 FIX: Marked as optional
     },
     
@@ -343,20 +343,20 @@ GATE_METRIC_REGISTRY = {
         "description": "Current price as a percentage of 52-week high",
         "context_paths": [("fundamentals", "priceVs52wHighPct")]
     },
-    "max_pattern_age_candles": {
+    "maxPatternAgeCandles": {
         "type": "numeric",
         "category": "structure",
         "validation_type": "threshold",
         "description": "Maximum allowed age of a pattern in candles",
-        "context_paths": [("indicators", "max_pattern_age_candles")],
+        "context_paths": [("indicators", "maxPatternAgeCandles")],
         "optional": True
     },
-    "max_setup_staleness_candles": {
+    "maxSetupStalenessCandles": {
         "type": "numeric",
         "category": "structure",
         "validation_type": "threshold",
         "description": "Maximum allowed staleness of a setup in candles",
-        "context_paths": [("indicators", "max_setup_staleness_candles")],
+        "context_paths": [("indicators", "maxSetupStalenessCandles")],
         "optional": True
     },
     
@@ -456,12 +456,12 @@ GATE_METRIC_REGISTRY = {
         "context_paths": [("fundamentals", "fcfYield")]
     },
     
-    "dividendyield": {
+    "dividendYield": {
         "type": "numeric",
         "category": "valuation",
         "validation_type": "threshold",
         "description": "Dividend Yield",
-        "context_paths": [("fundamentals", "dividendyield"), ("fundamentals", "dividendYield")]
+        "context_paths": [("fundamentals", "dividendYield")]
     },
     
     # ===========================
@@ -484,8 +484,7 @@ GATE_METRIC_REGISTRY = {
         "validation_type": "threshold",
         "description": "Institutional ownership %",
         "context_paths": [
-            ("fundamentals", "institutionalOwnership"),
-            ("price_data", "institutionalownership")  # ✅ Case variation
+            ("fundamentals", "institutionalOwnership")
         ]
     },
     
@@ -616,7 +615,7 @@ MASTER_CONFIG = {
                     "trendStrength": {"min": 3.0},
                     "volatilityQuality": {"min": 3.0},
                     "rsi": {"min": None, "max": None},
-                    "macdhistogram": {"min": None},
+                    "macdHistogram": {"min": None},
                     "bbpercentb": {"min": None, "max": None},
                     "atrPct": {"min": None},
                     "roe": {"min": None},
@@ -674,8 +673,8 @@ MASTER_CONFIG = {
                     "technicalScore": {"min": None},
                     "fundamentalScore": {"min": None},
                     "hybridScore": {"min": None},
-                    "max_pattern_age_candles": None,
-                    "max_setup_staleness_candles": None
+                    "maxPatternAgeCandles": None,
+                    "maxSetupStalenessCandles": None
                 }
             },
             
@@ -1047,7 +1046,7 @@ MASTER_CONFIG = {
                 "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.01},
                 "rrRatio": {"min": 1.2},
                 "horizon_t2_cap": 0.04,
-                "rr_gates": { "min_t1": 1.5, "min_t2": 2.2, "min_structural": 2.5, "execution_floor": 1.2 }
+                "rr_gates": { "min_t1": 1.2, "min_t2": 2.2, "min_structural": 1.3, "execution_floor": 1.0 }
             },
             
             "execution": {
@@ -1145,7 +1144,7 @@ MASTER_CONFIG = {
                 "atr_sl_limits": {"max_percent": 0.05, "min_percent": 0.01},  # ✅ Extended for overnight gap risk
                 "rrRatio": {"min": 1.4},
                 "horizon_t2_cap": 0.10,
-                "rr_gates": { "min_t1": 2.0, "min_t2": 2.5, "min_structural": 3.0, "execution_floor": 1.4 }
+                "rr_gates": { "min_t1": 1.5, "min_t2": 2.5, "min_structural": 1.5, "execution_floor": 1.2 }
             },
             "execution": {
                 "stop_loss_atr_mult": 2.0,
@@ -1200,7 +1199,7 @@ MASTER_CONFIG = {
                 },
                 "opportunity": {
                     "confidence": {"min": 60},
-                    "rrRatio": {"min": 1.6},  # ✅ Entrance Gate (must be >= execution_floor)
+                    "rrRatio": {"min": 1.5},  # ✅ Entrance Gate (aligned with 3.0/2.0 baseline)
                     "fundamentalScore": {"min": 3.0}
                 },
             },
@@ -1290,7 +1289,7 @@ MASTER_CONFIG = {
                     "normal_trend": {"adx": {"min": 20}, "t1_mult": 2.0, "t2_mult": 4.0},
                     "weak_trend": {"adx": {"max": 20}, "t1_mult": 1.5, "t2_mult": 3.0}
                 },
-                "rr_gates": { "min_t1": 2.5, "min_t2": 3.5, "min_structural": 4.0, "execution_floor": 1.6 }
+                "rr_gates": { "min_t1": 1.5, "min_t2": 3.5, "min_structural": 1.5, "execution_floor": 1.4 }
             },
             
             "execution": {

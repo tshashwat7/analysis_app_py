@@ -216,6 +216,7 @@ Both the main analysis flow and the Multibagger screener share the same `Fundame
 | [extract_gate_sections()](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#626-691) | [master_config](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#291-373) global + horizon entry_gates | `structural_gates`, `execution_rules`, `opportunity_gates`, `horizon_structural_gates`, `horizon_opportunity_gates`, `horizon_execution_rules` |
 | [extract_matrix_sections()](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#692-878) | `setup_pattern_matrix_config` + `strategy_matrix_config` | `setup_pattern_matrix`, `pattern_metadata`, `pattern_scoring_thresholds`, `pattern_indicator_mappings`, `default_physics`, `setup_{name}`, `setup_validation_{name}`, `pattern_{name}`, `pattern_physics_{name}`, `pattern_entry_{name}`, `pattern_invalidation_{name}`, `setup_context_{name}`, `setup_horizon_overrides_{name}`, [strategy_matrix](file:///d:/stockviedeo/stock-analyzer-app/config/strategy_matrix_config.py#770-797), `strategy_{name}`, `strategy_scoring_{name}` |
 | [extract_confidence_sections()](file:///d:/stockviedeo/stock-analyzer-app/config/config_extractor.py#138-290) | `confidence_config` | [confidence_range](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#104-121), `adx_normalization`, [volume_modifiers](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#178-197), [universal_adjustments](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#198-220), `setup_baseline_floors`, [divergence_physics](file:///d:/stockviedeo/stock-analyzer-app/config/query_optimized_extractor.py#274-284), `horizon_confidence_clamp`, `min_tradeable_confidence`, `high_confidence_override`, `horizon_confidence_philosophy`, `horizon_base_confidence_adjustment`, `horizon_setup_floor_overrides`, `horizon_conditional_adjustments`, `horizon_adx_confidence_bands`, `horizon_adx_confidence_penalties` |
+| `validate_pattern_metadata()` | `PATTERN_METADATA` | **Fail-Fast Startup Guard:** Performs a schema completeness check. Hard-crashes the application (`ConfigurationError`) at startup if any active pattern detector alias is missing its physics block, preventing silent ATR fallbacks in production. |
 
 ### [MBQueryOptimizedExtractor](file:///d:/stockviedeo/stock-analyzer-app/config/mb_query_optimized_extractor.py) — Multibagger Specific Extraction
 
@@ -269,3 +270,25 @@ The QOE's [get_merged()](file:///d:/stockviedeo/stock-analyzer-app/config/config
 - Strategy matrix does NOT read from setup_pattern_matrix
 - Each config is self-contained
 - **Only the resolver** crosses boundaries by calling QOE methods from different configs
+
+---
+
+## UI Architecture Mapping (`result.html`)
+
+To maintain high-speed visual analysis, the frontend (`result.html`) maps the multifaceted output of the Signal Engine to four logical UI components.
+
+| UI Asset | Jinja2 Variable | Signal Layer Mapping | Color Logic (Value/Status) |
+| :--- | :--- | :--- | :--- |
+| **Pill Scores** | `all_horizon_scores` | **Eligibility Score** | `score-pill` (Static grey/blue) |
+| **Profile Badge** | `profile_signal` | **Eligibility Tier** | `signal-strong` (Green) $\ge$ 8.0 <br> `signal-moderate` (Yellow) $\ge$ 7.0 |
+| **Trade Badge** | `trade_signal` | **Execution Decision** | `signal-buy` (Green) <br> `signal-blocked` (Red) |
+| **Score Gauge** | `final_score` | **Final Conviction** | `score-green` $\ge$ 7 <br> `score-red` $\le$ 4 <br> `score-amber` (else) |
+
+### Decoupling Logic (The Conflict Banner)
+The most critical UI logic in v15.2 is the **Conflict Banner** (`result.html` line 2101). It triggers when:
+```jinja
+{% set conflict = (profile_signal in ('STRONG', 'MODERATE') and trade_signal in ('WATCH', 'HOLD', 'BLOCKED')) %}
+```
+This ensures the trader knows a stock is **high quality** but is **untradeable** due to execution gates (e.g., RR < 1.0 or SL > 10%).
+
+---

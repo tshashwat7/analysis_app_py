@@ -125,7 +125,7 @@ class MinerviniVCPPattern(BasePattern):
             "vol_dry":            vol_dry,
             "formation_timestamp": df.index[formation_index].isoformat(),
             "invalidation_level":   round(invalidation_level, 2) if invalidation_level else None,
-            "pivot_point":          round(pivot_point, 2)         if pivot_point         else None,
+            "pivotPoint":           round(pivot_point, 2)         if pivot_point         else None,
             "maFast":               round(maMid,  2)              if maMid               else None,
             "maSlow":               round(maSlow, 2)              if maSlow              else None,
             "position52w":          position52w,

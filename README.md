@@ -1,8 +1,8 @@
-# 📈 Pro Stock Analyzer v15.2
+# 📈 Pro Stock Analyzer v15.3
 
 > **Institutional-Grade Algorithmic Trading Signal Engine for NSE (India)**
 
-![Version](https://img.shields.io/badge/version-15.2-blue)
+![Version](https://img.shields.io/badge/version-15.3-blue)
 ![Market](https://img.shields.io/badge/market-NSE%20India-orange)
 ![Stack](https://img.shields.io/badge/stack-Python%20%7C%20FastAPI%20%7C%20SQLite-green)
 ![Status](https://img.shields.io/badge/status-Production-brightgreen)
@@ -30,6 +30,7 @@
    - [Phase 9 — Target Geometry](#phase-9--target-geometry)
    - [Phase 10 — Multibagger Isolation](#phase-10--multibagger-isolation)
    - [Phase 11 — Logic Refinement](#phase-11--logic-refinement)
+   - [Phase 12 — Execution Schema Alignment](#phase-12--execution-schema-alignment)
 5. [Multi-Layer Gating System](#multi-layer-gating-system)
 6. [Config Architecture](#config-architecture)
 7. [Pattern Library](#pattern-library-1)
@@ -135,6 +136,40 @@ The core philosophy distinguishes stock *quality* (structural eligibility — "i
        └──────────────────────────────────┘
 ```
 
+Clarification: Layer 2 rescue applies only to RR-type failures sourced from structural targets. ATR-fallback trades are not rescued, and either high confidence or strong T2 asymmetry can justify the rescue.
+
+---
+
+## Setup Ranking & Priority Hierarchy
+
+The system uses a weighted ranking model to surface the highest-conviction setup for a given symbol. This selection determines which trade plan is ultimately presented on the dashboard.
+
+### 1. Priority Boost (Pattern-Driven)
+For setups defined as "pattern-driven" (containing a `pattern_presence_multiplier`), finding a high-quality primary pattern adds a priority bonus to ensure pattern confirmation drives the trade selection.
+
+- **Condition**: Pattern `found == True` AND (`score ≥ 6.0` OR `quality == "high"`).
+- **Math**: `priority_bonus = (multiplier - 1.0) * 20` points.
+- **Output**: `boosted_priority` (capped at 100.0).
+
+### 2. Fit Quality Blend
+The "fit" of a setup is no longer just about technical indicators. It now includes the performance quality of the driving pattern. All three components are independently normalized to 0–100 before blending, mirroring the strategy scoring normalization pattern.
+
+| Component | Weight | Description |
+|---|---|---|
+| **Technical** (C1) | 60% | Gate pass ratio for RSI, ADX, trendStrength, rvol, etc. |
+| **Pattern Quality** (C2) | 25% | Detected quality score (`raw.score` 0–10 → normalized 0–100) of the first found PRIMARY pattern |
+| **Fundamental** (C3) | 15% | Gate pass ratio for ROE, debt-to-equity, etc. (0% contribution when `require_fundamentals: False`) |
+
+> [!NOTE]
+> For indicator-led setups that don't confirm a PRIMARY pattern at runtime, C2 = 0 and the effective ceiling is `60 + 15 = 75`. For pattern-driven setups with no fundamental requirement, C3 = 0 and ceiling is `60 + 25 = 85`. Only setups with both pattern confirmation and fundamental requirements (`DEEP_VALUE_PLAY`, `VALUE_TURNAROUND`, `QUALITY_ACCUMULATION_DOWNTREND`) can reach 100.
+
+### 3. Composite Final Score
+Setups are ranked using a `70/30` blend of importance and current-state fit:
+`composite_score = (boosted_priority * 0.7) + (fit_score * 0.3)`
+
+> [!TIP]
+> This hierarchy ensures that a pattern-confirmed breakout will almost always rank higher than a generic indicator setup, even if the indicator setup has a slightly higher base priority.
+
 ---
 
 ## Modernization & Refactoring (v15.1 Wash)
@@ -154,7 +189,9 @@ The codebase has undergone a significant architectural "wash" across 9 major aud
 | **P9** | **Refinement** | Target Geometry & RR Integrity | 0 UnboundLocalErrors; unified bars_per_unit |
 | **P10**| **Multibagger** | Scale Normalization (Crores) | Accurate fundamental scoring for large-cap MBs |
 | **P11**| **Signal Logic**| Neutral-to-WATCH standard | Removed 'HOLD' leakage for neutral trends |
+| **P12**| **Trade Signal Path**| Canonical Execution Schema | Single source of truth for targets; decoupled sizing failures |
 | **v15.2**| **Stability**| Session Management & Bug Fixes | Robust parallel writes; 0 NameErrors in scheduler |
+| **v15.3**| **Setup Ranking**| Pattern-Informed Setup Selection | Patterns inform ranking; normalized fit scoring; dead config keys enforced |
 
 ---
 
@@ -508,6 +545,37 @@ Iterates over the filtered horizon set (full mode: all three trading horizons; s
 
 Best-horizon selection uses only `TRADING_HORIZONS = {"intraday", "short_term", "long_term"}`. Multibagger scores are populated from the DB (weekly cycle) rather than recomputed on demand.
 
+---
+
+### The 4-Layer Scoring Hierarchy (v15.2)
+
+The signal engine processes every stock through four distinct mathematical layers to decouple **Asset Quality** (should I buy this?) from **Execution Timing** (can I buy it now?).
+
+| Layer | Score Name | Weight / Input | Question Answered |
+| :--- | :--- | :--- | :--- |
+| **L1** | **Structural Score** | 3-Pillar Blend (Tech/Fund/Hybrid) | Is the stock's foundation healthy? |
+| **L2** | **Opportunity Score** | Setup Priority + Strategy Fit | Is there a high-probability pattern active? |
+| **L3** | **Eligibility Score** | `L1 × 0.70 + L2 × 0.30` | **[UI Pill]** Is this stock a high-quality candidate? |
+| **L4** | **Final Score** | `L3` + Confidence Adjustments | **[UI Gauge]** What is the conviction for a trade *today*? |
+
+---
+
+### UI Display Mapping (`result.html`)
+
+The frontend translates these architectural layers into a simplified "Traffic Light" system for high-speed decision making.
+
+| UI Component | Variable Reference | Layer Represented | Semantic Meaning |
+| :--- | :--- | :--- | :--- |
+| **The 4 Pills** | `all_horizon_scores` | **Eligibility Score** | Comparative attractiveness across timeframes. |
+| **Profile Badge** | `profile_signal` | **Eligibility Level** | **Asset Quality**: `STRONG` / `MODERATE` / `WEAK` |
+| **Signal Badge** | `trade_signal` | **Execution Decision** | **Timing**: `BUY` / `SELL` / `WATCH` / `BLOCKED` |
+| **Main Gauge** | `final_score` | **Final Score** | Total system conviction (out of 10). |
+
+> [!NOTE]
+> **Decoupling in Action**: A stock can have a `STRONG` Profile (Quality) but a `BLOCKED` Signal (Timing). This happens when a high-quality stock is too far from its Stop Loss or has a poor Risk:Reward ratio at the current market price.
+
+---
+
 #### `generate_trade_plan()`
 
 Eight internal stages:
@@ -601,13 +669,22 @@ Reads ADX regime thresholds from `rr_regime_adjustments` config (not hardcoded).
 Reads RSI/MACD thresholds from `momentum_thresholds` config per horizon. Derives divergence severity using adaptive multiples (3× decel threshold = severe, 1.5× = moderate).
 
 **`_classify_setup()`**  
-Evaluates all non-blocked setups. Rejects on: horizon block, pattern detection failure, fundamental gate failure, technical gate failure, context requirement failure, fit score < `MIN_FIT_SCORE` (10.0). Ranks by composite score. Exposes top-3 candidates for pattern validation.
+Evaluates all non-blocked setups. Rejects on: horizon block, pattern detection failure, `min_pattern_quality` threshold failure, fundamental gate failure, technical gate failure, context requirement failure, fit score < `MIN_FIT_SCORE` (55.0) or per-setup `min_setup_score` (whichever is stricter).
+
+**NEW: Pattern-Driven Priority Boost**:
+If a setup's **PRIMARY** pattern is detected with sufficient quality (`score ≥ 6.0` or `quality == "high"`), the system applies a **Priority Boost** using the `pattern_presence_multiplier` from `setup_pattern_matrix_config.py`.
+- **Formula**: `boosted_priority = min(setup_priority + priority_bonus, 100.0)`
+- **Bonus**: `(multiplier - 1.0) * 20` (where 20 is the `PRIORITY_BOOST_RANGE`)
+
+Ranks by **composite_score**:
+- `70% Priority (boosted) + 30% Fit Quality`
+Exposes the top-3 candidates for further pattern validation.
 
 **`_calculate_confidence()`**  
-Full pipeline with 10 steps — see [Gating Layer 4](#layer-4--confidence-calculation). Execution penalties are **never** scaled by the divergence multiplier (independent dimensions). B8 ceiling (cap at 90 when `rvol ≤ 2.0`) applies **only** to bullish breakout/momentum setups.
+Full pipeline with 10 steps — see [Gating Layer 4](#layer-4--confidence-calculation). Execution penalties are **never** scaled by the divergence multiplier (independent dimensions). Pattern-aware confidence modifiers can reference detected pattern names directly because the resolver injects found-pattern quality into the confidence namespace. B8 ceiling (cap at 90 when `rvol ≤ 2.0`) applies to bullish breakout/momentum contexts and is excluded from bearish / accumulation-style setups.
 
 **`_build_risk_candidates()`**  
-Single ATR-based structural baseline. Tags `rr_source` as `"atr_structural"` when primary patterns exist (RR gate deferred to Stage 2) or `"generic_atr"` when no patterns found (RR gate enforced in Stage 1). No capital logic at this stage.
+Single ATR-based structural baseline. Tags `rr_source` as `"atr_structural"` whenever primary patterns exist (RR gate deferred to Stage 2) or `"generic_atr"` when no patterns are available (RR gate enforced in Stage 1). No capital logic at this stage.
 
 **`_finalize_risk_model()`**  
 Dual constraint: `qty_by_risk = risk_per_trade / risk_per_share` vs `qty_by_capital = max_capital / price`. Takes the smaller of the two. Records `limit_reason` (`"max_capital_cap"` or `"risk_target"`) for UI diagnostics.
@@ -652,6 +729,10 @@ Reads `rr_gates` from extractor: `min_t1`, `min_t2`, `min_structural`, `executio
 #### Idempotency Guard
 
 The expiry penalty (`-20` from config `expiry_penalty`) is gated by `_adj["expiry_applied"]` flag in `exec_ctx["confidence_adjustments"]`. Subsequent calls to `enhance_execution_context` on the same context do not stack the penalty.
+
+#### Geometric Target Refinement
+
+When pattern physics are available, `trade_enhancer` refines the baseline ATR targets with measured-move geometry while preserving the resolver's existing execution state. The refinement now supports both `bullishNecklinePattern` and `bearishNecklinePattern`, and merges into the existing `exec_ctx["risk"]` payload instead of replacing it so sizing diagnostics (`quantity`, `capital_required`, `risk_amount`, `sizing_valid`, `rr_source`) remain intact.
 
 ---
 
@@ -854,6 +935,19 @@ Each migration checks `schema_migrations` table for its own name before running.
 
 ---
 
+
+### Phase 12 — Execution Schema Alignment
+
+**Files:** `services/trade_enhancer.py`, `services/signal_engine.py`, `config/config_resolver.py`
+
+Phase 12 finalizes the canonical execution schema to eliminate downstream drift:
+- **Authoritative Execution Targets**: `trade_enhancer` now publishes `entry_price`, `stop_loss`, `targets`, and R:R ratios as authoritative keys replacing raw `exec_ctx["risk"]` reads.
+- **Signal Engine Consumption**: The `generate_trade_plan` explicitly prioritizes the enhanced execution schema to derive UI/execution math without mixing pattern targets with fallback targets.
+- **State Preservation During Geometry**: Pattern-based geometric refinement mutates the existing risk model in-place so downstream sizing fields and `rr_source` diagnostics survive target upgrades.
+- **Execution Diagnostics**: Isolated failure semantics by decoupling geometric validity (e.g. SL validation) from position-sizing limits (zero quantity caps due to `max_capital`). This stops false "SL calculation failed" outputs during quantity failures.
+
+---
+
 ## Multi-Layer Gating System
 
 The system evaluates seven independent gate layers in strict order. No lower layer can override a higher layer's block decision.
@@ -926,7 +1020,8 @@ Step 7: Apply horizon.conditional_adjustments (setup-specific penalties/bonuses)
 Step 8: Apply setup validation_modifiers (per-setup penalties/bonuses from matrix)
 Step 9: Apply execution rule penalties (ADDITIVE, NOT scaled by divergence multiplier)
         Penalties: -5/warning, -15/violation, ±risk_score adjustment
-Step 10: Clamp to [floor, ceiling]
+Step 10: **Pattern Quality Injection**: Higher-quality found patterns (quality ≥ 7.0) inject a precision-weighted bonus into the confidence namespace.
+Step 11: Clamp to [floor, ceiling]
          B8 ceiling: cap at 90 when rvol ≤ 2.0 AND setup is bullish breakout/momentum
 ```
 
@@ -1026,7 +1121,15 @@ state = resolver.extractor.validate_extractor_state()
 # }
 ```
 
-Initialization fails hard (`RuntimeError`) if confidence config is missing or if the extractor state is invalid. This prevents silent degradation at startup.
+Initialization fails hard (`RuntimeError`) if confidence config is missing or if the extractor state is invalid (contains `errors`). This prevents silent degradation at startup.
+
+### Configuration Integrity & Invariants
+
+The `QueryOptimizedExtractor` enforces several architectural invariants at startup to ensure configuration purity:
+
+1. **`PATTERN_` Prefix Invariant (Warning)**: Any setup name starting with `PATTERN_` must declare a `pattern_presence_multiplier > 1.0`. Setups with this prefix that lack the multiplier will trigger a warning, as they will not receive the intended priority boost in `_classify_setup`.
+2. **Strategy-Setup Registry Integrity (Error)**: All setups referenced in a strategy's `preferred_setups` or `avoid_setups` must exist in the `SETUP_PATTERN_MATRIX`. Typos here trigger a hard error to prevent silent runtime mismatches.
+3. **Penalty Sign Guard (Error)**: All confidence penalties defined in `confidence_config.py` must be negative. Positive penalties in a penalty-defined band will trigger a `ConfigurationError` to prevent unintended boosts.
 
 ---
 
@@ -1221,7 +1324,7 @@ The divergence multiplier is a signal-quality dimension (is the price/RSI relati
 
 ### 7. B8 Ceiling — Scoped to Bullish Breakout/Momentum Only
 
-The confidence ceiling of 90 when `rvol ≤ 2.0` is an institutional validation rule: a breakout without volume confirmation cannot be high-conviction. This ceiling is deliberately excluded from bearish setups (`BREAKDOWN`, `BEAR_TREND_FOLLOWING`, `MOMENTUM_FLOW_BREAKDOWN`) and from structural/value setups where volume is intentionally low during accumulation phases.
+The confidence ceiling of 90 when `rvol ≤ 2.0` is an institutional validation rule: a bullish expansion setup without volume confirmation cannot be high-conviction. The resolver applies this to bullish breakout / momentum contexts broadly, not just setup names containing the literal word `BREAKOUT`. The ceiling is deliberately excluded from bearish setups (`BREAKDOWN`, `BEAR_TREND_FOLLOWING`, `MOMENTUM_FLOW_BREAKDOWN`) and from structural/value setups where volume is intentionally low during accumulation phases.
 
 ### 8. Direction Conflict Gate Runs Unconditionally
 
@@ -1504,8 +1607,11 @@ Edit `master_config.py` → `global.risk_management.rr_gates` for global minimum
 ### Adding a New Setup
 
 1. Add entry in `SETUP_PATTERN_MATRIX` with all required fields: `patterns`, `classification_rules`, `default_priority`, `context_requirements`, `validation_modifiers`, `horizon_overrides`
-2. Optionally add horizon priority override in `master_config.calculation_engine.horizon_priority_overrides`
-3. Optionally add confidence floor in `confidence_config.global.setup_baseline_floors`
+2. If the setup name starts with `PATTERN_`, add `pattern_presence_multiplier` (e.g. `1.15`–`1.25`). **This is enforced at startup** — `validate_extractor_state()` in `QueryOptimizedExtractor` emits a warning for any `PATTERN_*` setup missing this field, and `validate_strategy_matrix(extractor.get_all_setup_names())` will catch it as an error if called during development.
+3. Add `min_pattern_quality` (0–10 scale, e.g. `7.5`) and `min_setup_score` (0–100 normalized scale, e.g. `75`) to control admission thresholds for the setup. For `PATTERN_*` setups, `min_setup_score` should be ≤ 85 (the ceiling for no-fundamental pattern setups). For setups with empty `patterns.PRIMARY` lists, keep `min_setup_score` ≤ 55 since their fit ceiling is 60.
+4. Optionally add horizon priority override in `master_config.calculation_engine.horizon_priority_overrides`
+5. Optionally add confidence floor in `confidence_config.global.setup_baseline_floors`
+6. Add the new setup name to `preferred_setups` or `avoid_setups` in any relevant strategies in `strategy_matrix_config.py`. Cross-references are validated by `validate_extractor_state()` at startup — a typo here is a hard error.
 
 ---
 
@@ -1546,6 +1652,19 @@ Write contention on the `signal_cache` has been eliminated. Phase 9 moved warmer
 - **API Versioning:** `/api/v1/scores` and `/api/v1/corporate_actions` added with `X-API-Version` response headers.
 - **Template stability:** `structural_gates` Jinja2 access is null-guarded with `{% if eval_ctx.structural_gates %}`.
 - **Multibagger zeros:** Replaced hardcoded category score keys with a dynamic loop.
+
+### ✅ v15.3 — Pattern-Informed Setup Selection (RESOLVED)
+
+Five related issues in `_classify_setup()` and `_calculate_setup_fit_quality()` resolved together:
+
+- **Scale mismatch in composite score:** `priority × 1.25 = 122.5` was being blended with `fit_score` (0–100) in the same formula. Fixed: pattern boost is now additive and bounded — `priority_bonus = (multiplier - 1.0) × 20`, clamped at 100, mirroring the strategy `horizon_bonus` pattern exactly.
+- **Pattern quality blind spot in fit score:** `_calculate_setup_fit_quality` used a flat additive formula with a hardcoded base of 50, producing inflated scores and losing pattern quality gradient. Fixed: three-component normalized blend (`C1×0.60 + C2×0.25 + C3×0.15`) mirroring strategy scoring normalization. All components are independently normalized to 0–100 before blending.
+- **`found` read from wrong level:** `pat_data.get("found")` returned `None` for all fused patterns because `found` lives inside `raw`, not at the top level. Fixed: all three pattern score access sites now unwrap `raw` first (`raw = pat_data.get("raw", pat_data)`) before reading `found` and `score`, consistent with `_evaluate_pattern_detection`.
+- **`min_pattern_quality` was a dead config key:** Declared per-setup (e.g. `8.5` for DARVAS) but never enforced — a darvasBox with score `2.0` passed the boolean gate and entered candidate scoring. Fixed: enforced in `_classify_setup()` immediately after `pattern_detection` passes.
+- **`min_setup_score` was a dead config key:** Per-setup thresholds (e.g. `85` for DARVAS, `80` for VCP) were declared but `MIN_FIT_SCORE = 55.0` was the only enforced floor. Fixed: `effective_min = max(min_setup_score, MIN_FIT_SCORE)` now applied after fit quality is computed.
+- **`_validate_patterns` flat affinity scoring:** `confirm_score = 50 if primary_found` gave identical score to a primary pattern with score `2.0` and `9.5`. Fixed: quality-weighted contribution (`pat_quality / 10 × 50`). Direction conflict detection replaced fragile `"bullish" in p.lower()` substring check with structured `pat_ctx.physics.get("direction")` lookup.
+- **`PATTERN_STRIKE_REVERSAL` missing multiplier:** Only `PATTERN_*` setup without `pattern_presence_multiplier`, silently behaving as indicator-led. Fixed: `1.15` added, consistent with `PATTERN_GOLDEN_CROSS`.
+- **Cross-reference validation added:** `validate_extractor_state()` in `QueryOptimizedExtractor` now checks (1) all `PATTERN_*` setups have `pattern_presence_multiplier > 1.0` (warning), and (2) all `preferred_setups` / `avoid_setups` strings in `strategy_matrix_config.py` exist in `SETUP_PATTERN_MATRIX` (hard error). Both checks run at every server startup via `ConfigResolver.__init__()`.
 
 ---
 
@@ -1647,4 +1766,4 @@ For integration testing, initialize `ConfigResolver` with `MASTER_CONFIG` for th
 
 ---
 
-*Pro Stock Analyzer v15.1 — NSE India — Quantitative Trading System*
+*Pro Stock Analyzer v15.3 — NSE India — Quantitative Trading System*

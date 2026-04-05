@@ -83,6 +83,9 @@ class QueryOptimizedExtractor:
         """Proxy to base_extractor.get_strict() to protect layer boundary."""
         return self.base_extractor.get_strict(key)
         
+    def get_config_value(self, section: str, setup: str, default: Any, type_hint: str = "float") -> Any:
+        """Proxy to base_extractor.get_config_value() to protect layer boundary."""
+        return self.base_extractor.get_config_value(section, setup, default, type_hint)
 
     def _compute_config_hash(self, config: Dict) -> str:
         """
@@ -299,6 +302,11 @@ class QueryOptimizedExtractor:
             "bullish_slope_min": 0.05
         })
 
+
+    # ========================================================================
+    # EXECUTION RULES & OVERRIDES
+    # ========================================================================
+
     def get_min_tradeable_confidence(self) -> float:
         """
         Horizon-level confidence floor to even consider trades.
@@ -493,11 +501,11 @@ class QueryOptimizedExtractor:
         divergence = universal.get("divergence_penalties", {})
         results["divergence_penalties"] = {}
         
-        # ✅ PATCH A: Honour the pre-computed divergence_type from detect_divergence().
-        # If the upstream resolver already determined divergence_type='none', skip all
+        # ✅ PATCH A: Honour the pre-computed divergenceType from detect_divergence().
+        # If the upstream resolver already determined divergenceType='none', skip all
         # penalty gate evaluation — prevents rsislope gate from double-counting momentum
         # deceleration as a structural divergence.
-        precomputed_divergence_type = eval_data.get("divergence_type", None)
+        precomputed_divergence_type = eval_data.get("divergenceType", None)
         skip_divergence_eval = (precomputed_divergence_type == "none")
 
         for severity, div_config in divergence.items():
@@ -829,6 +837,12 @@ class QueryOptimizedExtractor:
             ("horizon", horizon_gates),
             ("setup_merged", setup_gates),   # ← renamed, drop dead setup_horizon entry
         ]:
+            if source_gates and "adx" in source_gates:
+                self.logger.info(f"[GATE_DEBUG] Setup '{setup_type}' | Source '{source_name}' has adx: {source_gates['adx']}")
+            elif source_gates:
+                self.logger.info(f"[GATE_DEBUG] Setup '{setup_type}' | Source '{source_name}' lacks adx. Keys: {list(source_gates.keys())}")
+            else:
+                self.logger.info(f"[GATE_DEBUG] Setup '{setup_type}' | Source '{source_name}' is EMPTY")
             for metric, threshold in source_gates.items():
                 if threshold is not None:
                     normalized = self.normalize_threshold(threshold)
@@ -1188,10 +1202,15 @@ class QueryOptimizedExtractor:
         """
         # ✅ Finding 1.5-B FIX: Fail-Fast if setup is unknown
         if f"setup_{setup_name}" not in self.base_extractor.sections:
+            if setup_name == "GENERIC":
+                # Special case for global structural gates check
+                return {"technical": {}, "fundamental": {}, "opportunity": {}}
             from config.config_extractor import ConfigurationError
             msg = f"ARCHITECTURAL VIOLATION: Requested context requirements for UNKNOWN setup '{setup_name}'"
             self.logger.error(msg)
             raise ConfigurationError(msg)
+        
+        self.logger.info(f"[CONTEXT_DEBUG] Resolving context for: {setup_name}")
 
         # Get base context requirements
         base_context = self.base_extractor.get(f"setup_context_{setup_name}", {})
@@ -1355,7 +1374,8 @@ class QueryOptimizedExtractor:
             Weights dict for current horizon
         """
         # ✅ P0-1 FIX: Unified hybrid composition access via base_extractor
-        return self.base_extractor.get("hybrid_pillar_composition", {})
+        all_weights = self.base_extractor.get("hybrid_pillar_composition", {})
+        return all_weights.get(self.horizon, {})
     # ========================================================================
     # SETUP QUERIES
     # ========================================================================
@@ -1412,6 +1432,43 @@ class QueryOptimizedExtractor:
                 return {}
             
             return setup_config.get("classification_rules", {})
+    def get_pattern_boost_config(self, setup_name: str) -> Dict[str, Any]:
+        """
+        Get pattern presence boost config for a setup.
+
+        Returns the setup's PRIMARY pattern list (from the existing 'patterns' key —
+        no duplication) and the optional 'pattern_presence_multiplier'.
+
+        Design: The PRIMARY list already declares which patterns are authoritative
+        for a setup. Reusing it here avoids a redundant 'affiliated_patterns' field.
+        Only pattern-driven setups define 'pattern_presence_multiplier'; for all
+        indicator-led setups this returns multiplier=1.0 and an empty list, so the
+        boost logic in _classify_setup is a clean no-op.
+
+        Returns:
+            {
+                "primary_patterns": ["darvasBox"],   # horizon-filtered PRIMARY list
+                "multiplier": 1.20                   # 1.0 if not defined
+            }
+        """
+        setup_config = self.base_extractor.get(f"setup_{setup_name}", {})
+        if not setup_config:
+            return {"primary_patterns": [], "multiplier": 1.0}
+
+        # Reuse the existing patterns.PRIMARY — filter by horizon support
+        raw_primary = setup_config.get("patterns", {}).get("PRIMARY", [])
+        horizon_primary = [
+            p for p in raw_primary
+            if self.is_pattern_supported_for_horizon(p)
+        ]
+
+        multiplier = setup_config.get("pattern_presence_multiplier", 1.0)
+
+        return {
+            "primary_patterns": horizon_primary,
+            "multiplier": float(multiplier)
+        }
+
     # ========================================================================
     # RISK MANAGEMENT QUERIES (Unchanged)
     # ========================================================================
@@ -1435,6 +1492,14 @@ class QueryOptimizedExtractor:
             "risk_management",
             "horizon_risk_management"
         )
+
+    def get_spread_adjustment_config(self) -> Dict[str, Any]:
+        """
+        Get spread-adjustment config from calculation_engine.
+
+        Canonical source: global.calculation_engine.spread_adjustment
+        """
+        return self.base_extractor.get("spread_adjustment", {})
         
 
     def is_pattern_supported_for_horizon(self, pattern_name: str) -> bool:
@@ -1873,61 +1938,79 @@ class QueryOptimizedExtractor:
         Returns:
             Flattened namespace for safe eval
 
-        NEW: Exposes fundamental category scores as buckets
+        NEW: 
+        1. Exposes fundamental category scores as buckets
+        2. ✅ P3-1 FIX: Injects snake_case aliases for all camelCase keys
+           to support the new GATE_METRIC_REGISTRY casing standard.
         """
         namespace = {}
         
-        for key, value in data.items():
-            if isinstance(value, dict):
-                # Extract scalar from nested dict
-                # Priority: value > raw > score > dict itself
-                # ✅ Phase 3 P3-4 FIX: Ensure 'value' is NOT None before shadowing.
-                # If 'value' is None but 'raw' exists, 'None' would shadow the valid 'raw' decimal.
-                namespace[key] = (
-                    value.get("value") if value.get("value") is not None and not isinstance(value.get("value"), str) else
-                    value.get("raw") if "raw" in value else
-                    value.get("score") if "score" in value else
-                    value  # Keep dict if no scalar found
+        def _get_scalar(v):
+            if isinstance(v, dict):
+                return (
+                    v.get("value") if v.get("value") is not None and not isinstance(v.get("value"), str) else
+                    v.get("raw") if "raw" in v else
+                    v.get("score") if "score" in v else
+                    v
                 )
-            else:
-                namespace[key] = value
+            return v
 
-        # ✅ FIXED: Flatten 'indicators' and 'price_data' dicts for condition checks
+        # 1. Process top-level data
+        for key, value in data.items():
+            namespace[key] = _get_scalar(value)
+
+        # 2. Flatten 'indicators' and 'price_data'
         for nested_key in ["indicators", "price_data"]:
             nested = data.get(nested_key, {})
             if isinstance(nested, dict):
                 for k, v in nested.items():
-                    if k not in namespace:  # don't override top-level
-                        namespace[k] = (
-                            v.get("value") if isinstance(v, dict) and v.get("value") is not None and not isinstance(v.get("value"), str) else
-                            v.get("raw") if isinstance(v, dict) and "raw" in v else
-                            v.get("score") if isinstance(v, dict) and "score" in v else
-                            v
-                        )
+                    if k not in namespace:
+                        namespace[k] = _get_scalar(v)
         
-        # Expose fundamental category scores as buckets
+        # 3. Expose fundamental category scores as buckets
         fundamental_data = data.get("fundamentals", data.get("fundamental", {}))
         if isinstance(fundamental_data, dict):
             if "score" in fundamental_data:
                 namespace["fundamentalScore"] = fundamental_data.get("score", 0.0)
+                namespace["fundamental_score"] = fundamental_data.get("score", 0.0) # alias
             
             category_scores = fundamental_data.get("category_scores", {})
             if category_scores:
-                namespace["fund_valuation_bucket"] = category_scores.get("valuation", {}).get("score")
-                namespace["fund_profitability_bucket"] = category_scores.get("profitability", {}).get("score")
-                namespace["fund_growth_bucket"] = category_scores.get("growth", {}).get("score")
-                namespace["fund_health_bucket"] = category_scores.get("financial_health", {}).get("score")
-                namespace["fund_quality_bucket"] = category_scores.get("quality", {}).get("score")
-                namespace["fund_ownership_bucket"] = category_scores.get("ownership", {}).get("score")
-                namespace["fund_dividend_bucket"] = category_scores.get("dividend", {}).get("score")
-                namespace["fund_market_bucket"] = category_scores.get("market", {}).get("score")
+                # Map specific buckets
+                buckets = {
+                    "valuation": "fund_valuation_bucket",
+                    "profitability": "fund_profitability_bucket",
+                    "growth": "fund_growth_bucket",
+                    "financial_health": "fund_health_bucket",
+                    "quality": "fund_quality_bucket",
+                    "ownership": "fund_ownership_bucket",
+                    "dividend": "fund_dividend_bucket",
+                    "market": "fund_market_bucket"
+                }
+                for internal_key, ns_key in buckets.items():
+                    namespace[ns_key] = category_scores.get(internal_key, {}).get("score")
         
         technical_data = data.get("technical", {})
         if isinstance(technical_data, dict):
             if "score" in technical_data:
                 namespace["technicalScore"] = technical_data.get("score", 0.0)
+                namespace["technical_score"] = technical_data.get("score", 0.0) # alias
+
+        # 4. ✅ Phase 3 P3-1 FIX: Inject snake_case aliases for ALL keys
+        # This allows the registry to use 'ma_trend_signal' while indicators use 'maTrendSignal'
+        alias_updates = {}
+        for key in list(namespace.keys()):
+            # Only convert if it looks like camelCase (has uppercase)
+            if any(c.isupper() for c in key):
+                # Simple regex-less camel to snake conversion
+                snake_key = "".join(["_" + c.lower() if c.isupper() else c for c in key]).lstrip("_")
+                if snake_key not in namespace:
+                    alias_updates[snake_key] = namespace[key]
+        
+        namespace.update(alias_updates)
         
         return namespace
+
     def get_technical_score(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
         """
         Proxy for technical score calculation.
@@ -2308,6 +2391,33 @@ class QueryOptimizedExtractor:
             if not self.base_extractor.get(section):
                 error_msg = f"Missing section {section}"
                 errors.append(error_msg)
+
+        # ── PATTERN_* prefix invariant ───────────────────────────────────────
+        # Convention: every PATTERN_* setup must declare pattern_presence_multiplier
+        # so the priority boost in _classify_setup fires correctly. A PATTERN_* setup
+        # without this key silently behaves like an indicator-led setup (no boost),
+        # which defeats the purpose of the pattern-driven classification.
+        setup_matrix = self.base_extractor.get("setup_pattern_matrix", {})
+        for setup_name, setup_cfg in setup_matrix.items():
+            if setup_name.startswith("PATTERN_"):
+                mult = setup_cfg.get("pattern_presence_multiplier", 1.0)
+                if mult == 1.0:
+                    warnings.append(
+                        f"{setup_name}: PATTERN_* prefix but no pattern_presence_multiplier "
+                        f"— will receive no priority boost in _classify_setup"
+                    )
+
+        # ── strategy preferred_setups / avoid_setups cross-reference ─────────
+        # Validate that all setup names referenced in strategy_matrix actually exist
+        # in setup_pattern_matrix. A typo here silently produces no match at runtime.
+        strategy_matrix = self.base_extractor.get("strategy_matrix", {})
+        for strategy_name, strategy_cfg in strategy_matrix.items():
+            for field in ("preferred_setups", "avoid_setups"):
+                for ref in strategy_cfg.get(field, []):
+                    if ref not in setup_matrix:
+                        errors.append(
+                            f"strategy.{strategy_name}.{field}: '{ref}' not in SETUP_PATTERN_MATRIX"
+                        )
 
         return {
             "horizon": self.horizon,

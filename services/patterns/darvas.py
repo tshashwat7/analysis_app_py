@@ -31,7 +31,7 @@ class DarvasBoxPattern(BasePattern):
         look_end = -self.box_length
         
         box_high = recent["High"].iloc[look_start:look_end].max()
-        box_low = recent["Low"].iloc[look_start:look_end].min()
+        boxLow = recent["Low"].iloc[look_start:look_end].min()
         
         # Valid Box Criteria:
         # 1. Price recently consolidated inside this range (Last 5 days)
@@ -40,7 +40,7 @@ class DarvasBoxPattern(BasePattern):
         
         # FIX 2: Tighter Consolidation (1% tolerance instead of 2%)
         is_consolidating = (last_n_highs.max() <= box_high * 1.01) and \
-                           (last_n_lows.min() >= box_low * 0.99)
+                           (last_n_lows.min() >= boxLow * 0.99)
                            
         # Breakout Check
         is_breakout = current_close > box_high
@@ -73,8 +73,8 @@ class DarvasBoxPattern(BasePattern):
 
             _fi = max(0, formation_index)  # ✅ P1-1 FIX: safe index fallback
             result["meta"] = {
-                "box_high": round(box_high, 2),
-                "box_low": round(box_low, 2),
+                "boxHigh": round(box_high, 2),
+                "boxLow": round(boxLow, 2),
                 "type": "bullish",
                 "breakout_vol": bool(has_volume),
                 "age_candles": len(df) - formation_index,
@@ -94,11 +94,11 @@ class DarvasBoxPattern(BasePattern):
             }
             # Calculate invalidation level (varies by horizon)
             if horizon == "intraday":
-                invalidation_level = box_low * 0.998
+                invalidation_level = boxLow * 0.998
             elif horizon == "short_term":
-                invalidation_level = box_low * 0.995
+                invalidation_level = boxLow * 0.995
             else:
-                invalidation_level = box_low * 0.99
+                invalidation_level = boxLow * 0.99
 
             # Calculate entry trigger (varies by horizon)
             if horizon == "intraday":
@@ -118,7 +118,7 @@ class DarvasBoxPattern(BasePattern):
             result["meta"].update({
                 "bar_index": len(df),
                 # Analytics
-                "box_height_pct": round(((box_high - box_low) / box_low) * 100, 2),
+                "box_height_pct": round(((box_high - boxLow) / boxLow) * 100, 2),
                 # Entry/Exit Levels (Critical)
                 "invalidation_level": round(invalidation_level, 2),
                 "entry_trigger_price": round(entry_trigger_price, 2),

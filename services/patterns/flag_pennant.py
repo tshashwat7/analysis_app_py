@@ -104,9 +104,10 @@ class FlagPennantPattern(BasePattern):
                 "bar_index": len(df),
                 "type": "bullish",
                 # Entry/Exit Levels
-                "flag_low": round(flag_low, 2),
-                "flag_high": round(flag_high, 2),
+                "flagLow": round(flag_low, 2),
+                "flagHigh": round(flag_high, 2),
                 "pole_base": float(pole_start_price),
+                "pole_top": float(pole_end_price),
                 
                 # Analytics
                 "pole_gain_pct": round(pole_return * 100, 2),

@@ -1588,12 +1588,36 @@ async def analyze_common(
 
                 def _enrich_setup_entry(entry):
                     stype = entry.get("type", "GENERIC")
-                    meta  = SETUP_META.get(stype, {"label": stype.replace("_", " ").title(), "group": "Other", "icon": "bi-circle"})
+                    # ── P15 FIX: Dynamic Metadata Mapping ───────────────────────
+                    # Support new setups/patterns without manual UI dictionary updates.
+                    # 1. Start with the hardcoded mapping (for premium icons/labels)
+                    meta = SETUP_META.get(stype)
+
+                    if meta:
+                        label = meta.get("label", stype)
+                        group = meta.get("group", "Other")
+                        icon  = meta.get("icon", "bi-lightning-charge")
+                    else:
+                        # 2. Dynamic Fallback: Convert INTERNAL_KEY to "Title Case"
+                        import re
+                        raw_name = stype.replace("PATTERN_", "").replace("SET_", "").replace("_", " ")
+                        # Handle CamelCase if present
+                        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', raw_name).title()
+                        group = "Other"
+                        icon  = "bi-lightning-charge"  # Standard dynamic icon
+
                     raw_reason = entry.get("reason", "")
-                    # Prefer the detailed reason (e.g. "rsi 68.80 > max 35") over generic bucket
-                    friendly   = REASON_LABELS.get(raw_reason, raw_reason.replace("_", " ").title())
-                    return {**entry, "label": meta["label"], "group": meta["group"],
-                            "icon": meta["icon"], "reason_label": friendly, "reason_raw": raw_reason}
+                    # Prefer detailed reason if available; fall back to labeled generic
+                    friendly = REASON_LABELS.get(raw_reason, raw_reason.replace("_", " ").title())
+                    
+                    return {
+                        **entry, 
+                        "label": label, 
+                        "group": group, 
+                        "icon": icon, 
+                        "reason_label": friendly, 
+                        "reason_raw": raw_reason
+                    }
 
                 enriched_candidates = [_enrich_setup_entry(c) for c in raw_setup.get("candidates", [])]
                 enriched_rejected   = [_enrich_setup_entry(r) for r in raw_setup.get("rejected",   [])]

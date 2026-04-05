@@ -163,7 +163,7 @@ def compute_rsi(df: pd.DataFrame, length: int = 14) -> Dict[str, Dict[str, Any]]
 
         return {
             "rsi": {"value": round(val, 2), "score": score, "desc": zone},
-            "rsislope": {"value": round(slope_val, 2), "score": 0, "desc": f"Slope {slope_val:.2f}"}
+            "rsiSlope": {"value": round(slope_val, 2), "score": 0, "desc": f"Slope {slope_val:.2f}"}
         }
     return _wrap_calc(_inner, "RSI")
 
@@ -312,8 +312,8 @@ def compute_macd(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
             "macd": {"value": round(macd_val, 2), "score": score, "desc": f"macd -> {macd_val:.2f}"},
             "macdCross": {"value": cross, "score": score, "desc": f"macdCross -> {cross}"},
             "macdHistZ": {"value": round(hist_z, 4), "score": hist_score, "desc": "MACD Hist Z-Score"},
-            "macdhistogram": {"value": round(hist_val, 3), "score": hist_strength, "desc": f"Hist {hist_val:.3f}"},
-            "prevmacdhistogram": {"value": round(prev_hist_val, 3), "score": 0, "desc": "Prev Hist"}
+            "macdHistogram": {"value": round(hist_val, 3), "score": hist_strength, "desc": f"Hist {hist_val:.3f}"},
+            "prevMacdHistogram": {"value": round(prev_hist_val, 3), "score": 0, "desc": "Prev Hist"}
         }
     return _wrap_calc(_inner, "MACD")
 
@@ -369,7 +369,7 @@ def compute_bollinger_bands(df: pd.DataFrame, length: int = 20, std_dev: float =
             "bbMid": {"value": round(mid, 2), "score": 0, "desc": f"bbMid -> {mid:.2f}"},
             "bbLow": {"value": round(lower, 2), "score": score, "desc": band},
             "bbWidth": {"value": round(bb_width_val, 2), "raw": bb_width_val, "score": width_score, "desc": width_desc},
-            "bbpercentb": {"value": round(pct_b, 3), "score": 10 if pct_b < 0.2 else 0 if pct_b > 0.8 else 5, "desc": f"bbpercentb -> {pct_b:.3f}"}
+            "bbPercentB": {"value": round(pct_b, 3), "score": 10 if pct_b < 0.2 else 0 if pct_b > 0.8 else 5, "desc": f"bbPercentB -> {pct_b:.3f}"}
         }
     return _wrap_calc(_inner, "Bollinger Bands")
 
@@ -593,7 +593,7 @@ def compute_supertrend(df: pd.DataFrame, length: int = 10, multiplier: float = 3
         return {
             "supertrendSignal": { "value": sig, "score": score, "desc": f"ST ({length},{multiplier}) {sig}"},
             "supertrendValue": {"value": st_level_val, "score": 0, "desc": f"Level {st_level_val}","alias": "SuperTrend Value"},
-            "prev_supertrend": {"value": prev_trend_val if prev_trend_val is not None else 0, "score": 0}
+            "prevSupertrend": {"value": prev_trend_val if prev_trend_val is not None else 0, "score": 0}
         }
     return _wrap_calc(_inner, "SuperTrend")
 
@@ -942,6 +942,8 @@ def compute_ichimoku(symbol: str, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]
             "ichiSpanB": {"value": round(sb, 2), "score": 0},
             "ichiTenkan": {"value": round(tk, 2), "score": 0, "desc": "Conversion Line"},
             "ichiKijun":  {"value": round(kj, 2), "score": 0, "desc": "Base Line"},
+            "ichiChikou": {"value": round(px, 2), "score": 0, "desc": "Lagging Span"},
+            "ichiChikouRef": {"value": round(df["Close"].iloc[-26], 2), "score": 0, "desc": "Ref Price"},
         }
     return _wrap_calc(_inner, "Ichimoku")
 
@@ -1425,18 +1427,18 @@ def compute_indicators(
 
             if len(series) > 1:
                 prev = float(series.iloc[-2])
-                indicators["prev_close"] = {"value": round(prev, 2), "score": 0, "alias": "Prev Close", "desc": "Previous Close"}
+                indicators["prevClose"] = {"value": round(prev, 2), "score": 0, "alias": "Prev Close", "desc": "Previous Close"}
 
             if len(series) > 10:
                 price_10_ago = float(series.iloc[-11]) # -1 is current, -11 is 10 bars ago
-                indicators["price_10_ago"] = {"value": round(price_10_ago, 2), "score": 0}
+                indicators["price10Ago"] = {"value": round(price_10_ago, 2), "score": 0}
                 
                 # Calculate Percentage Slope/Change
                 slope_val = ((price - price_10_ago) / price_10_ago) * 100
-                indicators["price_slope"] = {"value": round(slope_val, 2), "score": 0, "alias": "Price Slope", "desc": "10-period % change" }
+                indicators["priceSlope"] = {"value": round(slope_val, 2), "score": 0, "alias": "Price Slope", "desc": "10-period % change" }
             else:
                 # Fallback if history is too short (fewer than 10 bars)
-                indicators["price_slope"] = {"value": 0.0, "score": 0}
+                indicators["priceSlope"] = {"value": 0.0, "score": 0}
                 logger.debug(f"[{symbol}] Price slope skipped: insufficient history ({len(series)} bars)")
 
         except Exception as e:
@@ -1558,15 +1560,15 @@ def compute_indicators(
 """
 indicators_keys = {
     'intraday': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
-        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'ema20', 'ema50', 'ema200',
         'ema_20_50_200_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
         'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','volume','avg_volume_30Days', 'obvDiv',
         'psarTrend', 'psarLevel', 'volSpikeRatio', 'volSpikeSignal', 'hv10', 'hv20',
         'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid', 'bbLow', 'bbWidth',
         'bbpercentb', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
-        'prev_supertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
+        'prevSupertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
         'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower', 'adx', 'adx_signal', 'diPlus',
         'diMinus', 'niftyTrendScore', 'atrDynamic', 'atrPct', 'atrSmaRatio',
         'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal', 'ema20_50Cross',
@@ -1577,15 +1579,15 @@ indicators_keys = {
         'double_top_bottom_intraday', 'technicalScore', 'Horizon','diSpread','hvTrend','trueRangeConsistency','trendStrength','momentumStrength','volatilityQuality'
     ],
     'short_term': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
-        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'ema20', 'ema50', 'ema200',
         'ema_20_50_200_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
         'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'obvDiv', 'rvol','avg_volume_30Days',
         'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
         'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid', 'bbLow', 'bbWidth',
         'bbpercentb', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
-        'prev_supertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
+        'prevSupertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
         'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower', 'adx', 'adx_signal', 'diPlus',
         'diMinus', 'niftyTrendScore', 'atrDynamic', 'atrPct', 'atrSmaRatio',
         'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal', 'ema20_50Cross',
@@ -1595,15 +1597,15 @@ indicators_keys = {
         'technicalScore', 'Horizon'
     ],
     'long_term': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
-        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'wma10', 'wma40', 'wma50',
         'wma_10_40_50_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
         'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','avg_volume_30Days', 'obvDiv',
         'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
         'relStrengthNifty', 'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid',
         'bbLow', 'bbWidth', 'bbpercentb', 'gapPercent', 'wickRejection',
-        'supertrendSignal', 'supertrendValue', 'prev_supertrend', 'ichiCloud', 'ichiSpanA',
+        'supertrendSignal', 'supertrendValue', 'prevSupertrend', 'ichiCloud', 'ichiSpanA',
         'ichiSpanB', 'ichiTenkan', 'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower',
         'adx', 'adx_signal', 'diPlus', 'diMinus', 'niftyTrendScore', 'atrDynamic',
         'atrPct', 'atrSmaRatio', 'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal',
@@ -1613,15 +1615,15 @@ indicators_keys = {
         'technicalScore', 'Horizon'
     ],
     'multibagger': [
-        'symbol', 'price', 'prev_close', 'price_10_ago', 'price_slope', 'rsi', 'rsislope',
-        'macd', 'macdCross', 'macdHistZ', 'macdhistogram', 'prevmacdhistogram',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'mma6', 'mma12',
         'mma_6_12_12_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
         'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol', 'avg_volume_30Days', 'obvDiv',
         'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
         'relStrengthNifty', 'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid',
         'bbLow', 'bbWidth', 'bbpercentb', 'gapPercent', 'wickRejection',
-        'supertrendSignal', 'supertrendValue', 'prev_supertrend', 'ichiCloud', 'ichiSpanA',
+        'supertrendSignal', 'supertrendValue', 'prevSupertrend', 'ichiCloud', 'ichiSpanA',
         'ichiSpanB', 'ichiTenkan', 'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower',
         'adx', 'adx_signal', 'diPlus', 'diMinus', 'niftyTrendScore', 'atrDynamic',
         'atrPct', 'atrSmaRatio', 'slAtrDynamic', 'riskPerSharePct', 'maCrossSignal',
@@ -1891,7 +1893,7 @@ GENERIC_KEYS = {
     'rsislope': {'legacy': None},
     'macd': {'legacy': None},
     'macdCross': {'legacy': None},
-    'macdhistogram': {'legacy': None},
+    'macdHistogram': {'legacy': None},
     'adx': {'legacy': None},
     'stochK': {'legacy': None},
     'stochD': {'legacy': None},

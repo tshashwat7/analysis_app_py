@@ -82,7 +82,7 @@ METRIC_REGISTRY = {
         "description": "MACD value stepped scoring"
     },
 
-    "macdhistogram": {
+    "macdHistogram": {
         "type": "numeric",
         "category": "momentum",
         "scoring_type": "stepped",
@@ -997,7 +997,7 @@ COMPOSITE_SCORING_CONFIG = {
                     "weight": 0.25,
                     "thresholds": [{"min": 1.0, "score": 10}, {"min": 0, "score": 5}, {"default": 2}]
                 },
-                "macdhistogram": {   # CORRECTED: Uses Histogram for lead signal
+                "macdHistogram": {   # CORRECTED: Uses Histogram for lead signal
                     "weight": 0.30,
                     "thresholds": [
                         {"min": 0.5, "score": 10}, {"min": 0, "score": 7},
@@ -1066,7 +1066,7 @@ COMPOSITE_SCORING_CONFIG = {
                     "weight": 0.20,
                     "thresholds": [{"min": 1.0, "score": 10}, {"min": 0, "score": 5}, {"default": 2}]
                 },
-                "macdhistogram": {
+                "macdHistogram": {
                     "weight": 0.30,
                     "thresholds": [{"min": 0.5, "score": 10}, {"min": 0, "score": 7}, {"min": -0.5, "score": 4}, {"default": 0}]
                 },
@@ -1129,7 +1129,7 @@ COMPOSITE_SCORING_CONFIG = {
                     "weight": 0.35,
                     "thresholds": [{"min": 60, "score": 10}, {"min": 50, "score": 7}, {"default": 2}]
                 },
-                "macdhistogram": {
+                "macdHistogram": {
                     "weight": 0.35,
                     "thresholds": [{"min": 0.5, "score": 10}, {"min": 0, "score": 6}, {"default": 0}]
                 },
@@ -1280,6 +1280,10 @@ def compute_single_composite(
         # Calculate score using composite rules
         score = _apply_composite_scoring_rules(raw_value, metric_config, metric_key)
         
+        if score is None:
+            logger.warning(f"[DATA_GAP] No score for metric '{metric_key}' — Skipping.")
+            continue
+            
         # Accumulate
         weighted_sum += score * weight
         total_weight += weight

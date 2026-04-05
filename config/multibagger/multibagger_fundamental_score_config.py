@@ -51,7 +51,7 @@ MB_HORIZON_METRIC_INCLUSION = {
         "exclude": [
             "pbRatio", "psRatio", "quarterlyGrowth", "currentRatio",
             "fcfMargin", "ebitdaMargin", "assetTurnover",
-            "dividendyield", "dividendPayout", "yieldVsAvg",
+            "dividendYield", "dividendPayout", "yieldVsAvg",
             "beta", "position52w", "shortInterest",
             "analystRating", "days_to_earnings",
         ],

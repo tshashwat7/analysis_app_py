@@ -60,6 +60,172 @@ from services.patterns.pattern_state_manager import (
     delete_breakdown_state
 )
 logger = logging.getLogger(__name__)
+# ============================================================
+# 0. GEOMETRIC TARGET EXTRACTION (Stage 2 Engineer)
+# ============================================================
+
+def _extract_geometric_targets(
+    eval_ctx: Dict[str, Any],
+    horizon: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Extracts pattern-specific geometric targets (Stage 2).
+    Returns a dict compatible with risk_data["targets"].
+    """
+    try:
+        detected = eval_ctx.get("patterns", {})
+        setup_info = eval_ctx.get("setup", {})
+        setup_type = setup_info.get("type")
+        
+        # 1. Get primary patterns for this setup
+        pattern_validation = eval_ctx.get("pattern_validation", {})
+        setup_patterns = pattern_validation.get("by_setup", {}).get(setup_type, {})
+        primary_patterns = setup_patterns.get("primary_found", [])
+        
+        if not primary_patterns:
+            return None
+            
+        # 2. Find the highest quality pattern
+        best_p = None
+        best_q = -1
+        for p_name in primary_patterns:
+            p_data = detected.get(p_name, {})
+            q = p_data.get("quality", 0)
+            if q > best_q:
+                best_q = q
+                best_p = p_name
+        
+        if not best_p:
+            return None
+            
+        # 3. Calculate based on pattern type
+        meta = detected[best_p].get("raw", {}).get("meta", {})
+        price = _get_val(eval_ctx.get("indicators", {}), "price")
+        
+        # --- Cup & Handle ---
+        if best_p == "cupHandle":
+            rim = meta.get("rimLevel")
+            low = meta.get("cup_low")
+            if rim and low:
+                depth = rim - low
+                t1 = rim + depth
+                t2 = t1 + depth
+                return {
+                    "entry_price": rim,
+                    "stop_loss": meta.get("invalidation_level") or (rim - (depth * 0.5)),
+                    "targets": [t1, t2],
+                    "rrRatio": round((t1 - rim)/(rim - (meta.get("invalidation_level") or (rim - (depth * 0.5)))), 2),
+                    "is_geometric": True,
+                    "pattern_source": "cupHandle"
+                }
+
+        # --- Darvas Box ---
+        elif best_p == "darvasBox":
+            high = meta.get("boxHigh")
+            low = meta.get("boxLow")
+            if high and low:
+                height = high - low
+                t1 = high + height
+                t2 = t1 + height
+                return {
+                    "entry_price": high,
+                    "stop_loss": meta.get("invalidation_level") or low,
+                    "targets": [t1, t2],
+                    "rrRatio": round(1.0, 2), # Base height = 1:1 risk
+                    "is_geometric": True,
+                    "pattern_source": "darvasBox"
+                }
+
+        # --- Minervini VCP ---
+        elif best_p == "minerviniStage2":
+            pivot = meta.get("pivotPoint") or meta.get("rimLevel")
+            cont = meta.get("contraction_pct", 10) / 100
+            if pivot:
+                t1 = pivot * (1 + (cont * 1.5)) # VCP targets are typically 1.5-2x the last contraction
+                t2 = pivot * (1 + (cont * 3.0))
+                return {
+                    "entry_price": pivot,
+                    "stop_loss": meta.get("invalidation_level") or (pivot * (1 - cont)),
+                    "targets": [t1, t2],
+                    "rrRatio": 1.5,
+                    "is_geometric": True,
+                    "pattern_source": "minerviniStage2"
+                }
+
+        # --- Bollinger Squeeze ---
+        elif best_p == "bollingerSqueeze":
+            entry = meta.get("entry_trigger_price")
+            upper = meta.get("bb_upper_at_detection")
+            lower = meta.get("bb_lower_at_detection")
+            if entry and upper and lower:
+                width = upper - lower
+                t1 = entry + width
+                t2 = t1 + width
+                return {
+                    "entry_price": entry,
+                    "stop_loss": meta.get("invalidation_level") or lower,
+                    "targets": [t1, t2],
+                    "rrRatio": round(width / (entry - (meta.get("invalidation_level") or lower)), 2) if (entry - (meta.get("invalidation_level") or lower)) != 0 else 1.0,
+                    "is_geometric": True,
+                    "pattern_source": "bollingerSqueeze"
+                }
+
+        # --- Double Bottom (Bullish Neckline) ---
+        elif best_p == "bullishNecklinePattern":
+            neckline = meta.get("neckline")
+            trough = meta.get("peak_1")
+            if neckline and trough:
+                height = neckline - trough
+                t1 = neckline + height
+                t2 = t1 + height
+                return {
+                    "entry_price": neckline,
+                    "stop_loss": meta.get("invalidation_level") or trough,
+                    "targets": [t1, t2],
+                    "rrRatio": 1.0, # Standard measured move is 1:1 of height
+                    "is_geometric": True,
+                    "pattern_source": "bullishNecklinePattern"
+                }
+
+        # --- Double Top (Bearish Neckline) ---
+        elif best_p == "bearishNecklinePattern":
+            neckline = meta.get("neckline")
+            peak = meta.get("peak_1")
+            if neckline and peak:
+                height = peak - neckline
+                t1 = neckline - height
+                t2 = t1 - height
+                return {
+                    "entry_price": neckline,
+                    "stop_loss": meta.get("invalidation_level") or peak,
+                    "targets": [t1, t2],
+                    "rrRatio": 1.0, # Standard measured move is 1:1 of height
+                    "is_geometric": True,
+                    "pattern_source": "bearishNecklinePattern"
+                }
+
+        # --- Flags & Pennants ---
+        elif best_p == "flagPennant":
+            entry = meta.get("entry_trigger_price")
+            base = meta.get("pole_base")
+            top = meta.get("pole_top")
+            if entry and base and top:
+                pole_height = top - base
+                t1 = entry + pole_height
+                t2 = t1 + (pole_height * 0.5) # Flags often have 1.5x measured moves
+                return {
+                    "entry_price": entry,
+                    "stop_loss": meta.get("invalidation_level") or meta.get("flagLow"),
+                    "targets": [t1, t2],
+                    "rrRatio": round(pole_height / (entry - (meta.get("invalidation_level") or base)), 2) if (entry - (meta.get("invalidation_level") or base)) != 0 else 2.0,
+                    "is_geometric": True,
+                    "pattern_source": "flagPennant"
+                }
+        
+    except Exception as e:
+        logger.error(f"Geometric target extraction failed: {e}")
+        return None
+
 def adjust_targets_for_market_conditions(
     risk_data: Dict[str, Any],
     indicators: Dict[str, Any],
@@ -176,11 +342,12 @@ def adjust_targets_for_market_conditions(
         # ✅ DEFENSIVE: If ATR fallback (from resolver), disable stretching
         # Rationale: ATR (3*ATR, 5*ATR) is already "market-scaled" enough.
         # Doubling it via volatilty/regime leads to unrealistic 3x price targets.
-        if risk_data.get("is_atr_fallback"):
+        # If it's a GEOMETRIC target (from Stage 2), we ALLOW stretching.
+        if risk_data.get("is_atr_fallback") and not risk_data.get("is_geometric"):
             target_factor = 1.0
             t1_regime_mult = 1.0
             t2_regime_mult = 1.0
-            logger.debug(f"[{ticker}] ATR fallback detected - skipping target stretching.")
+            logger.debug(f"ATR fallback detected - skipping target stretching.")
         
         # Calculate RR for structural targets first
         if direction == "LONG":
@@ -274,6 +441,15 @@ def adjust_targets_for_market_conditions(
             "execution_t2": execution_t2,
             "execution_rr_t1": round(rr_t1, 2),
             "execution_rr_t2": round(rr_t2, 2) if rr_t2 else None,
+            "rr_source": risk_data.get("rr_source"),
+            "target_source": target_source,
+            
+            # Canonical aliases for downstream consumers.
+            "entry_price": pattern_entry,
+            "stop_loss": execution_sl,
+            "targets": [t for t in [execution_t1, execution_t2] if t is not None],
+            "rrRatio": round(rr_t1, 2),
+            "rrRatioT2": round(rr_t2, 2) if rr_t2 else None,
             
             # Metadata
             "volatility_regime": volatility_regime,
@@ -572,9 +748,9 @@ def check_pattern_invalidation(
                 # Start tracking
                 # ✅ FIX: Prioritized pivot level lookup (Issue 4)
                 pivot_level = (
-                    namespace.get("pivot_point")
-                    or namespace.get("box_low")
-                    or namespace.get("handle_low")
+                    namespace.get("pivotPoint")
+                    or namespace.get("boxLow")
+                    or namespace.get("handleLow")
                     or current_price
                 )
                 save_breakdown_state(
@@ -611,7 +787,7 @@ def check_pattern_invalidation(
                 else:
                     # Continue tracking
                     update_breakdown_state(symbol, pattern_name, horizon)
-                    logger.info(
+                    logger.debug(
                         f"⏳ [{symbol}] {pattern_name} breakdown progressing "
                         f"({count + 1}/{duration_candles})"
                     )
@@ -727,6 +903,36 @@ def enhance_execution_context(
         if not detected_patterns and not _is_generic:
             logger.debug(f"[{symbol}] No patterns to enhance")
             return exec_ctx, eval_ctx
+
+        # ===================================================================
+        # 0. Stage 2: Geometric Target Refinement (Engineering Layer)
+        # ===================================================================
+        # Before any enhancements, check if we can replace the ATR baseline
+        # with actual pattern physics (Darvas heights, Cup depths, etc.)
+        geo_risk = _extract_geometric_targets(eval_ctx, horizon)
+        if geo_risk:
+            logger.info(f"[{symbol}] 📐 Geometric targets extracted from {geo_risk['pattern_source']}")
+            # Update the risk model with geometric values
+            # ✅ FIX: Merge into existing risk dict to preserve position-sizing
+            # fields (quantity, capital_required, risk_amount, sizing_valid, etc.)
+            current_risk = exec_ctx.get("risk", {})
+            existing_direction = current_risk.get("direction")
+            if not existing_direction:
+                pattern_source = str(geo_risk.get("pattern_source", "")).lower()
+                existing_direction = "bearish" if "bearish" in pattern_source else "bullish"
+            geo_risk["direction"] = existing_direction
+            geo_risk["atr"] = current_risk.get("atr", 0)
+            current_risk.update(geo_risk)
+            exec_ctx["risk"] = current_risk
+            logger.info(
+                f"[{symbol}] [GEO_DEBUG] source={geo_risk.get('pattern_source')} "
+                f"direction={current_risk.get('direction')} "
+                f"entry={current_risk.get('entry_price')} "
+                f"sl={current_risk.get('stop_loss')} "
+                f"targets={current_risk.get('targets')} "
+                f"qty={current_risk.get('quantity')} "
+                f"rr_source={current_risk.get('rr_source')}"
+            )
 
         # ===================================================================
         # Pattern-specific phases — skipped for GENERIC setups (S16 fix).
@@ -964,7 +1170,7 @@ def calculate_adaptive_spread_cost(
         extractor = resolver.extractor
     
     risk_mgmt = extractor.get_risk_management_config()
-    spread_cfg = risk_mgmt.get("spread_adjustment", {})
+    spread_cfg = extractor.get_spread_adjustment_config()
     
     # Base spread by market cap
     # Config format: {"market_cap_brackets": {"large_cap": {"min": 100000, "spread_pct": 0.001}, ...}}
@@ -1358,7 +1564,7 @@ def _build_invalidation_namespace(meta: Dict[str, Any], indicators: Dict[str, An
     """
     namespace = {}
     
-    # 1. Flatten Pattern Metadata (e.g., box_low, handle_low)
+    # 1. Flatten Pattern Metadata (e.g., boxLow, handleLow)
     for k, v in meta.items():
         if isinstance(v, (int, float, str, bool)):
             namespace[k] = v
@@ -1380,8 +1586,8 @@ def _build_invalidation_namespace(meta: Dict[str, Any], indicators: Dict[str, An
             namespace[k] = v
 
     # 3. Add derived math helpers if needed (optional)
-    if "price" in namespace and "box_low" in namespace:
-        namespace["dist_to_stop"] = (namespace["price"] - namespace["box_low"]) / namespace["price"]
+    if "price" in namespace and "boxLow" in namespace:
+        namespace["dist_to_stop"] = (namespace["price"] - namespace["boxLow"]) / namespace["price"]
 
     return namespace
 

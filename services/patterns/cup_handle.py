@@ -130,7 +130,7 @@ class CupHandlePattern(BasePattern):
 
             result["meta"] = {
                 "depth_pct": _safe_float(round(cup_depth_pct * 100, 1)),
-                "rim_level": _safe_float(round(rim_right_val, 2)),
+                "rimLevel": _safe_float(round(rim_right_val, 2)),
                 "handle_high": _safe_float(round(np.max(handle_highs), 2)),
                 "cup_low": _safe_float(round(cup_bottom_val, 2)),
                 "type": "bullish",
@@ -178,9 +178,9 @@ class CupHandlePattern(BasePattern):
             result["meta"].update({
                 "bar_index": len(df),
                 # Handle Metrics (Critical for invalidation)
-                "handle_depth_pct": _safe_float(round(handle_depth_pct, 2)),
-                "handle_low": _safe_float(round(handle_low, 2)),
-                "rim_level": float(rim_right_val),
+                "handleDepthPct": _safe_float(round(handle_depth_pct, 2)),
+                "handleLow": _safe_float(round(handle_low, 2)),
+                "rimLevel": float(rim_right_val),
                 # Analytics
                 "cup_depth_pct": round(cup_depth_pct, 2),
                 # Entry/Exit Levels todo delete

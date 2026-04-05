@@ -144,7 +144,7 @@ STRATEGY_MATRIX = {
                 "reason": "Sufficient intraday range"
             },
             "three_line_strike": {
-                "gates": {"three_line_strike_found": {"equals": True}},
+                "gates": {"threeLineStrikeFound": {"equals": True}},
                 "points": 40,
                 "reason": "3-Line Strike Reversal"
             }
@@ -203,13 +203,13 @@ STRATEGY_MATRIX = {
                 "reason": "Strong Trend (ADX)"
             },
             "ichimoku_signal": {
-                "gates": {"ichimoku_signals_found": {"equals": True}},
+                "gates": {"ichimokuSignalsFound": {"equals": True}},
                 "points": 25,
                 "reason": "Ichimoku Cloud Signal"
             },
             "golden_cross_bullish": {
                 "gates": {
-                    "golden_cross_found": {"equals": True},
+                    "goldenCrossFound": {"equals": True},
                     "golden_cross_type": {"equals": "bullish"}
                 },
                 "points": 25,
@@ -312,7 +312,7 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "vcp_confirmed": {
-                "gates": {"minervini_stage2_found": {"equals": True}},
+                "gates": {"minerviniStage2Found": {"equals": True}},
                 "points": 50,
                 "reason": "VCP Pattern Confirmed"
             },
@@ -379,7 +379,7 @@ STRATEGY_MATRIX = {
                 "reason": "Breaking to New Highs (N)"
             },
             "cup_handle_pattern": {
-                "gates": {"cup_handle_found": {"equals": True}},
+                "gates": {"cupHandleFound": {"equals": True}},
                 "points": 30,
                 "reason": "Cup & Handle Pattern (N)"
             },
@@ -481,14 +481,14 @@ STRATEGY_MATRIX = {
         "fit_threshold": 60,
         
         "fit_indicators": {
-            "dividendyield": {"min": 1.5, "weight": 0.5},    # 3.0→1.5: Indian growth market; 1.5%+ is solid income
+            "dividendYield": {"min": 1.5, "weight": 0.5},    # 3.0→1.5: Indian growth market; 1.5%+ is solid income
             "fcfYield": {"min": 3.0, "weight": 0.3},         # 5.0→3.0: Aligned with value_investing
             "deRatio": {"max": 0.7, "weight": 0.2, "direction": "invert"}
         },
         
         "scoring_rules": {
             "high_yield": {
-                "gates": {"dividendyield": {"min": 3.0}},
+                "gates": {"dividendYield": {"min": 3.0}},
                 "points": 40,
                 "reason": "Attractive Dividend Yield"
             },
@@ -532,7 +532,7 @@ STRATEGY_MATRIX = {
         "scoring_rules": {
             "golden_cross": {
                 "gates": {
-                    "golden_cross_found": {"equals": True},
+                    "goldenCrossFound": {"equals": True},
                     "golden_cross_type": {"equals": "bullish"}
                 },
                 "points": 50,
@@ -655,7 +655,7 @@ STRATEGY_MATRIX = {
                 "reason": "Deeply oversold"
             },
             "bullish_divergence": {
-                "gates": {"rsislope": {"min": 0.05}, "price_slope": {"max": -0.01}},
+                "gates": {"rsislope": {"min": 0.05}, "priceSlope": {"max": -0.01}},
                 "points": 30,
                 "reason": "Bullish divergence (Price falling but RSI rising)"
             },
@@ -665,7 +665,7 @@ STRATEGY_MATRIX = {
                 "reason": "Tight consolidation after fall"
             },
             "reversal_confirmation": {
-                "gates": {"macdhistogram": {"min": 0.001}, "supertrendSignal": {"equals": "Bullish"}},
+                "gates": {"macdHistogram": {"min": 0.001}, "supertrendSignal": {"equals": "Bullish"}},
                 "points": 20,
                 "reason": "Technical reversal confirmed"
             },
@@ -818,10 +818,22 @@ def calculate_strategy_fit_score(
 # VALIDATION
 # ═══════════════════════════════════════════════════════════════════════
 
-def validate_strategy_matrix() -> Dict[str, Any]:
-    """Validate strategy matrix for consistency."""
+def validate_strategy_matrix(setup_names: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Validate strategy matrix for consistency.
+
+    Args:
+        setup_names: List of valid setup names from SETUP_PATTERN_MATRIX.
+                     When provided, preferred_setups and avoid_setups references
+                     are cross-validated against this list so typos are caught at
+                     startup rather than silently producing no match at runtime.
+                     Pass extractor.get_all_setup_names() from the call site.
+    """
     errors = []
     warnings = []
+
+    # Build valid setup set for cross-reference checks (optional but strongly recommended)
+    valid_setups: Optional[set] = set(setup_names) if setup_names else None
 
     for strategy_name, config in STRATEGY_MATRIX.items():
         if "description" not in config:
@@ -840,6 +852,22 @@ def validate_strategy_matrix() -> Dict[str, Any]:
                 if horizon not in multipliers:
                     warnings.append(f"{strategy_name}: Missing multiplier for '{horizon}'")
 
+        # ── Cross-reference preferred_setups and avoid_setups ────────────────
+        # A typo here silently returns no match at strategy fit time — the setup
+        # is never preferred/avoided but no error is raised. Validate when the
+        # caller provides the canonical setup name list.
+        if valid_setups is not None:
+            for ref in config.get("preferred_setups", []):
+                if ref not in valid_setups:
+                    errors.append(
+                        f"{strategy_name}.preferred_setups: '{ref}' not in SETUP_PATTERN_MATRIX"
+                    )
+            for ref in config.get("avoid_setups", []):
+                if ref not in valid_setups:
+                    errors.append(
+                        f"{strategy_name}.avoid_setups: '{ref}' not in SETUP_PATTERN_MATRIX"
+                    )
+
     return {
         "valid": len(errors) == 0,
         "errors": errors,
@@ -855,4 +883,3 @@ if __name__ == "__main__":
     print("="*80)
     
     validation = validate_strategy_matrix()
-    

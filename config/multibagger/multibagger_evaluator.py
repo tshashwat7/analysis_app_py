@@ -122,6 +122,11 @@ def mb_compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
 
             metric_data = fundamentals.get(metric)
             score = extract_normalized_score(metric_data, metric, horizon)
+            
+            if score is None:
+                logger.warning(f"[DATA_GAP] No score for metric '{metric}' — Skipping.")
+                continue
+                
             score = max(0.0, min(10.0, score))
 
             cat_weighted_score += score * w

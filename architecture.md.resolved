@@ -231,19 +231,23 @@ Orchestrator that **triggers** the resolver:
 
 ## Layer 4: Execution (Targets, Hold Times, Enhancement)
 
-### Trade Enhancer ([trade_enhancer.py](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py))
+### Trade Enhancer (`trade_enhancer.py`)
 
-Post-processes execution context with 5 phases:
+Post-processes execution context using a **Two-Bucket Geometric Architecture** to calculate realistic targets and validate real-time pattern state.
 
+**The Two-Bucket Target System:**
+* **Bucket 1: Measured Moves (Geometric):** If a structural chart pattern is detected (e.g., Darvas Box, Cup & Handle, VCP), the enhancer extracts literal chart physics (box heights, cup depths) to calculate `T1` and `T2`.
+* **Bucket 2: Momentum & Flow (ATR Baseline):** If the signal is non-structural (e.g., RSI, Moving Average Cross), it receives an `is_atr_fallback=True` flag. These trades strictly use base ATR multiples and are guarded by an **anti-stretching clamp** to prevent runaway exponential targets during high-volatility regimes.
+
+**Processing Phases:**
 | Phase | Function | Role |
 |-------|----------|------|
-| 1 | [adjust_targets_for_market_conditions()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#97-250) | Adjusts resolver targets for volatility/volume/spread |
-| 2 | [get_rr_regime_multipliers()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#255-300) | ATR-based target multipliers by trend regime |
-| 3 | [check_pattern_expiration()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#306-412) | Monitors pattern lifecycle (max_duration_candles) |
-| 4 | [check_pattern_invalidation()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#418-581) | Real-time pattern breakdown detection |
-| 5 | [enhance_execution_context()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#585-753) | Main entry: applies all phases to exec_ctx |
-
-Also: [calculate_pattern_timeline()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#910-1099) for estimated hold time/weeks.
+| 1 | `_extract_geometric_targets()` | Routes trade to Bucket 1 (Physics) or Bucket 2 (ATR Fallback) |
+| 2 | `adjust_targets_for_market_conditions()` | Adjusts targets for volatility/spread. Applies anti-stretching guard for Bucket 2 |
+| 3 | `get_rr_regime_multipliers()` | ATR-based target multipliers by trend regime |
+| 4 | `check_pattern_expiration()` | Monitors pattern lifecycle (`max_duration_candles`) |
+| 5 | `check_pattern_invalidation()` | Real-time pattern breakdown detection |
+| 6 | `enhance_execution_context()` | Main entry: applies all phases to `exec_ctx` and resolves Direction Conflicts |
 
 ---
 
@@ -292,6 +296,34 @@ sequenceDiagram
 | 8 | Generate trade plan | [generate_trade_plan()](file:///d:/stockviedeo/stock-analyzer-app/services/signal_engine.py#770-1114) → [enhance_execution_context()](file:///d:/stockviedeo/stock-analyzer-app/services/trade_enhancer.py#585-753) |
 | 9 | Persist to SQLite | [_save_analysis_to_db()](file:///d:/stockviedeo/stock-analyzer-app/main.py#921-1033) |
 | 10 | Return analysis_data | Includes profiles, trade_plan, indicators |
+
+### Orchestrator & Concurrency (`main.py` & `db.py`)
+
+The system utilizes an asynchronous, multi-executor architecture designed to prevent OS-level process spam and database lock contention during heavy Nifty 500 batch scans.
+
+* **Smart Executor Routing:** `COMPUTE_EXECUTOR` dynamically uses `ProcessPoolExecutor` on Linux/Mac for pure CPU-bound math, but gracefully falls back to `ThreadPoolExecutor` on Windows (`os.name == 'nt'`) to prevent recursive process-spawning crashes.
+* **Serialized Database Writes:** Workers *never* write directly to SQLite. To eliminate `database is locked` contention, the cache warmer gathers all worker results and serializes the database writes on the main `asyncio` event loop.
+* **Jittered Backoff:** Primary signal writes utilize a jittered exponential backoff retry helper (`@backoff_retry_db(retries=5)`) ensuring that simultaneous API requests gracefully desynchronize their database commits.
+* **Daemon Thread Safety:** Background cleanup threads explicitly check the module-level `_SHUTDOWN_IN_PROGRESS` flag, eliminating `NameError` race conditions during FastAPI's lifespan teardown.
+
+---
+
+## Signal Semantics
+
+All signal states are **first-class outputs** with explicit, non-overlapping semantics. The system enforces a strict **"Neutral-to-WATCH"** standard.
+
+| Signal | Condition | Meaning |
+|---|---|---|
+| `STRONG_BUY` / `BUY` | All gates pass, confidence ≥ threshold, RR valid | Entry is structurally sound and timing is right. Execute. |
+| `SELL` | Bearish direction, all gates pass | Short/exit entry. Direction-aware mirror of BUY. |
+| `WATCH` | Neutral trend OR missing primary pattern | **DEFAULT FALLBACK.** Stock quality is good, but pattern/setup alignment is absent. (Layer 0 Block). |
+| `HOLD` | Active position management only | Strictly for existing, open trades. **Never generated as a new entry evaluation.** |
+| `BLOCKED` | Setup + pattern present but execution gate failed | Entry structure exists but a hard execution gate (spread cost, low RR floor, extreme volatility) prevents entry. |
+| `AVOID` | Fundamental or macro red flags | Fundamental score too low or macro conditions completely adverse. |
+
+**Architectural Invariant:** `WATCH` vs `BLOCKED`  
+* `WATCH` = Stock is good, but waiting for a setup to physically form on the chart.  
+* `BLOCKED` = Setup has formed, but it is mathematically unsafe to trade right now.
 
 ---
 

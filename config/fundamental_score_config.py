@@ -80,7 +80,7 @@ METRIC_REGISTRY = {
     # ===========================
     # DIVIDEND METRICS
     # ===========================
-    "dividendyield": {"type": "numeric","category": "dividend","description": "Dividend yield %"},
+    "dividendYield": {"type": "numeric","category": "dividend","description": "Dividend yield %"},
     "dividendPayout": {"type": "numeric","category": "dividend","description": "Dividend payout ratio"},
     "yieldVsAvg": {"type": "numeric","category": "dividend","description": "Yield vs 5-year average"},
     
@@ -103,7 +103,7 @@ HORIZON_METRIC_INCLUSION = {
     "intraday": {
         # Intraday doesn't use fundamentals heavily
         "market": ["marketCap", "position52w"],
-        "exclude": ["profitGrowth3y", "epsGrowth5y", "revenueGrowth5y", "fcfGrowth3y","marketCapCagr", "piotroskiF", "earningsStability", "RDIntensity","dividendyield", "dividendPayout", "yieldVsAvg"]
+        "exclude": ["profitGrowth3y", "epsGrowth5y", "revenueGrowth5y", "fcfGrowth3y","marketCapCagr", "piotroskiF", "earningsStability", "RDIntensity","dividendYield", "dividendPayout", "yieldVsAvg"]
     },
     
     "short_term": {
@@ -118,7 +118,7 @@ HORIZON_METRIC_INCLUSION = {
         "exclude": [
 "marketCapCagr", 
 "RDIntensity",   
-"dividendyield", "dividendPayout", "yieldVsAvg" 
+"dividendYield", "dividendPayout", "yieldVsAvg" 
 ]
     },
     
@@ -129,7 +129,7 @@ HORIZON_METRIC_INCLUSION = {
         "financial_health": ["deRatio", "interestCoverage", "currentRatio", "fcfYield", "fcfMargin", "ocfVsProfit", "beta"],
         "quality": ["piotroskiF", "earningsStability", "assetTurnover"],
         "ownership": ["promoterHolding", "institutionalOwnership", "promoterpledge"],
-        "dividend": ["dividendyield", "dividendPayout"],
+        "dividend": ["dividendYield", "dividendPayout"],
         "market": ["marketCap"],
         
         "exclude": [
@@ -147,7 +147,7 @@ HORIZON_METRIC_INCLUSION = {
         "quality": ["piotroskiF", "earningsStability"],
         "ownership": ["promoterHolding", "institutionalOwnership"],
         "market": ["marketCap"],
-        "exclude": ["quarterlyGrowth", "position52w", "shortInterest", "dividendyield"]
+        "exclude": ["quarterlyGrowth", "position52w", "shortInterest", "dividendYield"]
     }
 }
 
@@ -271,7 +271,7 @@ METRIC_WEIGHTS = {
         "promoterpledge": 0.25,
         
         # DIVIDEND (3%)
-        "dividendyield": 0.60,
+        "dividendYield": 0.60,
         "dividendPayout": 0.40,
         
         # MARKET (2%)
@@ -638,6 +638,10 @@ def compute_fundamental_score(fundamentals: dict, horizon: str) -> dict:
             fundamentals, horizon, category, metrics
         )
         
+        if cat_score is None:
+            logger.warning(f"[DATA_GAP] No score for category '{category}' — Skipping.")
+            continue
+            
         weight = category_weights[category]
         total_score += cat_score * weight
         

@@ -22,7 +22,7 @@ def utc_now():
 # 1. Setup SQLite
 DB_DIR = "data"
 os.makedirs(DB_DIR, exist_ok=True)
-SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_DIR}/trade.db"
+SQLALCHEMY_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", f"sqlite:///{DB_DIR}/trade.db")
 
 # Single, robust engine definition
 engine = create_engine(

@@ -777,7 +777,7 @@ def calc_52wPosition(t, unifier: DataUnifier = None):
     score = 10 if off < 10 else 7 if off < 20 else 3
     return {"raw": off, "value": round(off, 2), "score": score, "desc": f"{off:.1f}% off-high"}
 
-@_wrap_calc("dividendyield")
+@_wrap_calc("dividendYield")
 def calc_dividend_yield(t, unifier: DataUnifier = None):
     dy = unifier.get(["dividendYield"])
     if dy is None: return None
@@ -1028,7 +1028,7 @@ def _compute_fundamentals_core(symbol: str, apply_market_penalty: bool = True) -
         "deRatio": calc_de_ratio, "interestCoverage": calc_interest_coverage,
         "fcfYield": calc_fcf_yield, "currentRatio": calc_current_ratio,
         "piotroskiF": calc_piotroski_f, "promoterHolding": calc_promoter_holding,
-        "institutionalOwnership": calc_institutional_ownership, "dividendyield": calc_dividend_yield,
+        "institutionalOwnership": calc_institutional_ownership, "dividendYield": calc_dividend_yield,
         "marketCap": calc_market_cap, "netProfitMargin": calc_net_profit_margin,
         "operatingMargin": calc_operating_margin, "profitGrowth3y": calc_profit_growth_3y,
         "epsGrowth5y": calc_eps_growth_5y, "fcfGrowth3y": calc_fcf_growth_3y,
@@ -1143,7 +1143,7 @@ def compute_fundamentals(symbol: str, apply_market_penalty: bool = True) -> Dict
 fundamentals_keys = [
     'peRatio', 'pbRatio', 'pegRatio', 'roe', 'roce', 'roic', 'deRatio',
     'interestCoverage', 'fcfYield', 'currentRatio', 'piotroskiF', 'promoterHolding',
-    'institutionalOwnership', 'dividendyield', 'marketCap', 'netProfitMargin',
+    'institutionalOwnership', 'dividendYield', 'marketCap', 'netProfitMargin',
     'operatingMargin', 'profitGrowth3y', 'epsGrowth5y', 'fcfGrowth3y',
     'quarterlyGrowth', 'ebitdaMargin', 'shortInterest', 'peVsSector',
     'dividendPayout', 'yieldVsAvg', 'revenueGrowth5y', 'ocfVsProfit',

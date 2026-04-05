@@ -75,6 +75,10 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "CONFIRMING": ["bollingerSqueeze", "goldenCross", "ichimokuSignals"],
             "CONFLICTING": ["bullishNecklinePattern", "bearishNecklinePattern", "deathCross"]
         },
+        # If a qualifying PRIMARY pattern is detected above threshold, its presence
+        # multiplies this setup's priority during _classify_setup ranking.
+        # The PRIMARY list above is used as the source — no duplication needed.
+        "pattern_presence_multiplier": 1.20,
         "classification_rules": {
             "pattern_detection": {
                 "darvasBox": True  # Boolean flag check
@@ -161,6 +165,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "CONFIRMING": ["bollingerSqueeze", "cupHandle", "darvasBox"],
             "CONFLICTING": ["flagPennant", "threeLineStrike"]
         },
+        "pattern_presence_multiplier": 1.25,
         "classification_rules": {
             "pattern_detection": {
                 "minerviniStage2": True
@@ -224,6 +229,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "CONFIRMING": ["goldenCross", "bollingerSqueeze", "ichimokuSignals"],
             "CONFLICTING": ["bullishNecklinePattern", "bearishNecklinePattern", "deathCross", "flagPennant"]
         },
+        "pattern_presence_multiplier": 1.20,
         "classification_rules": {
             "pattern_detection": {
                 "cupHandle": True
@@ -313,6 +319,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "CONFIRMING": ["bollingerSqueeze", "ichimokuSignals"],
             "CONFLICTING": ["bullishNecklinePattern", "bearishNecklinePattern", "threeLineStrike", "cupHandle"]
         },
+        "pattern_presence_multiplier": 1.18,
         "classification_rules": {
             "pattern_detection": {
                 "flagPennant": True
@@ -350,7 +357,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             },
             "bonuses": {
                 "strong_momentum_push": {
-                    "gates": {"macdhistogram": {"min": 0.001}},
+                    "gates": {"macdHistogram": {"min": 0.001}},
                     "confidence_boost": 10,
                     "reason": "MACD momentum fully supports continuation"
                 }
@@ -405,6 +412,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "CONFIRMING": ["bollingerSqueeze", "ichimokuSignals", "bullishNecklinePattern", "bearishNecklinePattern"],
             "CONFLICTING": ["deathCross", "flagPennant", "minerviniStage2"]
         },
+        "pattern_presence_multiplier": 1.15,
         "classification_rules": {
             "pattern_detection": {
                 "threeLineStrike": True
@@ -494,6 +502,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "CONFIRMING": ["cupHandle", "minerviniStage2", "ichimokuSignals"],
             "CONFLICTING": ["deathCross", "bullishNecklinePattern", "bearishNecklinePattern"]
         },
+        "pattern_presence_multiplier": 1.15,
         "classification_rules": {
             "pattern_detection": {
                 "goldenCross": True
@@ -872,7 +881,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "reason": "Pullback cut too deep, momentum is broken"
                 },
                 "high_volume_selling": {
-                    "gates": {"rvol": {"min": 2.0}, "price": {"max_metric": "prev_close"}},
+                    "gates": {"rvol": {"min": 2.0}, "price": {"max_metric": "prevClose"}},
                     "confidence_penalty": -15,
                     "reason": "Pullback has too much selling volume"
                 }
@@ -963,7 +972,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "reason": "Pullback cut too deep, momentum structurally broken"
                 },
                 "high_volume_selling": {
-                    "gates": {"rvol": {"min": 2.5}, "price": {"max_metric": "prev_close"}},
+                    "gates": {"rvol": {"min": 2.5}, "price": {"max_metric": "prevClose"}},
                     "confidence_penalty": -15,
                     "reason": "Heavy distribution — not a healthy retracement"
                 }
@@ -1031,7 +1040,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "pattern_detection": {},
             "technical_gates": {
                 "rsi": {"min": 55},
-                "macdhistogram": {"min": 0}
+                "macdHistogram": {"min": 0}
             },
             "require_fundamentals": False
         },
@@ -1039,7 +1048,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "context_requirements": {
             "technical": {
                 "rsi": {"min": 55},
-                "macdhistogram": {"min": 0},
+                "macdHistogram": {"min": 0},
                 "adx": {"min": 20},
                 "trendStrength": {"min": 5.0}
             },
@@ -1084,7 +1093,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "validation_modifiers": {
             "penalties": {
                 "decelerating_momentum": {
-                    "gates": {"rsislope": {"max": -0.05}, "macdhistogram": {"max": 0}},
+                    "gates": {"rsislope": {"max": -0.05}, "macdHistogram": {"max": 0}},
                     "confidence_penalty": -12,
                     "reason": "Both RSI and MACD momentum decelerating in trend setup"
                 },
@@ -1115,7 +1124,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "pattern_detection": {}, # No mandatory pattern, but primary patterns boost score
             "technical_gates": {
                 "rsi": {"max": 45},
-                "macdhistogram": {"max": 0},
+                "macdHistogram": {"max": 0},
                 "trendStrength": {"min": 5.0}
             },
             "require_fundamentals": False
@@ -1124,7 +1133,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "context_requirements": {
             "technical": {
                 "rsi": {"max": 45},
-                "macdhistogram": {"max": 0},
+                "macdHistogram": {"max": 0},
                 "adx": {"min": 20},
                 "trendStrength": {"min": 5.0},
                 "maTrendSignal": -1 # Indicates bearish alignment
@@ -1266,7 +1275,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     },
                     "fundamental": {
-                        "dividendyield": {"min": 1.0},
+                        "dividendYield": {"min": 1.0},
                         "fundamentalScore": {"min": 7.0}
                     }
                 },
@@ -1293,7 +1302,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "reason": "Exceptional core business metrics"
                 },
                 "institutional_buying": {
-                    "gates": {"rvol": {"min": 1.5}, "price": {"min_metric": "prev_close"}},
+                    "gates": {"rvol": {"min": 1.5}, "price": {"min_metric": "prevClose"}},
                     "confidence_boost": 10,
                     "reason": "Smart money accumulating"
                 }
@@ -1371,7 +1380,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "volatilityQuality": {"min": None}
                     },
                     "fundamental": {
-                        "dividendyield": {"min": 1.5},
+                        "dividendYield": {"min": 1.5},
                         "fundamentalScore": {"min": 7.0}
                     }
                 },
@@ -1398,12 +1407,12 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "reason": "Exceptional core business metrics"
                 },
                 "high_dividend_yield": {
-                    "gates": {"dividendyield": {"min": 4.001}},
+                    "gates": {"dividendYield": {"min": 4.001}},
                     "confidence_boost": 15,
                     "reason": "Strong dividend payout acts as risk cushion"
                 },
                 "early_reversal_signal": {
-                    "gates": {"rsislope": {"min": 0.05}, "price": {"min_metric": "prev_close"}},
+                    "gates": {"rsislope": {"min": 0.05}, "price": {"min_metric": "prevClose"}},
                     "confidence_boost": 10,
                     "reason": "Momentum starting to turn — value inflection point"
                 }
@@ -1498,7 +1507,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "reason": "Turnaround story needs minimum earnings quality floor"
                 },
                 "momentum_stalling": {
-                    "gates": {"rsislope": {"max": 0}, "macdhistogram": {"max": 0}},
+                    "gates": {"rsislope": {"max": 0}, "macdHistogram": {"max": 0}},
                     "confidence_penalty": -10,
                     "reason": "Both momentum indicators still falling — too early for entry"
                 }
@@ -1578,7 +1587,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "validation_modifiers": {
             "penalties": {
                 "lacking_direction": {
-                    "gates": {"macdhistogram": {"max": -0.501}},
+                    "gates": {"macdHistogram": {"max": -0.501}},
                     "confidence_penalty": -15,
                     "reason": "Squeeze present but no bullish MACD momentum to fire it"
                 }
@@ -1614,8 +1623,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "classification_rules": {
             "pattern_detection": {},
             "technical_gates": {
-                "macdhistogram": {"min": 0.001},
-                "prevmacdhistogram": {"max": 0},
+                "macdHistogram": {"min": 0.001},
+                "prevMacdHistogram": {"max": 0},
                 "trendStrength": {"min": 2.0}
             },
             "require_fundamentals": False
@@ -1623,8 +1632,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "default_priority": 75,
         "context_requirements": {
             "technical": {
-                "macdhistogram": {"min": 0},
-                "prevmacdhistogram": {"max": 0},
+                "macdHistogram": {"min": 0},
+                "prevMacdHistogram": {"max": 0},
                 "trendStrength": {"min": 2.0},
                 "adx": {"min": 10},
                 "volatilityQuality": {"min": 2.5},
@@ -1798,7 +1807,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "pattern_detection": {},
             "technical_gates": {
                 # TODO: supertrendSignal == 'Bullish',
-                "prev_supertrend": {"max": 0},
+                "prevSupertrend": {"max": 0},
                 "rvol": {"min": 1.2}
             },
             "require_fundamentals": False
@@ -2179,7 +2188,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "trigger": "upper_band",
                 "gates": {
                     "rsi": {"min": 50.0},
-                    "macdhistogram": {"min": 0.0},
+                    "macdHistogram": {"min": 0.0},
                     "rvol": {"min": 1.5},
                     "squeeze_duration": {"min": 5.0}  # ✅ RESTORED - prevents premature entry
                 }
@@ -2189,7 +2198,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "trigger": "close_above_band",
                 "gates": {
                     "rsi": {"min": 50.0},
-                    "macdhistogram": {"min": 0.0},
+                    "macdHistogram": {"min": 0.0},
                     "rvol": {"min": 1.2},
                     "squeeze_duration": {"min": 3.0}  # ✅ RESTORED - lower for short_term
                 }
@@ -2199,7 +2208,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "trigger": "close_above_band",
                 "gates": {
                     "rsi": {"min": 45.0},
-                    "macdhistogram": {"min": -0.2},
+                    "macdHistogram": {"min": -0.2},
                     "rvol": {"min": 1.0},
                     "squeeze_duration": {"min": 4.0}  # ✅ RESTORED
                 }
@@ -2253,17 +2262,17 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             "max_stop_pct": 7.0,
             "min_contraction_pct": 1.5,               # ⚠️ register in DEFAULT_PHYSICS
             "sl_method": "pattern_low",               # ✅ Issue 4 FIX: Override ATR stops
-            "sl_key": "pivot_point",                 # ✅ Issue 4 FIX: Use pivot as secondary SL guard
+            "sl_key": "pivotPoint",                 # ✅ Issue 4 FIX: Use pivot as secondary SL guard
             "sl_formula": "x * 0.98",                # ✅ Issue 4 FIX: Tight Stop for VCP
             "horizons_supported": ["short_term", "long_term"]
         },
         "entry_rules": {
             "short_term": {
                 "order_type": "stop_limit",           # ✅ fixed from "limit"
-                "trigger": "pivot_breakout",          # ✅ fixed from "pivot_point"
+                "trigger": "pivotBreakout",
                 "gates": {
                     "volatilityQuality": {"min": 6.0},# ✅ fixed from max: 1.5
-                    "price": {"min_metric": "pivot_point", "multiplier": 1.01},
+                    "price": {"min_metric": "pivotPoint", "multiplier": 1.01},
                     "position52w": {"min": 80.0}
                 }
             },
@@ -2272,7 +2281,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "trigger": "pivot_breakout",          # ✅ fixed
                 "gates": {
                     "volatilityQuality": {"min": 5.0},# ✅ fixed from max: 2.0
-                    "price": {"min_metric": "pivot_point", "multiplier": 1.005},
+                    "price": {"min_metric": "pivotPoint", "multiplier": 1.005},
                     "position52w": {"min": 70.0}
                 }
             }
@@ -2331,37 +2340,37 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         "entry_rules": {
             "short_term": {
                 "order_type": "stop_market",
-                "trigger": "rim_level",
+                "trigger": "rimLevel",
                 "gates": {
-                    "price": {"min_metric": "rim_level", "multiplier": 0.995},
+                    "price": {"min_metric": "rimLevel", "multiplier": 0.995},
                     "rvol": {"min": 1.2}
                 }
             },
             "long_term": {
                 "order_type": "limit",
-                "trigger": "rim_level",
+                "trigger": "rimLevel",
                 "gates": {
-                    "price": {"min_metric": "rim_level", "multiplier": 0.99},
+                    "price": {"min_metric": "rimLevel", "multiplier": 0.99},
                     "rvol": {"min": 1.1}
                 }
             }
         },
         "invalidation": {
             "metadata_keys": {
-                "analytics": ["cup_depth_pct", "handle_depth_pct"]
+                "analytics": ["cup_depth_pct", "handleDepthPct"]
             },
             "breakdown_threshold": {
                 # ❌ REMOVED intraday (pattern not suitable for this horizon)
                 "short_term": {
                     "gates": {
-                        "price": {"max_metric": "handle_low", "multiplier": 0.97, "duration": 2},  # ✅ Define handleLow in indicators
+                        "price": {"max_metric": "handleLow", "multiplier": 0.97, "duration": 2},
                         "rvol": {"max": 0.8}  # ✅ Volume drying up
                     },
                     "_logic": "OR",
                 },
                 "long_term": {
                     "gates": {
-                        "price": {"max_metric": "handle_low", "multiplier": 0.95, "duration": 3},
+                        "price": {"max_metric": "handleLow", "multiplier": 0.95, "duration": 3},
                         "rvol": {"max": 0.7}
                     },
                     "_logic": "OR",
@@ -2397,18 +2406,18 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         "entry_rules": {
             "intraday": {
                 "order_type": "stop_market",
-                "trigger": "box_high",
+                "trigger": "boxHigh",
                 "gates": {
-                    "price": {"min_metric": "box_high", "multiplier": 1.002},  # ✅ Clearance above box
+                    "price": {"min_metric": "boxHigh", "multiplier": 1.002},  # ✅ Clearance above box
                     "rvol": {"min": 1.5},  # ✅ Volume surge (simplified from volume_surge_required)
                     "box_age_candles": {"max": 50.0}  # ✅ RESTORED - prevents stale boxes
                 }
             },
             "short_term": {
                 "order_type": "stop_market",
-                "trigger": "box_high",
+                "trigger": "boxHigh",
                 "gates": {
-                    "price": {"min_metric": "box_high", "multiplier": 1.005},
+                    "price": {"min_metric": "boxHigh", "multiplier": 1.005},
                     "rvol": {"min": 1.3},
                     "box_age_candles": {"max": 30.0}  # ✅ RESTORED - tighter for short_term
                 }
@@ -2422,17 +2431,17 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             "breakdown_threshold": {
                 "intraday": {
                     "gates": {
-                        "price": {"max_metric": "box_low", "multiplier": 0.998}
+                        "price": {"max_metric": "boxLow", "multiplier": 0.998}
                     },
                 },
                 "short_term": {
                     "gates": {
-                        "price": {"max_metric": "box_low", "multiplier": 0.995}
+                        "price": {"max_metric": "boxLow", "multiplier": 0.995}
                     },
                 },
                 "long_term": {
                     "gates": {
-                        "price": {"max_metric": "box_low", "multiplier": 0.99, "duration": 2}
+                        "price": {"max_metric": "boxLow", "multiplier": 0.99, "duration": 2}
                     },
 
                 }
@@ -2461,20 +2470,20 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
         "entry_rules": {
             "intraday": {
                 "order_type": "stop_market",
-                "trigger": "flag_high",
+                "trigger": "flagHigh",
                 "gates": {
                     "pole_length": {"min": 8.0},
                     "flag_tightness": {"max": 0.03},
-                    "price": {"min_metric": "flag_high", "multiplier": 1.005}
+                    "price": {"min_metric": "flagHigh", "multiplier": 1.005}
                 }
             },
             "short_term": {
                 "order_type": "stop_market",
-                "trigger": "flag_high",
+                "trigger": "flagHigh",
                 "gates": {
                     "pole_length": {"min": 5.0},
                     "flag_tightness": {"max": 0.05},
-                    "price": {"min_metric": "flag_high", "multiplier": 1.01}
+                    "price": {"min_metric": "flagHigh", "multiplier": 1.01}
                 }
             }
         },
@@ -2485,21 +2494,21 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             "breakdown_threshold": {
                 "intraday": {
                     "gates": {
-                        "price": {"max_metric": "flag_low", "multiplier": 0.998},
+                        "price": {"max_metric": "flagLow", "multiplier": 0.998},
                         "trendStrength": {"max": 4.0}
                     },
                     "_logic": "OR",
                 },
                 "short_term": {
                     "gates": {
-                        "price": {"max_metric": "flag_low", "multiplier": 0.995},
+                        "price": {"max_metric": "flagLow", "multiplier": 0.995},
                         "adx": {"max": 15.0}
                     },
                     "_logic": "OR",
                 },
                 "long_term": {
                     "gates": {
-                        "price": {"max_metric": "flag_low", "multiplier": 0.99},
+                        "price": {"max_metric": "flagLow", "multiplier": 0.99},
                         "adx": {"max": 12.0}
                     },
                     "_logic": "OR",
@@ -2555,22 +2564,22 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             "breakdown_threshold": {
                 "intraday": {
                     "gates": {
-                        "price": {"max_metric": "strike_low", "multiplier": 0.995, "duration": 2},
+                        "price": {"max_metric": "strikeLow", "multiplier": 0.995, "duration": 2},
                         "rsi": {"max": 45.0}
                     },
                     "_logic": "OR",
                 },
                 "short_term": {
                     "gates": {
-                        "price": {"max_metric": "strike_low", "multiplier": 0.99, "duration": 3},
+                        "price": {"max_metric": "strikeLow", "multiplier": 0.99, "duration": 3},
                         "rsi": {"max": 40.0}
                     },
                     "_logic": "OR",
                 },
                 "long_term": {
                     "gates": {
-                        "price": {"max_metric": "strike_low", "multiplier": 0.98, "duration": 3},
-                        "macdhistogram": {"max": 0.0}
+                        "price": {"max_metric": "strikeLow", "multiplier": 0.98, "duration": 3},
+                        "macdHistogram": {"max": 0.0}
                     },
                     "_logic": "OR",
                 }
@@ -2635,7 +2644,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "short_term": {
                     "gates": {
                         "price": {"max_metric": "ichiSpanA", "multiplier": 0.995, "duration": 2},
-                        "chikouSpan": {"max_metric": "price"}
+                        "ichiChikou": {"max_metric": "ichiChikouRef"}
                     },
                     "_logic": "OR",
                 },
@@ -2822,7 +2831,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "long_term": {
                     "gates": {
                         "price": {"min_metric": "neckline", "multiplier": 1.01, "duration": 3},
-                        "macdhistogram": {"min": 0}
+                        "macdHistogram": {"min": 0}
                     },
                     "_logic": "OR"
                 }
@@ -2887,7 +2896,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
                 "long_term": {
                     "gates": {
                         "price": {"max_metric": "neckline", "multiplier": 0.99, "duration": 3},
-                        "macdhistogram": {"max": 0}
+                        "macdHistogram": {"max": 0}
                     },
                     "_logic": "OR"
                 }

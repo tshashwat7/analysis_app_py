@@ -106,7 +106,7 @@ def _extract_patterns(indicators: Dict, horizon: str) -> Dict:
                     continue
                 
                 raw_data = p_obj.get("raw", p_obj)
-                if raw_data.get("found", False):
+                if isinstance(raw_data, dict) and raw_data.get("found", False):
                     if "confidence" not in raw_data:
                         raw_data["confidence"] = 50
                     detected[pattern_name] = p_obj
@@ -129,7 +129,7 @@ def _extract_price_data(indicators: Dict, fundamentals: Dict) -> Dict:
     """Extract ALL price action data"""
     return {
         "price":  _get_val(indicators, "price", 0),
-        "close": _get_val(indicators, "prev_close", 0),
+        "close": _get_val(indicators, "prevClose", 0),
         "volume": _get_val(indicators, "volume", 0),
         "position52w": _get_val(fundamentals, "position52w", 50),
         "high52w": _get_val(fundamentals, "high52w", 0),

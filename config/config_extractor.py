@@ -12,7 +12,7 @@ Key Features:
 ✅ Property shortcuts for common queries
 """
 
-from typing import Dict, Any, Optional, Set, List
+from typing import Dict, Any, Optional, Set, List, Tuple
 from dataclasses import dataclass
 import copy
 import logging
@@ -76,6 +76,7 @@ class ConfigExtractor:
         self.master_config = master_config
         self.horizon = horizon
         self.logger = logger or logging.getLogger(__name__)
+        self.logger.info(f"[EXTRACTOR_DEBUG] Initializing for horizon: {self.horizon}")
 
         # ✅ NEW: Use override or import default
         if confidence_config_override is not None:
@@ -636,9 +637,14 @@ class ConfigExtractor:
         # ✅ STEP 1: Universal gates (master_config only)
         entry_gates = global_cfg.get("entry_gates", {})
         
+        # ✅ SMART EXTRACTION: Handle both flat (horizon) and nested (global) schemas
+        structural_data = entry_gates.get("structural", {})
+        if isinstance(structural_data, dict) and "gates" in structural_data:
+            structural_data = structural_data["gates"]
+
         self.sections["structural_gates"] = ConfigSection(
-            data=entry_gates.get("structural", {}).get("gates", {}),
-            source="global.entry_gates.structural.gates"
+            data=structural_data,
+            source="global.entry_gates.structural"
         )
         
         self.sections["execution_rules"] = ConfigSection(
@@ -646,9 +652,13 @@ class ConfigExtractor:
             source="global.entry_gates.execution_rules"
         )
         
+        opportunity_data = entry_gates.get("opportunity", {})
+        if isinstance(opportunity_data, dict) and "gates" in opportunity_data:
+            opportunity_data = opportunity_data["gates"]
+
         self.sections["opportunity_gates"] = ConfigSection(
-            data=entry_gates.get("opportunity", {}).get("gates", {}),
-            source="global.entry_gates.opportunity.gates"
+            data=opportunity_data,
+            source="global.entry_gates.opportunity"
         )
         #check setupmatrix
         # self.sections["setup_gate_specifications"] = ConfigSection(
@@ -660,13 +670,22 @@ class ConfigExtractor:
         horizon_cfg = self.master_config.get("horizons", {}).get(self.horizon, {})
         horizon_gates = horizon_cfg.get("entry_gates", {})
         
+        # ✅ SMART EXTRACTION: Horizon gates
+        h_structural = horizon_gates.get("structural", {})
+        if isinstance(h_structural, dict) and "gates" in h_structural:
+            h_structural = h_structural["gates"]
+
         self.sections["horizon_structural_gates"] = ConfigSection(
-            data=horizon_gates.get("structural", {}),
+            data=h_structural,
             source=f"horizons.{self.horizon}.entry_gates.structural"
         )
         
+        h_opportunity = horizon_gates.get("opportunity", {})
+        if isinstance(h_opportunity, dict) and "gates" in h_opportunity:
+            h_opportunity = h_opportunity["gates"]
+
         self.sections["horizon_opportunity_gates"] = ConfigSection(
-            data=horizon_gates.get("opportunity", {}),
+            data=h_opportunity,
             source=f"horizons.{self.horizon}.entry_gates.opportunity"
         )
         # self.sections["horizon_gate_overrides"] = ConfigSection(
@@ -1389,6 +1408,7 @@ class ConfigExtractor:
                 return data.get("enabled", True)
             return True
 
+
     def list_sections(self) -> List[str]:
         """List all extracted section names."""
         return list(self.sections.keys())
@@ -1440,7 +1460,9 @@ def startup_config_validation() -> bool:
     """
     from config.master_config import MASTER_CONFIG
     
-    horizons = ["intraday", "short_term", "long_term", "multibagger"]
+    # Multibagger has its own isolated config stack under config/multibagger/.
+    # Main startup validation should only cover the shared 3-horizon pipeline.
+    horizons = ["intraday", "short_term", "long_term"]
     all_valid = True
     
     logger.info("🚀 Initiating Startup Config Validation...")
