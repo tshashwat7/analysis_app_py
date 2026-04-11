@@ -136,7 +136,7 @@ def _extract_price_data(indicators: Dict, fundamentals: Dict) -> Dict:
         "bbHigh": _get_val(indicators, "bbHigh", 0),
         "bbMid": _get_val(indicators, "bbMid", 0),
         "bbLow": _get_val(indicators, "bbLow", 0),
-        "avgVolume": _get_val(indicators, "avg_volume_30Days", 0),
+        "avgVolume": _get_val(indicators, "avgVolume30Days", 0),
         "rvol": _get_val(indicators, "rvol", 1.0),
         "resistance1": _get_val(indicators, "resistance1", 0),
         "resistance2": _get_val(indicators, "resistance2", 0),
@@ -527,7 +527,9 @@ def check_gates_from_context(eval_ctx: Dict, confidence: float) -> Dict[str, Any
         result["passed"] = False
         failures = structural_gates.get("overall", {}).get("failed_gates", [])
         for failure in failures:
-            result["failed_gates"].append(f"structural: {failure}")
+            # ✅ BUG 3 FIX: Extract gate name from dict if present
+            gate_name = failure.get("gate", str(failure)) if isinstance(failure, dict) else str(failure)
+            result["failed_gates"].append(f"structural: {gate_name}")
     
     # Gate 2: Execution Rules
     execution_rules = eval_ctx.get("execution_rules", {})
@@ -535,7 +537,9 @@ def check_gates_from_context(eval_ctx: Dict, confidence: float) -> Dict[str, Any
         result["passed"] = False
         failures = execution_rules.get("overall", {}).get("failed_rules", [])
         for failure in failures:
-            result["failed_gates"].append(f"execution: {failure}")
+            # ✅ BUG 3 FIX: Extract rule name from dict if present
+            rule_name = failure.get("rule", str(failure)) if isinstance(failure, dict) else str(failure)
+            result["failed_gates"].append(f"execution: {rule_name}")
     
     # Gate 3: Opportunity Gates
     opportunity_gates = eval_ctx.get("opportunity_gates", {})
@@ -543,7 +547,9 @@ def check_gates_from_context(eval_ctx: Dict, confidence: float) -> Dict[str, Any
         result["passed"] = False
         failures = opportunity_gates.get("overall", {}).get("failed_gates", [])
         for failure in failures:
-            result["failed_gates"].append(f"opportunity: {failure}")
+            # ✅ BUG 3 FIX: Extract gate name from dict if present
+            gate_name = failure.get("gate", str(failure)) if isinstance(failure, dict) else str(failure)
+            result["failed_gates"].append(f"opportunity: {gate_name}")
     # Gate 4: Setup Preferences
     # (Removed: blocking by setup preference is no longer intended)
     

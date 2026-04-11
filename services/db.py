@@ -70,7 +70,7 @@ class SignalCache(Base):
     recommendation = Column(String)
     signal_text = Column(String)
     conf_score = Column(Integer)
-    rr_ratio = Column(Float, nullable=True)
+    rrRatio = Column(Float, nullable=True)
     entry_price = Column(Float, nullable=True)
     stop_loss = Column(Float, nullable=True)
     direction = Column(String, nullable=True, index=True)
@@ -208,7 +208,7 @@ class PatternPerformanceHistory(Base):
     trend_regime = Column(String(20), nullable=True)
     adx_at_entry = Column(Float, nullable=True)
     volatility_regime = Column(String(20), nullable=True)
-    rr_ratio = Column(Float, nullable=True)
+    rrRatio = Column(Float, nullable=True)
     
     # Pattern Metadata
     pattern_meta = Column(JSON, nullable=True)
@@ -365,6 +365,8 @@ def run_migrations():
         "add_selected_horizon": migrate_add_selected_horizon,
         "add_direction_column": migrate_add_direction_column,
         "add_pattern_breakdown_lifecycle": migrate_add_pattern_breakdown_lifecycle,
+        "add_rr_ratio_to_performance": migrate_add_rr_ratio_to_performance,
+        "add_rr_ratio_to_signal_cache": migrate_add_rr_ratio_to_signal_cache,
     }
     for name, fn in registry.items():
         fn(name)
@@ -448,6 +450,42 @@ def migrate_add_pattern_breakdown_lifecycle(migration_name: str = "add_pattern_b
                 conn.execute(
                     text("ALTER TABLE pattern_breakdown_state ADD COLUMN resolution_reason VARCHAR")
                 )
+            _record_migration(conn, migration_name)
+            logger.warning(f"[MIGRATION] ✅ Applied: {migration_name}")
+    except Exception as e:
+        logger.error(f"[MIGRATION] ❌ Failed: {migration_name} — {e}")
+        raise
+
+def migrate_add_rr_ratio_to_performance(migration_name: str = "add_rr_ratio_to_performance"):
+    """Add rrRatio column to pattern_performance_history if it doesn't exist."""
+    try:
+        with engine.begin() as conn:
+            if _migration_applied(conn, migration_name):
+                logger.debug(f"Migration already applied, skipping: {migration_name}")
+                return
+            result = conn.execute(text("PRAGMA table_info(pattern_performance_history)"))
+            columns = [row[1] for row in result.fetchall()]
+            if "rrRatio" not in columns:
+                logger.warning(f"[MIGRATION] Running: {migration_name}")
+                conn.execute(text("ALTER TABLE pattern_performance_history ADD COLUMN rrRatio FLOAT"))
+            _record_migration(conn, migration_name)
+            logger.warning(f"[MIGRATION] ✅ Applied: {migration_name}")
+    except Exception as e:
+        logger.error(f"[MIGRATION] ❌ Failed: {migration_name} — {e}")
+        raise
+
+def migrate_add_rr_ratio_to_signal_cache(migration_name: str = "add_rr_ratio_to_signal_cache"):
+    """Add rrRatio column to signal_cache if it doesn't exist."""
+    try:
+        with engine.begin() as conn:
+            if _migration_applied(conn, migration_name):
+                logger.debug(f"Migration already applied, skipping: {migration_name}")
+                return
+            result = conn.execute(text("PRAGMA table_info(signal_cache)"))
+            columns = [row[1] for row in result.fetchall()]
+            if "rrRatio" not in columns:
+                logger.warning(f"[MIGRATION] Running: {migration_name}")
+                conn.execute(text("ALTER TABLE signal_cache ADD COLUMN rrRatio FLOAT"))
             _record_migration(conn, migration_name)
             logger.warning(f"[MIGRATION] ✅ Applied: {migration_name}")
     except Exception as e:

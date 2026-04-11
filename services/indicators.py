@@ -32,6 +32,7 @@ from services.data_fetch import (
     get_history_for_horizon
 )
 from services.analyzers.pattern_analyzer import run_pattern_analysis
+from services.fusion.pattern_fusion import merge_pattern_into_indicators
 
 PYTHON_LOOKBACK_MAP = {
     "intraday": 650,       # ~1 month (increased for EMA200 warmup)
@@ -390,7 +391,7 @@ def compute_rvol(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         return {
             "rvol": {"value": round(rvol, 2), "score": score, "desc": f"rvol -> {rvol:.2f}"},
             "volume": {"value": round(today, 2), "score": score, "desc": f"volume today -> {today:.2f}"},
-            "avg_volume_30Days": {"value": round(avg_30days, 2),"raw": avg_30days,"alias": "Avg Volume (20D)","desc": f"20-period average volume: {int(avg_30days)}"}
+            "avgVolume30Days": {"value": round(avg_30days, 2),"raw": avg_30days,"alias": "Avg Volume (20D)","desc": f"20-period average volume: {int(avg_30days)}"}
         }
     return _wrap_calc(_inner, "RVOL")
 
@@ -516,7 +517,7 @@ def compute_dynamic_atr(df: pd.DataFrame, horizon: str = "short_term") -> Dict[s
         }
     return _wrap_calc(_inner, "Dynamic ATR")
 
-def compute_dynamic_sl(df: pd.DataFrame, price: float, horizon: str = "short_term"):
+def compute_dynamic_sl(df: pd.DataFrame, price: float, horizon: str = "short_term", direction: str = "bullish"):
     def _inner():
         length = ATR_HORIZON_CONFIG.get(horizon, 14)
         _Validator.require(df, ["High", "Low", "Close"], 
@@ -529,13 +530,18 @@ def compute_dynamic_sl(df: pd.DataFrame, price: float, horizon: str = "short_ter
         atr_val = safe_float(atr_series.iloc[-1])
 
         if atr_val is None or price is None: return {}
-
-        sl_price = price - (atr_val * multiplier)
+        
+        # ✅ R7-4 FIX: Direction-aware Stop Loss
+        is_bull = str(direction).lower() in ["bullish", "long", "1", "1.0", "0.5", "strong bullish", "mild bullish"]
+        if is_bull:
+            sl_price = price - (atr_val * multiplier)
+        else:
+            sl_price = price + (atr_val * multiplier)
         
         # Avoid div by zero
         if not price: return {}
         
-        risk_pct = ((price - sl_price) / price) * 100
+        risk_pct = (abs(price - sl_price) / price) * 100
 
         return {
             "slAtrDynamic": {
@@ -713,7 +719,7 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
         # 5°  ~= 0.9% move over 10 bars (Moderate Trend)
         score = 10 if ang_s > 20 else 7 if ang_s > 5 else 0
         
-        return {
+        res = {
             "maFastSlope": {
                 "value": round(ang_s, 2), "raw": ang_s, "score": score, 
                 "desc": f"{ang_s:.1f}°", "alias": f"{prefix.upper()} Slope"
@@ -726,6 +732,8 @@ def compute_ema_slope(df: pd.DataFrame, horizon: str = "short_term"):
             f"{prefix}{cfg['l_s']}Slope": {"value": round(ang_s, 2), "score": score},
             f"{prefix}{cfg['l_l']}Slope": {"value": round(ang_l, 2), "score": 0}
         }
+        
+        return res
     return _wrap_calc(_inner, "MA Slopes")
 
 def compute_dynamic_ma_cross(df: pd.DataFrame, close: pd.Series, horizon: str = "short_term"):
@@ -1229,8 +1237,8 @@ def _compute_composites_legacy(indicators: Dict, horizon: str = "short_term") ->
     }
     
     momentum_metrics = {
-        "intraday": ["rsi", "rsislope", "macd", "stochK"],
-        "short_term": ["rsi", "rsislope", "macd", "stochK"],
+        "intraday": ["rsi", "rsiSlope", "macd", "stochK"],
+        "short_term": ["rsi", "rsiSlope", "macd", "stochK"],
         "long_term": ["rsi", "macd"],
         "multibagger": ["rsi", "macd"]
     }
@@ -1323,7 +1331,7 @@ INDICATOR_METRIC_MAP = {
     "vpt": {"func": compute_vpt, "horizon": "default"},
     "cmfSignal": {"func": compute_cmf, "horizon": "short_term"},
     "vwapBias": {"func": compute_vwap, "horizon": "default"},
-    "bbpercentb": {"func": compute_bollinger_bands, "horizon": "default"},
+    "bbPercentB": {"func": compute_bollinger_bands, "horizon": "default"},
     "wickRejection": {"func": compute_wick_rejection, "horizon": "default"},
     "position52w": {"func": compute_52w_position, "horizon": "default"}
 }
@@ -1353,7 +1361,7 @@ def compute_indicators(
         "macd", "adx", "rsi", "maFastSlope", "cmfSignal", # Changed ma_slopes -> maFastSlope
         "obvDiv", "priceVsPrimaryTrendPct", "gapPercent", "maTrendSignal", # Changed maTrendSetup -> maTrendSignal
         "supertrendSignal", "psarTrend", "ttmSqueeze", "bbWidth", 
-        "bbpercentb", "volSpikeRatio", "pivotPoint","regSlope",
+        "bbPercentB", "volSpikeRatio", "pivotPoint","regSlope",
         "maCrossSignal", # Changed maCrossSetup -> maCrossSignal
         "wickRejection", "atrDynamic", "slAtrDynamic","ichiCloud","trueRange","hv10","stochK", "stochD","position52w","relStrengthNifty"
     }
@@ -1377,8 +1385,11 @@ def compute_indicators(
         try:
             raw = get_history_for_horizon(symbol, h)
             if raw is not None and not raw.empty:
+                # CRITICAL: Ensure ascending order (latest at end)
+                raw.sort_index(inplace=True)
                 dfs_cache[h] = _slice_for_speed(raw, horizon=h)
-        except: pass
+        except Exception as e:
+            logger.error(f"Failed to fetch/sort data for {h}: {e}")
 
     # Find latest live price for stitching before we start indicator logic
     live_price = None
@@ -1428,6 +1439,16 @@ def compute_indicators(
             if len(series) > 1:
                 prev = float(series.iloc[-2])
                 indicators["prevClose"] = {"value": round(prev, 2), "score": 0, "alias": "Prev Close", "desc": "Previous Close"}
+                
+                # ✅ FIX: prevHigh needed by momentumFlow invalidation gate
+                df_full = dfs_cache.get(horizon)
+                if df_full is not None and len(df_full) > 1 and "High" in df_full.columns:
+                    try:
+                        prev_high_val = df_full["High"].iloc[-2]
+                        if prev_high_val is not None:
+                            indicators["prevHigh"] = {"value": round(float(prev_high_val), 2), "score": 0, "alias": "Prev High", "desc": "Previous candle High"}
+                    except Exception as e:
+                        logger.debug(f"[{symbol}] prevHigh extraction failed: {e}")
 
             if len(series) > 10:
                 price_10_ago = float(series.iloc[-11]) # -1 is current, -11 is 10 bars ago
@@ -1483,6 +1504,10 @@ def compute_indicators(
                 elif p.name == "high": kwargs["high"] = df_local["High"] if df_local is not None else None
                 elif p.name == "low": kwargs["low"] = df_local["Low"] if df_local is not None else None
                 elif p.name == "horizon": kwargs["horizon"] = data_h
+                elif p.name == "direction":
+                    # ✅ R7-4 FIX: Pass current trend direction to indicators that need it
+                    ma_trend = indicators.get("maTrendSignal", {}).get("value", 1)
+                    kwargs["direction"] = "bullish" if ma_trend >= 0 else "bearish"
             
             res = fn(**kwargs)
             if res:
@@ -1534,40 +1559,41 @@ def compute_indicators(
         # =========================================================
         # NEW: PATTERN INJECTION
         # =========================================================
-        # We use the DF specific to the requested horizon
-        # If horizon is "intraday", we use the Intraday DF.
         df_for_patterns = dfs_cache.get(horizon)
-        
         if df_for_patterns is not None and not df_for_patterns.empty:
             try:
                 # 1. Detect Patterns
-                # This function internally calls 'detect' on all patterns 
-                # AND calls 'merge_pattern_into_indicators' to update the dict.
                 detectedPatterns = run_pattern_analysis(df_for_patterns, indicators, horizon=horizon)
-
-                # indicators.update(patterns)
+                # 2. Merge into main indicators dict for Scoring
+                merge_pattern_into_indicators(indicators, detectedPatterns, horizon, df_for_patterns)
             except Exception as e:
                 logger.error(f"[{symbol}] Pattern detection failed for {horizon}: {e}")
 
-        # =========================================================
-        indicators.update(compute_composite_scores(indicators, horizon))
-        # indicators["technicalScore"] = {"value": compute_technical_score(indicators, horizon), "score": 0}
-        indicators["Horizon"] = {"value": horizon, "score": 0}
-    except: pass
+        # 3. Final indicators cleanup
+        try:
+            indicators.update(compute_composite_scores(indicators, horizon))
+            # indicators["technicalScore"] = {"value": compute_technical_score(indicators, horizon), "score": 0}
+            indicators["Horizon"] = {"value": horizon, "score": 0}
+        except Exception as e:
+            logger.error(f"[{symbol}] Indicators cleanup failed for {horizon}: {e}")
+            
+    except Exception as e:
+        logger.error(f"[{symbol}] Critical failure in indicator pipeline: {e}", exc_info=True)
+        
     return indicators, detectedPatterns
 
 # Legacy Key (Hardcoded),Dynamic Key (Replacement),Why?
 """
 indicators_keys = {
     'intraday': [
-        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsiSlope',
         'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'ema20', 'ema50', 'ema200',
         'ema_20_50_200_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
-        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','volume','avg_volume_30Days', 'obvDiv',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','volume','avgVolume30Days', 'obvDiv',
         'psarTrend', 'psarLevel', 'volSpikeRatio', 'volSpikeSignal', 'hv10', 'hv20',
         'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid', 'bbLow', 'bbWidth',
-        'bbpercentb', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
+        'bbPercentB', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
         'prevSupertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
         'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower', 'adx', 'adx_signal', 'diPlus',
         'diMinus', 'niftyTrendScore', 'atrDynamic', 'atrPct', 'atrSmaRatio',
@@ -1579,14 +1605,14 @@ indicators_keys = {
         'double_top_bottom_intraday', 'technicalScore', 'Horizon','diSpread','hvTrend','trueRangeConsistency','trendStrength','momentumStrength','volatilityQuality'
     ],
     'short_term': [
-        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsiSlope',
         'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'ema20', 'ema50', 'ema200',
         'ema_20_50_200_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
-        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'obvDiv', 'rvol','avg_volume_30Days',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'obvDiv', 'rvol','avgVolume30Days',
         'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
         'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid', 'bbLow', 'bbWidth',
-        'bbpercentb', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
+        'bbPercentB', 'gapPercent', 'wickRejection', 'supertrendSignal', 'supertrendValue',
         'prevSupertrend', 'ichiCloud', 'ichiSpanA', 'ichiSpanB', 'ichiTenkan',
         'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower', 'adx', 'adx_signal', 'diPlus',
         'diMinus', 'niftyTrendScore', 'atrDynamic', 'atrPct', 'atrSmaRatio',
@@ -1597,14 +1623,14 @@ indicators_keys = {
         'technicalScore', 'Horizon'
     ],
     'long_term': [
-        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsiSlope',
         'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'wma10', 'wma40', 'wma50',
         'wma_10_40_50_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
-        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','avg_volume_30Days', 'obvDiv',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol','avgVolume30Days', 'obvDiv',
         'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
         'relStrengthNifty', 'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid',
-        'bbLow', 'bbWidth', 'bbpercentb', 'gapPercent', 'wickRejection',
+        'bbLow', 'bbWidth', 'bbPercentB', 'gapPercent', 'wickRejection',
         'supertrendSignal', 'supertrendValue', 'prevSupertrend', 'ichiCloud', 'ichiSpanA',
         'ichiSpanB', 'ichiTenkan', 'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower',
         'adx', 'adx_signal', 'diPlus', 'diMinus', 'niftyTrendScore', 'atrDynamic',
@@ -1615,14 +1641,14 @@ indicators_keys = {
         'technicalScore', 'Horizon'
     ],
     'multibagger': [
-        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsislope',
+        'symbol', 'price', 'prevClose', 'price10Ago', 'priceSlope', 'rsi', 'rsiSlope',
         'macd', 'macdCross', 'macdHistZ', 'macdHistogram', 'prevMacdHistogram',
         'maFast', 'maMid', 'maSlow', 'maTrendSignal', 'mma6', 'mma12',
         'mma_6_12_12_trend', 'pivotPoint', 'resistance1', 'resistance2', 'resistance3',
-        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol', 'avg_volume_30Days', 'obvDiv',
+        'support1', 'support2', 'support3', 'vwap', 'vwapBias', 'rvol', 'avgVolume30Days', 'obvDiv',
         'psarTrend', 'psarLevel', 'hv10', 'hv20', 'volSpikeRatio', 'volSpikeSignal',
         'relStrengthNifty', 'stochK', 'stochD', 'stochCross', 'bbHigh', 'bbMid',
-        'bbLow', 'bbWidth', 'bbpercentb', 'gapPercent', 'wickRejection',
+        'bbLow', 'bbWidth', 'bbPercentB', 'gapPercent', 'wickRejection',
         'supertrendSignal', 'supertrendValue', 'prevSupertrend', 'ichiCloud', 'ichiSpanA',
         'ichiSpanB', 'ichiTenkan', 'ichiKijun', 'ttmSqueeze', 'kcUpper', 'kcLower',
         'adx', 'adx_signal', 'diPlus', 'diMinus', 'niftyTrendScore', 'atrDynamic',
@@ -1890,7 +1916,7 @@ GENERIC_KEYS = {
     
     # === Oscillators (Always Generic) ===
     'rsi': {'legacy': None},
-    'rsislope': {'legacy': None},
+    'rsiSlope': {'legacy': None},
     'macd': {'legacy': None},
     'macdCross': {'legacy': None},
     'macdHistogram': {'legacy': None},

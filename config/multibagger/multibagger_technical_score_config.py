@@ -43,7 +43,7 @@ MB_TECH_HORIZON_METRIC_INCLUSION = {
         ],
         "exclude": [
             "momentumStrength",
-            "rsi", "rsislope", "stochK", "macd", "macdCross",
+            "rsi", "rsiSlope", "stochK", "macd", "macdCross",
             "vwapBias", "wickRejection", "gapPercent",
             "volSpikeRatio", "volSpikeSignal",
             "ttmSqueeze", "bbWidth", "atrPct",

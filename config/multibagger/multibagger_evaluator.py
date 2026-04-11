@@ -303,7 +303,7 @@ def mb_compute_technical_score(indicators: dict, horizon: str) -> dict:
     liq_reason  = None
     liq_rule    = MB_LIQUIDITY_PENALTY_RULE.get(horizon)
     if liq_rule:
-        vol_data  = indicators.get("avg_volume_30Days", {})
+        vol_data  = indicators.get("avgVolume30Days", {})
         vol_value = vol_data.get("value") or vol_data.get("raw") if isinstance(vol_data, dict) else vol_data
         if vol_value is not None:
             try:

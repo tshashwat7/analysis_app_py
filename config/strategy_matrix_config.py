@@ -39,7 +39,7 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "price_near_bb_high": {
-                "gates": {"bbpercentb": {"min": 0.90}},
+                "gates": {"bbPercentB": {"min": 0.90}},
                 "points": 35,
                 "reason": "Price in Breakout Zone (BB High)"
             },
@@ -87,7 +87,7 @@ STRATEGY_MATRIX = {
         
         "scoring_rules": {
             "price_near_bb_low": {
-                "gates": {"bbpercentb": {"max": 0.10}},
+                "gates": {"bbPercentB": {"max": 0.10}},
                 "points": 40,
                 "reason": "Price near Mean Reversion Zone (BB Low)"
             },
@@ -655,7 +655,7 @@ STRATEGY_MATRIX = {
                 "reason": "Deeply oversold"
             },
             "bullish_divergence": {
-                "gates": {"rsislope": {"min": 0.05}, "priceSlope": {"max": -0.01}},
+                "gates": {"rsiSlope": {"min": 0.05}, "priceSlope": {"max": -0.01}},
                 "points": 30,
                 "reason": "Bullish divergence (Price falling but RSI rising)"
             },
@@ -711,7 +711,7 @@ STRATEGY_MATRIX = {
                 "reason": "Aggressive Bearish Momentum"
             },
             "volatility_expansion": {
-                "gates": {"rvol": {"min": 1.5}, "bbpercentb": {"max": 0.05}},
+                "gates": {"rvol": {"min": 1.5}, "bbPercentB": {"max": 0.05}},
                 "points": 30,
                 "reason": "Volatility Expansion Breakdown"
             }

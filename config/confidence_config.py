@@ -102,14 +102,14 @@ CONFIDENCE_CONFIG = {
             "divergence_penalties": {
                 "severe": {
                     "gates": {
-                        "rsislope": {"max": -0.08}
+                        "rsiSlope": {"max": -0.08}
                     },
                     "block_entry": True,
                     "reason": "Severe bearish divergence"
                 },
                 "moderate": {
                     "gates": {
-                        "rsislope": {"max": -0.03, "min": -0.08}
+                        "rsiSlope": {"max": -0.03, "min": -0.08}
                     },
                     "confidence_multiplier": 0.70,
                     "block_entry": False,
@@ -117,7 +117,7 @@ CONFIDENCE_CONFIG = {
                 },
                 "minor": {
                     "gates": {
-                        "rsislope": {"max": 0.0, "min": -0.03}
+                        "rsiSlope": {"max": 0.0, "min": -0.03}
                     },
                     "confidence_multiplier": 0.90,
                     "block_entry": False,
@@ -364,7 +364,7 @@ CONFIDENCE_CONFIG = {
                         "reason": "Breakout lacks volume conviction"
                     },
                     # ❌ REMOVED: moderate_divergence — duplicated global.universal_adjustments.moderate
-                    # (same rsislope range, was causing double-penalty: 0.70× multiplier + -15 additive)
+                    # (same rsiSlope range, was causing double-penalty: 0.70× multiplier + -15 additive)
                     
                     # ========================================================
                     # BUCKET-BASED PENALTIES LIGHT FUNDAMENTAL PENALTY (Only Extreme Garbage) 
@@ -674,6 +674,17 @@ CONFIDENCE_CONFIG = {
                 "max_override_count": 2,
                 "log_overrides": True
             }
+        },
+        "multibagger": {
+            "confidence_philosophy": "Isolated multibagger pipeline support.",
+            "confidence_clamp": [30, 95],
+            "base_confidence_adjustment": 0,
+            "setup_floor_overrides": {},
+            "conditional_adjustments": {"penalties": {}, "bonuses": {}},
+            "adx_confidence_bands": {},
+            "adx_confidence_penalties": {},
+            "min_tradeable_confidence": {"min": 30},
+            "high_confidence_override": {"threshold": 90, "can_override": {}}
         }
     }
 }

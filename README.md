@@ -42,7 +42,7 @@
 13. [Presentation Layer & UI](#presentation-layer--ui)
 14. [Setup & Installation](#setup--installation)
 15. [Configuration Guide](#configuration-guide)
-16. [Known Limitations](#known-limitations)
+16. [Version History & Changelog](#version-history--changelog)
 17. [Contributing / Development Notes](#contributing--development-notes)
 
 ---
@@ -172,7 +172,11 @@ Setups are ranked using a `70/30` blend of importance and current-state fit:
 
 ---
 
-## Modernization & Refactoring (v15.1 Wash)
+## Version History & Changelog
+
+This section consolidates the architectural wash and the later resolved release notes so the progression from v15.1 through v15.5 is visible in one place.
+
+### v15.1 Wash
 
 The codebase has undergone a significant architectural "wash" across 9 major audit phases. This modernization ensures maximum configuration purity, type safety, and system stability.
 
@@ -192,6 +196,59 @@ The codebase has undergone a significant architectural "wash" across 9 major aud
 | **P12**| **Trade Signal Path**| Canonical Execution Schema | Single source of truth for targets; decoupled sizing failures |
 | **v15.2**| **Stability**| Session Management & Bug Fixes | Robust parallel writes; 0 NameErrors in scheduler |
 | **v15.3**| **Setup Ranking**| Pattern-Informed Setup Selection | Patterns inform ranking; normalized fit scoring; dead config keys enforced |
+
+---
+
+### v15.3-v15.5 Resolved Issues
+
+#### ✅ W64 — Decoupled Conflict Penalty (RESOLVED)
+
+The conflict penalty calculated in `_validate_patterns` is correctly subtracted from `total_adjustment` at **Step 8** of the confidence pipeline. A setup with contradictory patterns (e.g., Golden Cross + Death Cross) now receives a specific penalty (up to -30).
+
+#### ✅ W46 — Centralized Horizon Constants (RESOLVED)
+
+The dual-semantics issue of `HORIZON_WINDOWS` has been resolved by decoupling into `HORIZON_WINDOWS_SECONDS` (for DB cleanup) and `HORIZON_WINDOWS_BARS` (for pattern detectors). `HORIZON_MA_CONFIG` for crossover MA periods was also centralized to `horizon_constants.py`. All patterns now reference this file.
+
+#### ✅ W50 — Ichimoku `signal_age` Precision (RESOLVED)
+
+The `signal_age` ambiguity for fresh crosses has been fixed. The system now distinguishes between a truly fresh cross (`age=1`) and a cross detected at the lookback boundary via an `is_boundary_default=True` sentinel in the returned meta dict.
+
+#### ✅ W59 — `FULL_HORIZON_SCORES` Hydration (RESOLVED)
+
+The in-memory score cache is now reliably hydrated via three paths: after warmer batches (serialized in main process), after single-symbol analysis, and at startup from `signal_cache.horizon_scores` (marked `_stale: True` until the first warmer cycle refreshes them).
+
+#### ✅ SQLite Concurrency (RESOLVED)
+
+Write contention on the `signal_cache` has been eliminated. Phase 9 moved warmer DB writes to the main process (serialized), backed by `journal_mode=WAL`, 10,000ms `busy_timeout`, and jittered exponential backoff (`SIGNAL_CACHE_WRITE_RETRIES=5`).
+
+#### ✅ Issue 4 — VCP Stop-Loss Physics (RESOLVED)
+
+`PATTERN_METADATA["minerviniStage2"]` now includes the required `physics` block with `sl_method`, `sl_key`, and `sl_formula`. VCP trades no longer fall through to the ATR-fallback stop calculation.
+
+#### ✅ Metadata Completeness Guard (RESOLVED)
+
+`ConfigExtractor.validate_pattern_metadata()` now performs a camelCase-accurate completeness check at startup and raises `ConfigurationError` (hard crash) if any active detector alias is missing from `PATTERN_METADATA`. This prevents silent deployment with broken trade physics.
+
+#### ✅ Phase 8 — Presentation Layer (RESOLVED)
+
+- **XSS:** All dynamic narrative content is escaped via `markupsafe.escape()` before rendering.
+- **SHORT Trade % rendering:** Profit percentages for bearish signals are now displayed as positive values with correct green coloring.
+- **API Versioning:** `/api/v1/scores` and `/api/v1/corporate_actions` added with `X-API-Version` response headers.
+- **Template stability:** `structural_gates` Jinja2 access is null-guarded with `{% if eval_ctx.structural_gates %}`.
+- **Multibagger zeros:** Replaced hardcoded category score keys with a dynamic loop.
+
+#### ✅ v15.3 — Pattern-Informed Setup Selection (RESOLVED)
+
+Five related issues in `_classify_setup()` and `_calculate_setup_fit_quality()` resolved together:
+
+- **Scale mismatch in composite score:** `priority × 1.25 = 122.5` was being blended with `fit_score` (0–100) in the same formula. Fixed: pattern boost is now additive and bounded — `priority_bonus = (multiplier - 1.0) × 20`, clamped at 100, mirroring the strategy `horizon_bonus` pattern exactly.
+- **Pattern quality blind spot in fit score:** `_calculate_setup_fit_quality` used a flat additive formula with a hardcoded base of 50, producing inflated scores and losing pattern quality gradient. Fixed: three-component normalized blend (`C1×0.60 + C2×0.25 + C3×0.15`) mirroring strategy scoring normalization. All components are independently normalized to 0–100 before blending.
+- **`found` read from wrong level:** `pat_data.get("found")` returned `None` for all fused patterns because `found` lives inside `raw`, not at the top level. Fixed: all three pattern score access sites now unwrap `raw` first (`raw = pat_data.get("raw", pat_data)`) before reading `found` and `score`, consistent with `_evaluate_pattern_detection`.
+- **`min_pattern_quality` was a dead config key:** Declared per-setup (e.g. `8.5` for DARVAS) but never enforced — a darvasBox with score `2.0` passed the boolean gate and entered candidate scoring. Fixed: enforced in `_classify_setup()` immediately after `pattern_detection` passes.
+- **`min_setup_score` was a dead config key:** Per-setup thresholds (e.g. `85` for DARVAS, `80` for VCP) were declared but `MIN_FIT_SCORE = 55.0` was the only enforced floor. Fixed: `effective_min = max(min_setup_score, MIN_FIT_SCORE)` now applied after fit quality is computed.
+- **`_validate_patterns` flat affinity scoring:** `confirm_score = 50 if primary_found` gave identical score to a primary pattern with score `2.0` and `9.5`. Fixed: quality-weighted contribution (`pat_quality / 10 × 50`). Direction conflict detection replaced fragile `"bullish" in p.lower()` substring check with structured `pat_ctx.physics.get("direction")` lookup.
+- **`PATTERN_STRIKE_REVERSAL` missing multiplier:** Only `PATTERN_*` setup without `pattern_presence_multiplier`, silently behaving as indicator-led. Fixed: `1.15` added, consistent with `PATTERN_GOLDEN_CROSS`.
+- **Cross-reference validation added:** `validate_extractor_state()` in `QueryOptimizedExtractor` now checks (1) all `PATTERN_*` setups have `pattern_presence_multiplier > 1.0` (warning), and (2) all `preferred_setups` / `avoid_setups` strings in `strategy_matrix_config.py` exist in `SETUP_PATTERN_MATRIX` (hard error). Both checks run at every server startup via `ConfigResolver.__init__()`.
 
 ---
 
@@ -1612,61 +1669,6 @@ Edit `master_config.py` → `global.risk_management.rr_gates` for global minimum
 4. Optionally add horizon priority override in `master_config.calculation_engine.horizon_priority_overrides`
 5. Optionally add confidence floor in `confidence_config.global.setup_baseline_floors`
 6. Add the new setup name to `preferred_setups` or `avoid_setups` in any relevant strategies in `strategy_matrix_config.py`. Cross-references are validated by `validate_extractor_state()` at startup — a typo here is a hard error.
-
----
-
-## Known Limitations (Refactored v15.1)
-
-### ✅ W64 — Decoupled Conflict Penalty (RESOLVED)
-
-The conflict penalty calculated in `_validate_patterns` is correctly subtracted from `total_adjustment` at **Step 8** of the confidence pipeline. A setup with contradictory patterns (e.g., Golden Cross + Death Cross) now receives a specific penalty (up to -30).
-
-### ✅ W46 — Centralized Horizon Constants (RESOLVED)
-
-The dual-semantics issue of `HORIZON_WINDOWS` has been resolved by decoupling into `HORIZON_WINDOWS_SECONDS` (for DB cleanup) and `HORIZON_WINDOWS_BARS` (for pattern detectors). `HORIZON_MA_CONFIG` for crossover MA periods was also centralized to `horizon_constants.py`. All patterns now reference this file.
-
-### ✅ W50 — Ichimoku `signal_age` Precision (RESOLVED)
-
-The `signal_age` ambiguity for fresh crosses has been fixed. The system now distinguishes between a truly fresh cross (`age=1`) and a cross detected at the lookback boundary via an `is_boundary_default=True` sentinel in the returned meta dict.
-
-### ✅ W59 — `FULL_HORIZON_SCORES` Hydration (RESOLVED)
-
-The in-memory score cache is now reliably hydrated via three paths: after warmer batches (serialized in main process), after single-symbol analysis, and at startup from `signal_cache.horizon_scores` (marked `_stale: True` until the first warmer cycle refreshes them).
-
-### ✅ SQLite Concurrency (RESOLVED)
-
-Write contention on the `signal_cache` has been eliminated. Phase 9 moved warmer DB writes to the main process (serialized), backed by `journal_mode=WAL`, 10,000ms `busy_timeout`, and jittered exponential backoff (`SIGNAL_CACHE_WRITE_RETRIES=5`).
-
-### ✅ Issue 4 — VCP Stop-Loss Physics (RESOLVED)
-
-`PATTERN_METADATA["minerviniStage2"]` now includes the required `physics` block with `sl_method`, `sl_key`, and `sl_formula`. VCP trades no longer fall through to the ATR-fallback stop calculation.
-
-### ✅ Metadata Completeness Guard (RESOLVED)
-
-`ConfigExtractor.validate_pattern_metadata()` now performs a camelCase-accurate completeness check at startup and raises `ConfigurationError` (hard crash) if any active detector alias is missing from `PATTERN_METADATA`. This prevents silent deployment with broken trade physics.
-
-### ✅ Phase 8 — Presentation Layer (RESOLVED)
-
-- **XSS:** All dynamic narrative content is escaped via `markupsafe.escape()` before rendering.
-- **SHORT Trade % rendering:** Profit percentages for bearish signals are now displayed as positive values with correct green coloring.
-- **API Versioning:** `/api/v1/scores` and `/api/v1/corporate_actions` added with `X-API-Version` response headers.
-- **Template stability:** `structural_gates` Jinja2 access is null-guarded with `{% if eval_ctx.structural_gates %}`.
-- **Multibagger zeros:** Replaced hardcoded category score keys with a dynamic loop.
-
-### ✅ v15.3 — Pattern-Informed Setup Selection (RESOLVED)
-
-Five related issues in `_classify_setup()` and `_calculate_setup_fit_quality()` resolved together:
-
-- **Scale mismatch in composite score:** `priority × 1.25 = 122.5` was being blended with `fit_score` (0–100) in the same formula. Fixed: pattern boost is now additive and bounded — `priority_bonus = (multiplier - 1.0) × 20`, clamped at 100, mirroring the strategy `horizon_bonus` pattern exactly.
-- **Pattern quality blind spot in fit score:** `_calculate_setup_fit_quality` used a flat additive formula with a hardcoded base of 50, producing inflated scores and losing pattern quality gradient. Fixed: three-component normalized blend (`C1×0.60 + C2×0.25 + C3×0.15`) mirroring strategy scoring normalization. All components are independently normalized to 0–100 before blending.
-- **`found` read from wrong level:** `pat_data.get("found")` returned `None` for all fused patterns because `found` lives inside `raw`, not at the top level. Fixed: all three pattern score access sites now unwrap `raw` first (`raw = pat_data.get("raw", pat_data)`) before reading `found` and `score`, consistent with `_evaluate_pattern_detection`.
-- **`min_pattern_quality` was a dead config key:** Declared per-setup (e.g. `8.5` for DARVAS) but never enforced — a darvasBox with score `2.0` passed the boolean gate and entered candidate scoring. Fixed: enforced in `_classify_setup()` immediately after `pattern_detection` passes.
-- **`min_setup_score` was a dead config key:** Per-setup thresholds (e.g. `85` for DARVAS, `80` for VCP) were declared but `MIN_FIT_SCORE = 55.0` was the only enforced floor. Fixed: `effective_min = max(min_setup_score, MIN_FIT_SCORE)` now applied after fit quality is computed.
-- **`_validate_patterns` flat affinity scoring:** `confirm_score = 50 if primary_found` gave identical score to a primary pattern with score `2.0` and `9.5`. Fixed: quality-weighted contribution (`pat_quality / 10 × 50`). Direction conflict detection replaced fragile `"bullish" in p.lower()` substring check with structured `pat_ctx.physics.get("direction")` lookup.
-- **`PATTERN_STRIKE_REVERSAL` missing multiplier:** Only `PATTERN_*` setup without `pattern_presence_multiplier`, silently behaving as indicator-led. Fixed: `1.15` added, consistent with `PATTERN_GOLDEN_CROSS`.
-- **Cross-reference validation added:** `validate_extractor_state()` in `QueryOptimizedExtractor` now checks (1) all `PATTERN_*` setups have `pattern_presence_multiplier > 1.0` (warning), and (2) all `preferred_setups` / `avoid_setups` strings in `strategy_matrix_config.py` exist in `SETUP_PATTERN_MATRIX` (hard error). Both checks run at every server startup via `ConfigResolver.__init__()`.
-
----
 
 ## Contributing / Development Notes
 

@@ -127,7 +127,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "adx": {"min": 20},
                         "trendStrength": {"min": 5.0},
                         "volatilityQuality": {"min": 5.0},
-                        "rvol": {"min": 2.0}  # Higher for intraday
+                        "rvol": {"min": 2.0},  # Higher for intraday
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 },
 
@@ -139,7 +140,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "adx": {"min": 16},
                         "trendStrength": {"min": 4.0},
                         "volatilityQuality": {"min": 4.0},
-                        "rvol": {"min": 1.5}
+                        "rvol": {"min": 1.5},
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 },
 
@@ -195,7 +197,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "technical": {
                         "adx": {"min": 17},
                         "trendStrength": {"min": 5.5},
-                        "volatilityQuality": {"min": 7.0}
+                        "volatilityQuality": {"min": 7.0},
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 }
             },
@@ -205,7 +208,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "technical": {
                         "adx": {"min": 15},
                         "trendStrength": {"min": 4.5},
-                        "volatilityQuality": {"min": 6.0}
+                        "volatilityQuality": {"min": 6.0},
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 }
             },
@@ -282,7 +286,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "technical": {
                         "adx": {"min": 16},
                         "trendStrength": {"min": 4.5},
-                        "volatilityQuality": {"min": 4.5}
+                        "volatilityQuality": {"min": 4.5},
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 },
 
@@ -293,7 +298,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "technical": {
                         "adx": {"min": 14},
                         "trendStrength": {"min": 3.5},
-                        "volatilityQuality": {"min": 4.0}
+                        "volatilityQuality": {"min": 4.0},
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 },
 
@@ -373,7 +379,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "adx": {"min": 20},
                         "trendStrength": {"min": 6.5},
                         "volatilityQuality": {"min": 5.0},
-                        "rvol": {"min": 2.0}
+                        "rvol": {"min": 2.0},
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 },
 
@@ -385,7 +392,8 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                         "adx": {"min": 18},
                         "trendStrength": {"min": 5.5},
                         "volatilityQuality": {"min": 4.0},
-                        "rvol": {"min": 1.5}
+                        "rvol": {"min": 1.5},
+                        "bbPercentB": {"min": 0.05, "max": None}
                     }
                 },
 
@@ -603,7 +611,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "classification_rules": {
             "pattern_detection": {},  # No specific pattern required
             "technical_gates": {
-                "bbpercentb": {"min": 0.90},  # ✅ Tightened from 0.75 to align with swing_breakout scoring gate
+                "bbPercentB": {"min": 0.90},  # ✅ Tightened from 0.75 to align with swing_breakout scoring gate
                 "rsi": {"min": 60},
                 "rvol": {"min": 1.25}         # ⬇️ Relaxed from 1.5
             },
@@ -612,7 +620,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "default_priority": 90,
         "context_requirements": {
             "technical": {
-                "bbpercentb": {"min": 0.90},   # ✅ Tightened from 0.75; consistent with classification_rules
+                "bbPercentB": {"min": 0.90},   # ✅ Tightened from 0.75; consistent with classification_rules
                 "rsi": {"min": 60, "max": 80},
                 "rvol": {"min": 1.25},        # ⬇️ Relaxed from 1.5
                 "adx": {"min": 18},
@@ -694,7 +702,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "classification_rules": {
             "pattern_detection": {},
             "technical_gates": {
-                "bbpercentb": {"max": 0.15},  # ⬆️ Relaxed from 0.02
+                "bbPercentB": {"max": 0.15},  # ⬆️ Relaxed from 0.02
                 "rsi": {"max": 45},           # ⬆️ Relaxed from 40
                 "rvol": {"min": 1.25}         # ⬇️ Relaxed from 1.5
             },
@@ -703,7 +711,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "default_priority": 88,
         "context_requirements": {
             "technical": {
-                "bbpercentb": {"max": 0.15},
+                "bbPercentB": {"max": 0.15},
                 "rsi": {"max": 45},
                 "rvol": {"min": 1.25},
                 "adx": {"min": 16},
@@ -816,7 +824,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 "momentumFlow": True
             },
             "technical_gates": {
-                "bbpercentb": {"min": 0.65},
+                "bbPercentB": {"min": 0.65},
                 "rsi": {"min": 55},
                 "rvol": {"min": 1.2}
             },
@@ -825,7 +833,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "default_priority": 92,
         "context_requirements": {
             "technical": {
-                "bbpercentb": {"min": 0.65},
+                "bbPercentB": {"min": 0.65},
                 "rsi": {"min": 55},
                 "rvol": {"min": 1.2},
                 "adx": {"min": 20},
@@ -853,7 +861,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "technical_gates": {
                 "trendStrength": {"min": 4.0},
                 "price": {"min_metric": "maFast"},
-                # TODO: abs(price - maFast) / maFast <= 0.05,
+                "priceVsPrimaryTrendPct": {"max": 5},
                 "rsi": {"min": 50},
                 "momentumStrength": {"min": 4.0}
             },
@@ -1093,7 +1101,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "validation_modifiers": {
             "penalties": {
                 "decelerating_momentum": {
-                    "gates": {"rsislope": {"max": -0.05}, "macdHistogram": {"max": 0}},
+                    "gates": {"rsiSlope": {"max": -0.05}, "macdHistogram": {"max": 0}},
                     "confidence_penalty": -12,
                     "reason": "Both RSI and MACD momentum decelerating in trend setup"
                 },
@@ -1412,7 +1420,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "reason": "Strong dividend payout acts as risk cushion"
                 },
                 "early_reversal_signal": {
-                    "gates": {"rsislope": {"min": 0.05}, "price": {"min_metric": "prevClose"}},
+                    "gates": {"rsiSlope": {"min": 0.05}, "price": {"min_metric": "prevClose"}},
                     "confidence_boost": 10,
                     "reason": "Momentum starting to turn — value inflection point"
                 }
@@ -1507,7 +1515,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "reason": "Turnaround story needs minimum earnings quality floor"
                 },
                 "momentum_stalling": {
-                    "gates": {"rsislope": {"max": 0}, "macdHistogram": {"max": 0}},
+                    "gates": {"rsiSlope": {"max": 0}, "macdHistogram": {"max": 0}},
                     "confidence_penalty": -10,
                     "reason": "Both momentum indicators still falling — too early for entry"
                 }
@@ -1637,7 +1645,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 "trendStrength": {"min": 2.0},
                 "adx": {"min": 10},
                 "volatilityQuality": {"min": 2.5},
-                "rsislope": {"min": 0.05}
+                "rsiSlope": {"min": 0.05}
             },
             "fundamental": {
                 "required": False
@@ -1715,7 +1723,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "pattern_detection": {},  # No specific pattern required
             "technical_gates": {
                 "rsi": {"max": 34.999},
-                "rsislope": {"min": 0.051000000000000004},
+                "rsiSlope": {"min": 0.051000000000000004},
                 "trendStrength": {"min": 2.0}
             },
             "require_fundamentals": False
@@ -1724,7 +1732,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "context_requirements": {
             "technical": {
                 "rsi": {"max": 35},
-                "rsislope": {"min": 0.05},
+                "rsiSlope": {"min": 0.05},
                 "trendStrength": {"min": 2.0},
                 "adx": {"min": 12}
             },
@@ -1872,7 +1880,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
             "pattern_detection": {},
             "technical_gates": {
                 "trendStrength": {"max": 2.999},
-                "bbpercentb": {"min": 0.2, "max": 0.5}
+                "bbPercentB": {"min": 0.2, "max": 0.5}
             },
             "fundamental_gates": {
                 "roe": {"min": 20},
@@ -1885,7 +1893,7 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
         "context_requirements": {
             "technical": {
                 "trendStrength": {"max": 3.0},
-                "bbpercentb": {"min": 0.2, "max": 0.5},
+                "bbPercentB": {"min": 0.2, "max": 0.5},
                 "adx": {"max": 25}
             },
             "fundamental": {
@@ -2943,7 +2951,7 @@ PATTERN_METADATA: Dict[str, Dict[str, Any]] = {
             "breakdown_threshold": {
                 "intraday": {
                     "gates": {
-                        "price": {"max_metric": "prev_high", "duration": 1}
+                        "price": {"max_metric": "prevHigh", "duration": 1}
                     }
                 }
             },
@@ -2960,4 +2968,5 @@ __all__ = [
     "PATTERN_METADATA",
     "DEFAULT_PHYSICS",
     "PATTERN_SCORING_THRESHOLDS",
+    "PATTERN_INDICATOR_MAPPINGS",
 ]

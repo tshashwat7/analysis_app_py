@@ -18,7 +18,7 @@ import sys
 _caller_frame = sys._getframe(1)
 _caller_name = _caller_frame.f_globals.get('__name__', '')
 # Removed 'config.query_optimized_extractor' from allowed callers
-_allowed_callers = ['config.config_extractor', 'main', 'tests', 'scripts', 'services', 'verify_invariants', '__main__', 'config', 'tests.robustness', 'importlib']
+_allowed_callers = ['config.config_extractor', 'main', 'tests', 'scripts', 'services', 'verify_invariants', '__main__', 'config', 'tests.robustness', 'importlib', 'baktest']
 
 if not any(caller in _caller_name for caller in _allowed_callers) and 'pytest' not in sys.modules:
     raise ImportError(
@@ -224,7 +224,7 @@ GATE_METRIC_REGISTRY = {
         "description": "RSI momentum indicator",
         "context_paths": [("indicators", "rsi")]
     },
-    "rsislope": {
+    "rsiSlope": {
         "type": "numeric",
         "category": "momentum",
         "validation_type": "threshold",
@@ -309,6 +309,23 @@ GATE_METRIC_REGISTRY = {
     # ===========================
     # STRUCTURE GATES
     # ===========================
+    "prevHigh": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Previous candle high, used by momentumFlow invalidation",
+        "context_paths": [("indicators", "prevHigh")],
+        "optional": True
+    },
+    
+    "prevClose": {
+        "type": "numeric",
+        "category": "structure",
+        "validation_type": "threshold",
+        "description": "Previous candle close",
+        "context_paths": [("indicators", "prevClose")],
+        "optional": True
+    },
     "bbPercentB": {
         "type": "numeric",
         "category": "volatility",
@@ -504,7 +521,7 @@ GATE_METRIC_REGISTRY = {
         "category": "risk_reward",
         "validation_type": "threshold",
         "description": "Risk-reward ratio",
-        "context_paths": [("risk_model", "rrRatio")],
+        "context_paths": [("risk_candidates", "rrRatio")],
         "optional": True,
         "skip_reason": "deferred_to_stage2"
     },
@@ -568,6 +585,17 @@ GATE_METRIC_REGISTRY = {
         "fallback": 0.0
     },
     
+    # Alias for relStrengthNifty used in legacy configs
+    "relativeStrength": {
+        "type": "numeric",
+        "category": "market",
+        "validation_type": "threshold",
+        "description": "Alias for relStrengthNifty",
+        "context_paths": [("indicators", "relStrengthNifty")],
+        "optional": True,
+        "fallback": 0.0
+    },
+    
     "sectorTrendScore": {
         "type": "numeric",
         "category": "market",
@@ -616,7 +644,7 @@ MASTER_CONFIG = {
                     "volatilityQuality": {"min": 3.0},
                     "rsi": {"min": None, "max": None},
                     "macdHistogram": {"min": None},
-                    "bbpercentb": {"min": None, "max": None},
+                    "bbPercentB": {"min": None, "max": None},
                     "atrPct": {"min": None},
                     "roe": {"min": None},
                     "roce": {"min": None},
@@ -625,7 +653,7 @@ MASTER_CONFIG = {
                     "rvol": {"min": None},
                     "volume": {"min": None},
                     "marketTrendScore": {"min": None},   
-                    "relativeStrength": {"min": None},    
+                    "relStrengthNifty": {"min": None},    
                     "sectorTrendScore": {"min": None},   
                     "marketCap": {"min": None},              
                     "institutionalOwnership": {"min": None}
@@ -854,7 +882,7 @@ MASTER_CONFIG = {
         },
         
         "momentum_thresholds": {
-            "rsislope": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
+            "rsiSlope": {"acceleration_floor": 0.05, "deceleration_ceiling": -0.05},
             "macd": {"acceleration_floor": 0.5, "deceleration_ceiling": -0.5}
         },
         
@@ -1000,7 +1028,7 @@ MASTER_CONFIG = {
             },
             
             "momentum_thresholds": {
-                "rsislope": {
+                "rsiSlope": {
                     "acceleration_floor": 0.10,
                     "deceleration_ceiling": -0.10
                 },
@@ -1028,7 +1056,7 @@ MASTER_CONFIG = {
             
             "trend_thresholds": {
                 "slope": {
-                    "strong": 15.0,
+                    "strong": 12.0,
                     "moderate": 5.0
                 }
             },
@@ -1043,7 +1071,7 @@ MASTER_CONFIG = {
                     "VOLATILITY_SQUEEZE": 1.3,
                     "MOMENTUM_BREAKOUT": 0.8
                 },
-                "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.01},
+                "atr_sl_limits": {"max_percent": 0.03, "min_percent": 0.005},
                 "rrRatio": {"min": 1.2},
                 "horizon_t2_cap": 0.04,
                 "rr_gates": { "min_t1": 1.2, "min_t2": 2.2, "min_structural": 1.3, "execution_floor": 1.0 }
@@ -1211,7 +1239,7 @@ MASTER_CONFIG = {
                 }
             },
             "momentum_thresholds": {
-                "rsislope": {
+                "rsiSlope": {
                     "acceleration_floor": 0.05,
                     "deceleration_ceiling": -0.05
                 },
@@ -1248,7 +1276,7 @@ MASTER_CONFIG = {
             },
             
             "momentum_thresholds": {
-                "rsislope": {
+                "rsiSlope": {
                     "acceleration_floor": 0.03,
                     "deceleration_ceiling": -0.03
                 },
@@ -1350,6 +1378,32 @@ MASTER_CONFIG = {
                     "technicalScore": {"min": None}
                 },
             },
+        },
+        "multibagger": {
+            "timeframe": "1mo",
+            "description": "Long-term wealth creation (Months to Years)",
+            "volume_analysis": {"rvol": {"surge_threshold": 1.5, "drought_threshold": 0.8}},
+            "time_estimation": {"candles_per_unit": 0.05},
+            "position_sizing": {"base_risk_pct": 0.02},
+            "risk_management": {
+                "max_position_pct": 0.05,
+                "rrRatio": {"min": 3.0},
+                "horizon_t2_cap": 0.30,
+                "rr_gates": {"min_t1": 2.0, "min_t2": 5.0, "min_structural": 2.0, "execution_floor": 1.5}
+            },
+            "execution": {
+                "stop_loss_atr_mult": 3.0,
+                "target_atr_mult": 10.0,
+                "max_hold_candles": 240,
+                "base_hold_days": 365,
+                "proximity_rejection": {"resistance_mult": 1.02, "support_mult": 0.98},
+                "min_profit_pct": 5.0
+            },
+            "lookback": {"python_data": 1500},
+            "entry_gates": {
+                "structural": {"adx": {"min": None}, "atrPct": {"min": 2.0}},
+                "opportunity": {"confidence": {"min": 50}, "rrRatio": {"min": 3.0}}
+            }
         },
     }
 }

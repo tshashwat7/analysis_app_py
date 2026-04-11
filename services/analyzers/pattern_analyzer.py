@@ -82,14 +82,20 @@ class PatternAnalyzer:
                 continue
 
             try:
+                logger.debug(f"[{horizon}] Running detector: {detector.alias}")
                 det_result = detector.detect(df, indicators, horizon)
+                
+                # ✅ v15.7.5 FIX: Always populate raw_results so downstream extractors see the keys
+                raw_results[detector.alias] = det_result
+                
                 if det_result.get("found"):
-                    raw_results[detector.alias] = det_result
+                    logger.debug(f"[{horizon}] Pattern FOUND: {detector.alias}")
+                
                 # Reset failure count on success
                 self.failure_counts[detector.alias] = 0
             except Exception as e:
                 self.failure_counts[detector.alias] = self.failure_counts.get(detector.alias, 0) + 1
-                logger.error(f"Error in pattern {detector.alias} (Failure {self.failure_counts[detector.alias]}): {e}", exc_info=True)
+                logger.error(f"[{horizon}] Error in pattern {detector.alias}: {e}")
                 # ✅ Fix 10: Do NOT inject _error_ sentinel into raw_results.
                 # The error is already logged and tracked in failure_counts (circuit breaker).
                 # Injecting a non-standard schema entry would pollute raw_results for

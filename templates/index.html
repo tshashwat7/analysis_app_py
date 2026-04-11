@@ -313,7 +313,7 @@
                 valueFormatter: p => p.value ? "₹" + parseFloat(p.value).toLocaleString('en-IN', { maximumFractionDigits: 1 }) : "-"
             },
             {
-                field: "rr_ratio", headerName: "R:R", width: 115, flex: 0, sortable: true,
+                field: "rrRatio", headerName: "R:R", width: 115, flex: 0, sortable: true,
                 filter: 'agNumberColumnFilter',
                 cellClass: p => p.value >= 2.0 ? 'buy-cell' : 'hold-cell',
                 valueFormatter: p => p.value ? p.value + "R" : "-"

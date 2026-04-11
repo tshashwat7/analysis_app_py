@@ -722,7 +722,8 @@ class ConfigExtractor:
                 SETUP_PATTERN_MATRIX,
                 PATTERN_METADATA,
                 DEFAULT_PHYSICS,
-                PATTERN_SCORING_THRESHOLDS
+                PATTERN_SCORING_THRESHOLDS,
+                PATTERN_INDICATOR_MAPPINGS
             )
 
             # Full setup-pattern matrix
@@ -745,7 +746,7 @@ class ConfigExtractor:
 
             # Pattern indicator mappings (horizon-aware)
             self.sections["pattern_indicator_mappings"] = ConfigSection(
-                data=locals().get('PATTERN_INDICATOR_MAPPINGS', {}),
+                data=PATTERN_INDICATOR_MAPPINGS,
                 source="setup_pattern_matrix.PATTERN_INDICATOR_MAPPINGS"
             )
 
@@ -1052,8 +1053,13 @@ class ConfigExtractor:
         pattern_meta = self.sections.get("pattern_metadata", ConfigSection({}, "fallback")).data
         
         # This list should match PatternAnalyzer.detectors aliases
-        from services.analyzers.pattern_analyzer import PatternAnalyzer
-        active_aliases = PatternAnalyzer.get_active_aliases()
+        try:
+            from services.analyzers.pattern_analyzer import PatternAnalyzer
+            active_aliases = PatternAnalyzer.get_active_aliases()
+        except Exception as e:
+            self.logger.warning(f"⚠️ Could not import PatternAnalyzer for metadata validation: {e}")
+            return
+
         
         missing = [alias for alias in active_aliases if alias not in (pattern_meta or {})]
         if missing:

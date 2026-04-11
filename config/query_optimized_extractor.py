@@ -178,12 +178,12 @@ class QueryOptimizedExtractor:
         if setup_name in global_floors:
             return global_floors[setup_name]
 
-        # ✅ Phase 3 P1-1 FIX: Fail-Fast for unknown setup types.
-        # Fallback to 40 is dangerous in production.
-        raise ConfigurationError(
-            f"ARCHITECTURAL VIOLATION: Horizon '{self.horizon}' or Global config "
-            f"is missing baseline confidence floor for setup '{setup_name}'."
+        # ✅ BUG R5-2 FIX: Safe fallback instead of crash
+        self.logger.warning(
+            f"Missing baseline floor for setup '{setup_name}'. "
+            f"Falling back to default 40.0."
         )
+        return 40.0
 
 
     def get_base_confidence_adjustment(self) -> float:
@@ -503,7 +503,7 @@ class QueryOptimizedExtractor:
         
         # ✅ PATCH A: Honour the pre-computed divergenceType from detect_divergence().
         # If the upstream resolver already determined divergenceType='none', skip all
-        # penalty gate evaluation — prevents rsislope gate from double-counting momentum
+        # penalty gate evaluation — prevents rsiSlope gate from double-counting momentum
         # deceleration as a structural divergence.
         precomputed_divergence_type = eval_data.get("divergenceType", None)
         skip_divergence_eval = (precomputed_divergence_type == "none")
@@ -826,8 +826,10 @@ class QueryOptimizedExtractor:
             if phase == "structural":
                 setup_gates = merged_context.get("technical", {})
             elif phase == "opportunity":
-                # ✅ FIX R2-1: Force empty setup opportunity gates since they shouldn't exist
-                setup_gates = {}
+                # ✅ BUG R5-5 FIX: Restore setup-level overrides for opportunity
+                setup_gates = merged_context.get("opportunity", {})
+                if setup_gates:
+                    self.logger.info(f"[GATE_DEBUG] Found opportunity overrides for {setup_type}")
 
         resolved = {}
         
@@ -1948,7 +1950,7 @@ class QueryOptimizedExtractor:
         def _get_scalar(v):
             if isinstance(v, dict):
                 return (
-                    v.get("value") if v.get("value") is not None and not isinstance(v.get("value"), str) else
+                    v.get("value") if v.get("value") is not None else
                     v.get("raw") if "raw" in v else
                     v.get("score") if "score" in v else
                     v
@@ -2124,7 +2126,7 @@ class QueryOptimizedExtractor:
         
         Returns:
             {
-                "rsislope": {
+                "rsiSlope": {
                     "acceleration_floor": 0.10,     # Varies by horizon
                     "deceleration_ceiling": -0.10
                 },
@@ -2136,10 +2138,10 @@ class QueryOptimizedExtractor:
         
         Example:
             >>> thresholds = extractor.get_momentum_thresholds()
-            >>> rsi_accel_floor = thresholds["rsislope"]["acceleration_floor"]
+            >>> rsi_accel_floor = thresholds["rsiSlope"]["acceleration_floor"]
             >>> if rsi_slope >= rsi_accel_floor:
             ...     momentum_state = "accelerating"
-            >>> elif rsi_slope <= thresholds["rsislope"]["deceleration_ceiling"]:
+            >>> elif rsi_slope <= thresholds["rsiSlope"]["deceleration_ceiling"]:
             ...     momentum_state = "decelerating"
         """
         global_thresholds = self.base_extractor.get("momentum_thresholds", {})

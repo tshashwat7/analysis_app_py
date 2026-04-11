@@ -30,7 +30,7 @@ METRIC_REGISTRY = {
         "description": "RSI (0-100) - Ownership moved to composites for context-aware scoring"
     },
 
-    "rsislope": {
+    "rsiSlope": {
         "type": "numeric",
         "category": "momentum",
         "scoring_type": "passthrough",
@@ -240,7 +240,7 @@ METRIC_REGISTRY = {
         "scoring_type": "passthrough",
         "description": "52W Position % (Ownership moved to setup fit or composites)"
     },
-    "bbpercentb": {
+    "bbPercentB": {
         "type": "numeric",
         "category": "volatility",
         "scoring_type": "passthrough",
@@ -491,7 +491,7 @@ HORIZON_METRIC_INCLUSION = {
     "short_term": {
         "trend": ["trendStrength", "maTrendSignal", "maFastSlope", "supertrendSignal", "priceVsPrimaryTrendPct", "adx"],
         "momentum": ["momentumStrength", "macd", "macdCross", "stochCross"],
-        "volatility": ["volatilityQuality", "atrPct", "bbWidth", "bbpercentb"], # Activated Ghost Metric
+        "volatility": ["volatilityQuality", "atrPct", "bbWidth", "bbPercentB"], # Activated Ghost Metric
         "volume": ["rvol", "volSpikeRatio", "obvDiv", "cmfSignal"],
         "structure": ["position52w", "priceAction", "wickRejection", "gapPercent"],
         
@@ -508,7 +508,7 @@ HORIZON_METRIC_INCLUSION = {
         "structure": ["position52w", "priceAction"],
         
         "exclude": [
-            "rsislope",      # Daily noise
+            "rsiSlope",      # Daily noise
             "stochK",        # Too fast
             "vwapBias",      # Intraday-only
             "volSpikeRatio", # Short-term signal
@@ -522,7 +522,7 @@ HORIZON_METRIC_INCLUSION = {
         "volatility": ["volatilityQuality"],
         "volume": ["rvol", "obvDiv"],
         "structure": ["position52w"],
-        "exclude": ["rsislope", "stochK", "vwapBias", "volSpikeRatio", "wickRejection", "gapPercent", "macd"]
+        "exclude": ["rsiSlope", "stochK", "vwapBias", "volSpikeRatio", "wickRejection", "gapPercent", "macd"]
     }
 }
 
@@ -623,7 +623,7 @@ METRIC_WEIGHTS = {
             "volatilityQuality": 0.50,    # Composite volatility
             "atrPct": 0.25,               # Volatility level
             "bbWidth": 0.15,              # Bollinger squeeze
-            "bbpercentb": 0.10,           # BB position
+            "bbPercentB": 0.10,           # BB position
         },
         "volume": {
             "rvol": 0.35,                 # Relative volume
@@ -721,7 +721,7 @@ TECHNICAL_METRIC_CATEGORIES = {
         "volatilityQuality",     # Composite (0-10)
         "atrPct",                # Has score
         "bbWidth",               # Has score
-        "bbpercentb"             # Has score
+        "bbPercentB"             # Has score
     ],
     
     "volume": [
@@ -741,7 +741,7 @@ TECHNICAL_METRIC_CATEGORIES = {
     ],
     
     "liquidity": [
-        "avg_volume_30Days"      # For penalties only
+        "avgVolume30Days"      # For penalties only
     ]
 }
 
@@ -993,7 +993,7 @@ COMPOSITE_SCORING_CONFIG = {
                         {"min": 40, "score": 4}, {"default": 2}
                     ]
                 },
-                "rsislope": {
+                "rsiSlope": {
                     "weight": 0.25,
                     "thresholds": [{"min": 1.0, "score": 10}, {"min": 0, "score": 5}, {"default": 2}]
                 },
@@ -1062,7 +1062,7 @@ COMPOSITE_SCORING_CONFIG = {
                     "weight": 0.25,
                     "thresholds": [{"min": 60, "score": 10}, {"min": 50, "score": 7}, {"min": 40, "score": 4}, {"default": 2}]
                 },
-                "rsislope": {
+                "rsiSlope": {
                     "weight": 0.20,
                     "thresholds": [{"min": 1.0, "score": 10}, {"min": 0, "score": 5}, {"default": 2}]
                 },
@@ -1098,7 +1098,7 @@ COMPOSITE_SCORING_CONFIG = {
                     "weight": 0.15,
                     "thresholds": [{"max": 0.025, "score": 10}, {"max": 0.045, "score": 5}, {"default": 0}]
                 },
-                "bbpercentb": {     # Activated for Momentum contexts
+                "bbPercentB": {     # Activated for Momentum contexts
                     "weight": 0.15,
                     "thresholds": [{"min": 0.8, "score": 10}, {"min": 0.5, "score": 7}, {"default": 2}]
                 }
@@ -1597,7 +1597,7 @@ def check_liquidity_penalty(indicators: Dict, horizon: str) -> Tuple[float, str]
     if not rule:
         return 0.0, None
     
-    avg_vol = indicators.get("avg_volume_30Days", {})
+    avg_vol = indicators.get("avgVolume30Days", {})
     
     # Extract value (your standard structure)
     if isinstance(avg_vol, dict):

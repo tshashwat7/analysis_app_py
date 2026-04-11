@@ -20,6 +20,29 @@ Author: Quantitative Trading System
 Version: 14.0 - Query Extractor Integration
 """
 from typing import Dict, Any, Optional, List, Tuple
+
+class SignalEngine:
+    """
+    Stateful wrapper for the Signal Engine logic.
+    Provides a consistent interface for the backtest and production pipelines.
+    """
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
+
+    @staticmethod
+    def compute_all_profiles(ticker, fundamentals, indicators_by_horizon, 
+                              patterns_by_horizon=None, requested_horizons=None):
+        from services.signal_engine import compute_all_profiles as _cap
+        return _cap(ticker, fundamentals, indicators_by_horizon, 
+                    patterns_by_horizon, requested_horizons)
+
+    @staticmethod
+    def generate_trade_plan(symbol, winner_profile, indicators, fundamentals, 
+                            horizon, capital):
+        from services.signal_engine import generate_trade_plan as _gtp
+        return _gtp(symbol, winner_profile, indicators, fundamentals, 
+                    horizon, capital)
+
 import traceback
 import logging
 import hashlib
@@ -1136,7 +1159,7 @@ def generate_trade_plan(
         "stop_loss": None,
         "targets": {"t1": None, "t2": None},
         "position_size": 0,
-        "rr_ratio": 0,
+        "rrRatio": 0,
         
         # ============================================
         # AUDIT TRAIL
@@ -1311,6 +1334,14 @@ def generate_trade_plan(
             plan["est_time_str"] = "Waiting for primary pattern"
 
 
+        # ✅ FIX: Propagate block_entry from confidence calculus (Bug Fix)
+        if eval_ctx.get("confidence", {}).get("block_entry"):
+            reason = eval_ctx.get("confidence", {}).get("block_reason") or "Confidence modifier functionally blocked entry"
+            exec_ctx.setdefault("can_execute", {})
+            exec_ctx["can_execute"]["can_execute"] = False
+            exec_ctx["can_execute"]["is_hard_blocked"] = True
+            exec_ctx["can_execute"].setdefault("failures", []).append(reason)
+
         # ✅ POPULATE GATE STATUS
         can_execute = exec_ctx.get("can_execute", {})
         execution_blocked = not can_execute.get("can_execute", True)
@@ -1360,17 +1391,22 @@ def generate_trade_plan(
                 market_adjusted.get("execution_t2")
                 or (market_targets[1] if len(market_targets) > 1 else 0)
             )
-            plan["rr_ratio"] = (
-                market_adjusted.get("rrRatioT2")
-                or market_adjusted.get("rrRatio")
-                or market_adjusted.get("execution_rr_t2")
-                or market_adjusted.get("execution_rr_t1")
+            # ✅ R6-5 FIX: Precise RR selection (Handle 0.0 correctly)
+            def _get_rr(keys, data, default=0.0):
+                for k in keys:
+                    v = data.get(k)
+                    if v is not None: return v
+                return default
+
+            plan["rrRatio"] = _get_rr(
+                ["rrRatioT2", "rrRatio", "execution_rr_t2", "execution_rr_t1"], 
+                market_adjusted
             )
             plan["position_size"] = risk.get("quantity", 0)
             
             plan["metadata"]["pattern_rr"] = market_adjusted.get("structural_rr")
-            plan["metadata"]["execution_rr_t1"] = market_adjusted.get("rrRatio") or market_adjusted.get("execution_rr_t1")
-            plan["metadata"]["execution_rr_t2"] = market_adjusted.get("rrRatioT2") or market_adjusted.get("execution_rr_t2")
+            plan["metadata"]["execution_rr_t1"] = _get_rr(["rrRatio", "execution_rr_t1"], market_adjusted)
+            plan["metadata"]["execution_rr_t2"] = _get_rr(["rrRatioT2", "execution_rr_t2"], market_adjusted)
             plan["metadata"]["volatility_regime"] = market_adjusted.get("volatility_regime")
             
             # ✅ B4 FIX: Reconcile direction and set conflict flag (Centralized in trade_enhancer)
@@ -1393,7 +1429,7 @@ def generate_trade_plan(
             targets = risk.get("targets", [])
             plan["targets"]["t1"] = targets[0] if targets else 0
             plan["targets"]["t2"] = targets[1] if len(targets) > 1 else 0
-            plan["rr_ratio"] = risk.get("rrRatio", 0)
+            plan["rrRatio"] = risk.get("rrRatio", 0)
             plan["position_size"] = risk.get("quantity", 0)
             plan["metadata"]["market_adjusted"] = False
             plan["metadata"]["direction"] = risk.get("direction", exec_ctx.get("direction", "neutral"))
@@ -1408,7 +1444,7 @@ def generate_trade_plan(
         is_long = direction_str in ("bullish", "long")
         is_short = direction_str in ("bearish", "short")
         
-        if macro_trend_status and "downtrend" in macro_trend_status.lower():
+        if macro_trend_status and "downtrend" in str(macro_trend_status).lower():
             if is_long:
                 original_qty = plan["position_size"]
                 macro_factor = exec_ctx.get("macro_downtrend_factor", 0.7)
@@ -1427,7 +1463,7 @@ def generate_trade_plan(
                     "reason": "Macro downtrend (Short confirmation boost)",
                     "change": "+20% position"
                 })
-        elif macro_trend_status and "uptrend" in macro_trend_status.lower():
+        elif macro_trend_status and "uptrend" in str(macro_trend_status).lower():
             if is_short:
                 # Penalty for shorts in uptrend
                 original_qty = plan["position_size"]

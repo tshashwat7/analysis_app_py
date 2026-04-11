@@ -37,7 +37,7 @@ def track_pattern_entry(
     trend_regime: str,
     adx: Optional[float],
     volatility_regime: str,
-    rr_ratio: float,
+    rrRatio: float,
     pattern_meta: Dict[str, Any]
 ) -> Optional[int]:
     """
@@ -74,7 +74,7 @@ def track_pattern_entry(
             trend_regime=trend_regime,
             adx_at_entry=_safe_float(adx) if adx else None,
             volatility_regime=volatility_regime,
-            rr_ratio=_safe_float(rr_ratio) if rr_ratio else None,
+            rrRatio=_safe_float(rrRatio) if rrRatio else None,
             pattern_meta=pattern_meta
         )
         

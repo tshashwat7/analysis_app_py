@@ -723,7 +723,7 @@ def get_cached(symbol: str):
             "setup_signal": entry.recommendation, # ✅ P2-5: Key normalization
             "confidence": entry.conf_score,
             "bull_signal": entry.signal_text,
-            "rr_ratio": entry.rr_ratio,
+            "rrRatio": entry.rrRatio,
             "entry_trigger": entry.entry_price,
             "stop_loss": entry.stop_loss,
             "direction": entry.direction or "neutral",
@@ -779,7 +779,7 @@ def set_cached(symbol: str, value: Dict[str, Any]):
             entry.recommendation = value.get("recommendation", "N/A")
             entry.signal_text = value.get("bull_signal", "INCOMPLETE")
             entry.conf_score = value.get("confidence", 0)
-            entry.rr_ratio = value.get("rr_ratio")
+            entry.rrRatio = value.get("rrRatio")
             entry.entry_price = value.get("entry_trigger")
             entry.stop_loss = value.get("stop_loss")
             entry.direction = value.get("direction", "neutral")
@@ -1196,7 +1196,7 @@ def _save_analysis_to_db(
             entry_row.recommendation = selected_profile.get("category", "HOLD") + "--" + selected_horizon
             entry_row.signal_text = trade_plan.get("trade_signal", "N/A")
             entry_row.conf_score = trade_plan.get("final_confidence", 0)
-            entry_row.rr_ratio = trade_plan.get("rr_ratio")
+            entry_row.rrRatio = trade_plan.get("rrRatio")
             entry_row.entry_price = entry_val_retry
             entry_row.stop_loss = sl_val_retry
             entry_row.direction = trade_plan.get("metadata", {}).get("direction", "neutral")
@@ -1263,7 +1263,7 @@ def _mark_analysis_error_in_db(
             entry_row.recommendation = selected_profile.get("category", "INCOMPLETE") + "--" + selected_horizon
             entry_row.signal_text = "INCOMPLETE"
             entry_row.conf_score = 0
-            entry_row.rr_ratio = None
+            entry_row.rrRatio = None
             entry_row.entry_price = None
             entry_row.stop_loss = None
             entry_row.direction = "neutral"

@@ -79,6 +79,11 @@ def _enforce_cache_limits(df: pd.DataFrame, interval: str) -> pd.DataFrame:
     # Safe limits:
     # Intraday: ~7 days (approx 2500 rows)
     # Daily: ~10 years (approx 2500 rows)
+    # Always ensure ascending chronological order and no duplicates
+    df.sort_index(inplace=True)
+    if not df.index.is_unique:
+        df = df[~df.index.duplicated(keep='last')]
+        
     MAX_ROWS = 2500 
     if len(df) > MAX_ROWS:
         return df.tail(MAX_ROWS).copy()

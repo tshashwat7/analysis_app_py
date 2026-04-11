@@ -43,6 +43,8 @@ MIN_FIT_SCORE = 55.0  # Global floor: setup fit_score (0-100 normalized) must ex
                       # 0-100 normalized scale as _calculate_setup_fit_quality output.
 logger = logging.getLogger(__name__)
 
+from config.config_extractor import ConfigurationError
+
 # ============================================================================
 # CORE RESOLVER CLASS (v6.0 - Refactored)
 # ============================================================================
@@ -496,7 +498,7 @@ class ConfigResolver:
         
         # Get horizon-specific thresholds from config
         thresholds = self.extractor.get_momentum_thresholds()
-        rsi_thresholds = thresholds.get("rsislope", {})
+        rsi_thresholds = thresholds.get("rsiSlope", {})
         macd_thresholds = thresholds.get("macd", {})
         
         rsi_accel = rsi_thresholds.get("acceleration_floor", 0.05)
@@ -505,7 +507,7 @@ class ConfigResolver:
         macd_decel = macd_thresholds.get("deceleration_ceiling", -0.5)
         
         # Get actual values
-        rsi_slope = ensure_numeric(indicators.get("rsislope", 0))
+        rsi_slope = ensure_numeric(indicators.get("rsiSlope", 0))
         macd_hist = ensure_numeric(indicators.get("macdHistogram", 0))
         
         # Classify RSI momentum state
@@ -946,29 +948,39 @@ class ConfigResolver:
             pattern_boost_reason = None
 
             if primary_patterns and multiplier > 1.0:
-                # boost_threshold is on 0-10 scale (same as min_pattern_quality in config).
-                # Read raw.score (0-10) from detector output, not the fused score (0-100).
-                boost_threshold = self.extractor.get_config_value(
-                    "risk_management", "pattern_boost_min_score", 6.0, "float"
-                )
-                for pat_name in primary_patterns:
-                    pat_data = ind.get(pat_name) or patterns.get(pat_name)
-                    if not isinstance(pat_data, dict):
-                        continue
-                    # Unwrap raw first — "found" lives inside raw, not at top level
-                    raw = pat_data.get("raw", pat_data)
-                    pat_found = raw.get("found", False)
-                    pat_score = raw.get("score", pat_data.get("value", 0.0))
-                    pat_quality = pat_data.get("quality", "")
-                    if pat_found and (pat_score >= boost_threshold or pat_quality == "high"):
-                        priority_bonus = (multiplier - 1.0) * PRIORITY_BOOST_RANGE
-                        boosted_priority = min(setup_priority + priority_bonus, 100.0)
-                        pattern_boost_applied = True
-                        pattern_boost_reason = (
-                            f"{pat_name} score={pat_score:.1f} quality={pat_quality} "
-                            f"bonus=+{priority_bonus:.1f}pts"
-                        )
-                        break  # First qualifying PRIMARY pattern is sufficient
+                # ✅ FIT-FLOOR GATE: Only apply boost when setup already has
+                # reasonable technical alignment. Prevents mediocre pattern setups
+                # from dominating strong fundamentals/value setups purely via
+                # priority amplification. See: README § Setup Ranking.
+                if fit_score < MIN_FIT_SCORE:
+                    self.logger.debug(
+                        f"  ↳ {setup_name}: pattern boost SKIPPED "
+                        f"(fit_score={fit_score:.1f} < MIN_FIT_SCORE={MIN_FIT_SCORE})"
+                    )
+                else:
+                    # boost_threshold is on 0-10 scale (same as min_pattern_quality in config).
+                    # Read raw.score (0-10) from detector output, not the fused score (0-100).
+                    boost_threshold = self.extractor.get_config_value(
+                        "risk_management", "pattern_boost_min_score", 6.0, "float"
+                    )
+                    for pat_name in primary_patterns:
+                        pat_data = ind.get(pat_name) or patterns.get(pat_name)
+                        if not isinstance(pat_data, dict):
+                            continue
+                        # Unwrap raw first — "found" lives inside raw, not at top level
+                        raw = pat_data.get("raw", pat_data)
+                        pat_found = raw.get("found", False)
+                        pat_score = raw.get("score", pat_data.get("value", 0.0))
+                        pat_quality = pat_data.get("quality", "")
+                        if pat_found and (pat_score >= boost_threshold or pat_quality == "high"):
+                            priority_bonus = (multiplier - 1.0) * PRIORITY_BOOST_RANGE
+                            boosted_priority = min(setup_priority + priority_bonus, 100.0)
+                            pattern_boost_applied = True
+                            pattern_boost_reason = (
+                                f"{pat_name} score={pat_score:.1f} quality={pat_quality} "
+                                f"bonus=+{priority_bonus:.1f}pts"
+                            )
+                            break  # First qualifying PRIMARY pattern is sufficient
 
             candidates.append({
                 "type": setup_name,
@@ -995,6 +1007,33 @@ class ConfigResolver:
             candidates, 
             key=lambda x: (-x["composite_score"], x["type"])
         )
+
+        # ✅ CLOSE-CONTEST GUARD: Prevent pattern-boosted setups from auto-
+        # suppressing fundamentals-backed setups in close-call situations.
+        # When #1 won via pattern boost and #2 has require_fundamentals=True
+        # with materially better fit (>=15pts), swap them.
+        # This preserves the pattern-confirmation philosophy while ensuring
+        # accumulation/value setups are not systematically disadvantaged.
+        CLOSE_CONTEST_MARGIN = 5.0    # composite gap considered "close"
+        FIT_SUPERIORITY_MIN  = 15.0   # fit advantage required to trigger swap
+        if len(ranked) >= 2:
+            r1, r2 = ranked[0], ranked[1]
+            composite_gap = r1["composite_score"] - r2["composite_score"]
+            fit_gap = r2["fit_score"] - r1["fit_score"]
+            if (
+                r1.get("pattern_boost_applied")
+                and r2.get("require_fundamentals")
+                and composite_gap <= CLOSE_CONTEST_MARGIN
+                and fit_gap >= FIT_SUPERIORITY_MIN
+            ):
+                self.logger.warning(
+                    f"⚖️ CLOSE-CONTEST GUARD: Swapping {r1['type']} "
+                    f"(composite={r1['composite_score']:.1f}, fit={r1['fit_score']:.1f}) "
+                    f"with {r2['type']} "
+                    f"(composite={r2['composite_score']:.1f}, fit={r2['fit_score']:.1f}) "
+                    f"in a {composite_gap:.1f}pt contest"
+                )
+                ranked[0], ranked[1] = ranked[1], ranked[0]
 
         # ✅ BUG FIX #4: Add rejection logging for debugging
         if self.logger.isEnabledFor(logging.DEBUG):
@@ -2175,7 +2214,8 @@ class ConfigResolver:
                     break
             
             if value is not None:
-                numeric = ensure_numeric(value)
+                # ✅ BUG 5 FIX: preserve None (ensure_numeric(None) returns 0.0)
+                numeric = _safe_float(value)
                 if numeric is not None:
                     if "adx" in gate_name.lower():
                         self.logger.info(f"[GATE_DEBUG] Resolved {gate_name} via {path} to {numeric}")
@@ -2271,11 +2311,9 @@ class ConfigResolver:
 
         # ✅ PATCH A: Inject divergenceType for pre-computation check
         divergence_ctx = ctx.get("divergence", {})
-        flat_data["divergenceType"] = (
-            divergence_ctx.get("divergenceType")
-            or divergence_ctx.get("divergence_type")
-            or "none"
-        )
+        # ✅ BUG 2 PIVOT: Staying with camelCase per user project standard
+        # Standardized key for consistency with query_optimized_extractor line 508.
+        flat_data["divergenceType"] = divergence_ctx.get("divergenceType") or "none"
 
         # Inject individual pattern scores (Medium finding)
         # Rationale: Confidence bonuses like 'bearish_conviction' reference pattern names directly.
@@ -2307,6 +2345,8 @@ class ConfigResolver:
             modifier_results
         )
         total_adjustment = adj_data["adjustment"]
+        block_entry = adj_data.get("block_entry", False)
+        block_reason = adj_data.get("block_reason")
         
         # ✅ Phase 3 P2-4 FIX: Guard divergence isolation
         # INVARIANT: exec_adjustment and validation modifiers must NEVER be scaled 
@@ -2595,14 +2635,15 @@ class ConfigResolver:
             "score": clamped,
             "confidence": round(clamped, 1),
             "tradeable": tradeable,
-            "block_entry": adj_data.get("block_entry", False),  # ✅ Propagate block_entry
             "min_tradeable_threshold": float(min_tradeable or 0.0),
             "floor": float(min_tradeable or 0.0),
             "below_threshold_by": below_by,
             "high_confidence_override": high_conf_override,
             "calculation_method": "extractor_v8_fixed",
             "horizon": self.horizon,
-            "setup_type": setup_type
+            "setup_type": setup_type,
+            "block_entry": block_entry,
+            "block_reason": block_reason
         }
     
     def _validate_execution_rules(self, ctx: Dict) -> Dict[str, Any]:
@@ -2865,43 +2906,56 @@ class ConfigResolver:
         if not sl_config:
             return {"passed": True, "reason": "No SL distance rules configured"}
         
-        # Get SL distance from risk model (calculated earlier)
+        # Config contract is ATR multiples, not raw percent-of-price distance.
+        # Derive the actual ATR multiple from the structural SL whenever possible.
         risk_model = ctx.get("risk_model", {}) or ctx.get("risk_candidates", {})
-        sl_distance_pct = risk_model.get("sl_distance_pct", 0)
-        if sl_distance_pct == 0 or sl_distance_pct is None:
-            sl_distance_pct = ensure_numeric(ctx["indicators"].get("slDistance"))
-        if sl_distance_pct == 0 or sl_distance_pct is None:
-            sl_distance_pct = ensure_numeric(risk_model.get("atr_multiple"))
-        
-        # Get thresholds from config
+        entry_price = ensure_numeric(risk_model.get("entry_price")) or ensure_numeric(ctx.get("price_data", {}).get("price"))
+        sl_price = ensure_numeric(risk_model.get("sl_price"))
+        atr = ensure_numeric(risk_model.get("atr")) or ensure_numeric(ctx.get("indicators", {}).get("atrDynamic"))
+
+        sl_distance_atr = None
+        if entry_price not in (None, 0) and sl_price not in (None, 0) and atr not in (None, 0):
+            sl_distance_atr = abs(entry_price - sl_price) / atr
+
+        if sl_distance_atr in (None, 0):
+            sl_distance_atr = ensure_numeric(risk_model.get("atr_multiple"))
+
+        # Last-resort compatibility fallback for older synthetic inputs:
+        # if slDistance is already expressed in ATR multiples, preserve it.
+        if sl_distance_atr in (None, 0):
+            sl_distance_atr = ensure_numeric(ctx["indicators"].get("slDistance"))
+
+        # Get thresholds from config (ATR multiples)
         min_sl = sl_config.get("min_atr_multiplier", 0.5)
         max_sl = sl_config.get("max_atr_multiplier", 5.0)
         
         # Validate
-        if sl_distance_pct == 0:
+        if sl_distance_atr in (None, 0):
             return {
                 "passed": False,
                 "severity": 80,
                 "reason": "SL distance not calculated in risk model"
             }
         
-        if sl_distance_pct < min_sl:
+        # Validate with epsilon for floating point precision (Phase 3 P2-5)
+        epsilon = 1e-6
+        if sl_distance_atr < min_sl - epsilon:
             return {
                 "passed": False,
                 "severity": 80,
-                "reason": f"SL too tight: {sl_distance_pct:.2f}% < min {min_sl}%"
+                "reason": f"SL too tight: {sl_distance_atr:.2f} ATR < min {min_sl:.2f} ATR"
             }
         
-        if sl_distance_pct > max_sl:
+        if sl_distance_atr > max_sl:
             return {
                 "passed": False,
                 "severity": 80,
-                "reason": f"SL too wide: {sl_distance_pct:.2f}% > max {max_sl}%"
+                "reason": f"SL too wide: {sl_distance_atr:.2f} ATR > max {max_sl:.2f} ATR"
             }
         
         return {
             "passed": True,
-            "reason": f"SL distance OK: {sl_distance_pct:.2f}% (range: {min_sl}-{max_sl}%)"
+            "reason": f"SL distance OK: {sl_distance_atr:.2f} ATR (range: {min_sl:.2f}-{max_sl:.2f} ATR)"
         }
 
     def _check_target_proximity(self, ctx: Dict, target_config: Dict) -> Dict:
@@ -3329,7 +3383,9 @@ class ConfigResolver:
             entry_validation_status = {}
 
             for pattern_name, pattern_data in detected.items():
-                if not pattern_data.get("found"):
+                # ✅ BUG 4 FIX: Check 'found' inside nested 'raw' payload with robust dict check
+                _raw_p = pattern_data.get("raw", pattern_data)
+                if not isinstance(_raw_p, dict) or not _raw_p.get("found"):
                     continue
 
                 pattern_ctx = self.extractor.get_pattern_context(pattern_name)
@@ -3486,9 +3542,9 @@ class ConfigResolver:
         
         # 2. Extract Values
         flat_indicators = self._flatten_indicator_data(indicators)
-        rsi_slope = ensure_numeric(flat_indicators.get("rsislope", 0))
+        rsi_slope = ensure_numeric(flat_indicators.get("rsiSlope", 0))
         price = ensure_numeric(flat_indicators.get("price", 0))
-        prev_price = ensure_numeric(flat_indicators.get("prevclose", price))
+        prev_price = ensure_numeric(flat_indicators.get("prevClose", price))
         
         # ✅ W30 FIX: Multi-candle Lookback Guard
         # If we have price_hist in indicators, use it for a more robust check
@@ -3516,8 +3572,8 @@ class ConfigResolver:
         # 3. Detect BEARISH Divergence (Price ↑, RSI ↓)
         if price_slope > 0.01 and rsi_slope < bear_trigger:
             
-            severe_thresh = div_penalties.get("severe", {}).get("gates", {}).get("rsislope", {}).get("max", -0.08)
-            moderate_thresh = div_penalties.get("moderate", {}).get("gates", {}).get("rsislope", {}).get("max", -0.03)
+            severe_thresh = div_penalties.get("severe", {}).get("gates", {}).get("rsiSlope", {}).get("max", -0.08)
+            moderate_thresh = div_penalties.get("moderate", {}).get("gates", {}).get("rsiSlope", {}).get("max", -0.03)
             
             if rsi_slope <= severe_thresh:
                 severity = "severe"
@@ -3529,7 +3585,7 @@ class ConfigResolver:
             penalty_cfg = div_penalties.get(severity, {})
             
             return {
-                "divergence_type": "bearish",
+                "divergenceType": "bearish",
                 "confidence_factor": penalty_cfg.get("confidence_multiplier", 0.70),
                 "warning": f"Bearish Divergence ({severity.upper()}): RSI slope={rsi_slope:.2f}",
                 "severity": severity,
@@ -3539,7 +3595,7 @@ class ConfigResolver:
         # 4. Detect BULLISH Divergence (Price ↓, RSI ↑)
         elif price_slope < 0 and rsi_slope > bull_trigger:
             return {
-                "divergence_type": "bullish",
+                "divergenceType": "bullish",
                 "confidence_factor": 1.0,  # No penalty for bullish divergence
                 "warning": f"Bullish Divergence: RSI slope={rsi_slope:.2f}",
                 "severity": "moderate",
@@ -3547,7 +3603,7 @@ class ConfigResolver:
             }
 
         return {
-            "divergence_type": "none",
+            "divergenceType": "none",
             "confidence_factor": 1.0,
             "allow_entry": True
         }

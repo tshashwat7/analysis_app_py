@@ -151,5 +151,5 @@ config/secrets.py
 
 # Temporary files
 tmp/
-baktest/
+backtest/
 backtest_cache/

@@ -448,7 +448,18 @@ SECTOR_SPECIFIC_EXCLUSIONS = {
     "Industrials": ["RDIntensity"],          # Ports, shipping, logistics
     "Utilities": ["RDIntensity", "assetTurnover"],
     "Real Estate": ["RDIntensity", "assetTurnover"],
-    "Financials": ["RDIntensity", "assetTurnover"],  # Banks, NBFCs
+    "Financials": [
+        "RDIntensity", "assetTurnover",
+        "currentRatio", "ebitdaMargin", "interestCoverage"
+    ],  # Banks, NBFCs
+    "Financial Services": [
+        "RDIntensity", "assetTurnover",
+        "currentRatio", "ebitdaMargin", "interestCoverage"
+    ],  # yfinance string for Indian Banks
+    "Banks - Regional": [
+        "RDIntensity", "assetTurnover",
+        "currentRatio", "ebitdaMargin", "interestCoverage"
+    ],  # yfinance string for Indian Banks
     "Energy": ["RDIntensity"],               # Oil & Gas
 }
 # ==============================================================================

@@ -74,18 +74,18 @@ MB_CONFIDENCE_CONFIG = {
         "universal_adjustments": {
             "divergence_penalties": {
                 "severe": {
-                    "gates":       {"rsislope": {"max": -0.05}},
+                    "gates":       {"rsiSlope": {"max": -0.05}},
                     "block_entry": True,
                     "reason":      "Severe weekly momentum breakdown",
                 },
                 "moderate": {
-                    "gates":                {"rsislope": {"max": -0.02, "min": -0.05}},
+                    "gates":                {"rsiSlope": {"max": -0.02, "min": -0.05}},
                     "confidence_multiplier": 0.75,
                     "block_entry":           False,
                     "reason":               "Moderate weekly divergence",
                 },
                 "minor": {
-                    "gates":                {"rsislope": {"max": 0.0, "min": -0.02}},
+                    "gates":                {"rsiSlope": {"max": 0.0, "min": -0.02}},
                     "confidence_multiplier": 0.90,
                     "block_entry":           False,
                     "reason":               "Minor weekly divergence",

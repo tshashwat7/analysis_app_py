@@ -186,7 +186,7 @@ MB_MASTER_CONFIG = {
             },
 
             "momentum_thresholds": {
-                "rsislope": {
+                "rsiSlope": {
                     "acceleration_floor":  0.02,
                     "deceleration_ceiling": -0.02,
                 }

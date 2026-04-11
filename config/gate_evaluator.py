@@ -19,6 +19,20 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+class GateEvaluator:
+    """
+    Stateful wrapper for pure gate evaluation functions.
+    Ensures architectural consistency across the pipeline.
+    """
+    
+    @staticmethod
+    def evaluate_gates(gates: Dict[str, Any], data: Dict[str, Any], empty_gates_pass: bool = True) -> Tuple[bool, List[str]]:
+        return evaluate_gates(gates, data, empty_gates_pass)
+        
+    @staticmethod
+    def evaluate_invalidation_gates(gates: Dict[str, Any], data: Dict[str, Any]) -> Tuple[bool, List[Dict[str, Any]]]:
+        return evaluate_invalidation_gates(gates, data)
+
 # ✅ P2-5 FIX: Epsilon for floating point comparisons
 _FLOAT_EPSILON = 1e-9
 

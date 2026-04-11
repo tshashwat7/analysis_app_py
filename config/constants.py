@@ -156,7 +156,7 @@ TECHNICAL_WEIGHTS = {
     "priceAction": 0.7,
     "supertrendsignal": 1.0,
     "cci": 0.6,
-    "bbpercentb": 0.4,
+    "bbPercentB": 0.4,
     "cmfSignal": 0.6,
     "donchianSignal": 0.8,
     "regSlope": 0.8,
@@ -214,7 +214,7 @@ TECHNICAL_METRIC_MAP = {
 
     # Momentum
     "rsi": "RSI",
-    "rsislope": "RSI Slope",
+    "rsiSlope": "RSI Slope",
     "dma20_50Cross": "20/50 DMA Cross",
     "dma10_40Cross": "10/40 DMA Cross",
     "shortMaCross": "Short MA Cross",
@@ -252,7 +252,7 @@ TECHNICAL_METRIC_MAP = {
     "bbMid": "BB Mid",
     "bbLow": "BB Low",
     "bbWidth": "BB Width",
-    "bbpercentb": "Bollinger %B",
+    "bbPercentB": "Bollinger %B",
     "ttmSqueeze": "TTM Squeeze Signal",
     "kcUpper": "Keltner Upper",
     "kcLower": "Keltner Lower",
@@ -647,7 +647,7 @@ HORIZON_PROFILE_MAP = {
     "intraday": {
         "metrics": {
             "maFastSlope": 0.20,          # ✅ Boosted (was 0.15)
-            "rsislope": 0.20,              # ✅ Boosted (was 0.15)
+            "rsiSlope": 0.20,              # ✅ Boosted (was 0.15)
             "priceAction": 0.15,           # ✅ Kept
             "vwapBias": 0.15,
             "volSpikeRatio": 0.10,
@@ -673,7 +673,7 @@ HORIZON_PROFILE_MAP = {
             "maFastSlope": 0.05,
             "supertrendsignal": 0.10,
             "momentumStrength": 0.12,      # ✅ Boosted (was 0.10)
-            "rsislope": 0.08,              # ✅ Boosted (was 0.05)
+            "rsiSlope": 0.08,              # ✅ Boosted (was 0.05)
             "macdCross": 0.05,
             "cmfSignal": 0.05,
             "obvDiv": 0.05,
@@ -1275,7 +1275,7 @@ SIGNAL_ENGINE = {
             "neutral": 50,
             "weak": 40
         },
-        "rsislope": {
+        "rsiSlope": {
             "intraday": {"positive": 0.10, "neutral": 0.0},
             "short_term": {"positive": 0.05, "neutral": 0.0},
             "long_term": {"positive": 0.03, "neutral": 0.0},
@@ -1613,7 +1613,7 @@ TRADE_ENHANCER = {
     # Divergence detection (local severity logic) DUPLICATE of constants.py's RSI_SLOPE_THRESH
     # ---------------------------------------------------------
     "DIVERGENCE_THRESHOLDS": {
-        "rsislope": {
+        "rsiSlope": {
             "severe": -0.08,
             "moderate": -0.03,
             "minor": 0.0
