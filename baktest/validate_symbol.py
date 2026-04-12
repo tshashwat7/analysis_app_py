@@ -180,6 +180,32 @@ def _print_confidence(conf: Dict[str, Any], sink) -> None:
             )
 
 
+def _print_sector_context(indicators: Dict[str, Any], sink) -> None:
+    _heading("SECTOR CONTEXT", sink)
+    if not indicators:
+        _write("No indicator payload found.", sink)
+        return
+
+    sector_name = indicators.get("sectorName")
+    sector_benchmark = indicators.get("sectorBenchmark")
+    sector_available = indicators.get("sectorDataAvailable")
+    sector_trend = indicators.get("sectorTrendScore")
+    rs_fast = indicators.get("rsVsSectorFast")
+    rs_slow = indicators.get("rsVsSectorSlow")
+
+    def _metric_value(metric):
+        if isinstance(metric, dict):
+            return metric.get("value")
+        return metric
+
+    _write(f"Sector:           {_metric_value(sector_name)}", sink)
+    _write(f"Benchmark:        {_metric_value(sector_benchmark)}", sink)
+    _write(f"Data available:   {_metric_value(sector_available)}", sink)
+    _write(f"Sector trend:     {_fmt_num(_metric_value(sector_trend), 2)}", sink)
+    _write(f"RS vs sector fast:{_fmt_num(_metric_value(rs_fast), 2)}", sink)
+    _write(f"RS vs sector slow:{_fmt_num(_metric_value(rs_slow), 2)}", sink)
+
+
 def _print_gates_math(eval_ctx: Dict[str, Any], sink) -> None:
     _heading("STRUCTURAL GATES", sink)
     structural = eval_ctx.get("structural_gates", {}) or {}
@@ -425,6 +451,7 @@ def run(symbol: str, horizon: str, report_path: str, part: str) -> int:
             _print_category_breakdown("TECHNICAL SCORE", scoring.get("technical", {}) or {}, sink)
             _print_category_breakdown("FUNDAMENTAL SCORE", scoring.get("fundamental", {}) or {}, sink)
             _print_hybrid_breakdown(scoring.get("hybrid", {}) or {}, sink)
+            _print_sector_context(indicators or {}, sink)
             _print_confidence(eval_ctx.get("confidence", {}) or {}, sink)
             _print_gates_math(eval_ctx, sink)
             _print_setup(eval_ctx, sink)

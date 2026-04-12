@@ -128,6 +128,10 @@ def generate_confidence_narrative(eval_ctx: Dict[str, Any], horizon: str) -> str
     narrative += f"Base floor: <b>{base}%</b> ({setup_name}, {safe_horizon}).<br>"
     narrative += f"Adjustments: <b>{final - base:+.1f}%</b> → Raw {final:.1f}%<br><br>"
 
+    sector_snapshot = _build_sector_snapshot(eval_ctx)
+    if sector_snapshot:
+        narrative += sector_snapshot + "<br><br>"
+
     if bonuses:
         narrative += "<b>✅ Boosting Factors:</b><br>"
         for a in bonuses[:5]:
@@ -674,7 +678,8 @@ def _format_pattern_name(pattern: str) -> str:
 
 def _humanize_adjustment_structured(adj: Dict[str, Any]) -> str:
     """Convert structured_adjustments dict to readable string."""
-    name = adj.get("name", "").replace("_", " ").title()
+    name_raw = adj.get("name", "")
+    name = name_raw.replace("_", " ").title()
     delta = adj.get("delta", 0)
     source = adj.get("source", "")
 
@@ -686,8 +691,59 @@ def _humanize_adjustment_structured(adj: Dict[str, Any]) -> str:
         "execution": "Execution",
     }
     prefix = SOURCE_LABELS.get(source, source.replace("_", " ").title())
+    if "sector" in name_raw.lower():
+        prefix = "Sector" if not prefix else prefix
     label = f"{prefix}: {name}" if prefix else name
     return f"{label} ({delta:+.1f}%)"
+
+
+def _indicator_value(indicators: Dict[str, Any], key: str, default=None):
+    metric = (indicators or {}).get(key)
+    if isinstance(metric, dict):
+        return metric.get("value", default)
+    return metric if metric is not None else default
+
+
+def _format_sector_trend_bucket(value: float) -> str:
+    if value is None:
+        return "Unavailable"
+    if value >= 10:
+        return "Strong Uptrend"
+    if value >= 5:
+        return "Moderate Uptrend"
+    if value > -4:
+        return "Neutral"
+    if value > -8:
+        return "Weak Downtrend"
+    return "Strong Downtrend"
+
+
+def _build_sector_snapshot(eval_ctx: Dict[str, Any]) -> str:
+    indicators = (eval_ctx or {}).get("indicators", {}) or {}
+    sector_name = _indicator_value(indicators, "sectorName")
+    sector_benchmark = _indicator_value(indicators, "sectorBenchmark")
+    sector_score = _indicator_value(indicators, "sectorTrendScore")
+    rs_fast = _indicator_value(indicators, "rsVsSectorFast")
+    rs_slow = _indicator_value(indicators, "rsVsSectorSlow")
+    sector_available = _indicator_value(indicators, "sectorDataAvailable", False)
+
+    if not sector_name:
+        return ""
+
+    safe_sector = escape(str(sector_name))
+    safe_benchmark = escape(str(sector_benchmark)) if sector_benchmark else "N/A"
+    availability = "available" if sector_available else "unavailable"
+    trend_label = _format_sector_trend_bucket(sector_score if isinstance(sector_score, (int, float)) else None)
+    trend_value = f"{sector_score:.2f}" if isinstance(sector_score, (int, float)) else "N/A"
+    rs_fast_str = f"{rs_fast:.2f}%" if isinstance(rs_fast, (int, float)) else "N/A"
+    rs_slow_str = f"{rs_slow:.2f}%" if isinstance(rs_slow, (int, float)) else "N/A"
+
+    return (
+        f"<b>Sector Context:</b> {safe_sector} ({safe_benchmark})<br>"
+        f"Sector trend: <b>{escape(trend_label)}</b> [{trend_value}] &middot; "
+        f"RS fast: <b>{rs_fast_str}</b> &middot; RS slow: <b>{rs_slow_str}</b><br>"
+        f"<span style=\"color:#6b7280;font-size:0.85em;\">Sector data {availability} for this evaluation.</span>"
+    )
 
 
 def _humanize_adjustment(adjustment_str: str) -> str:
@@ -923,6 +979,7 @@ def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
     tr = result.get("trade_recommendation", {}) or {}
     prof = result.get("profile_report", {}) or {}
     strat_report = result.get("strategy_report", {}) or {}
+    eval_ctx = prof.get("eval_ctx", {}) if isinstance(prof, dict) else {}
     
     # Get Best Strategy Name safely
     best_strat = "unknown"
@@ -931,7 +988,7 @@ def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
         if isinstance(summary_node, dict):
             best_strat = summary_node.get("strategy") or summary_node.get("best_strategy", "unknown")
     
-    return {
+    summaries = {
         "trade": summarize_trade_recommendation(tr),
         "patterns": summarize_patterns(indicators),
         "pattern_details": get_active_pattern_details(indicators),
@@ -939,3 +996,12 @@ def build_all_summaries(result: Dict[str, Any]) -> Dict[str, str]:
         "market": f"Market Trend: {escape(result.get('macro_trend_status', 'Neutral'))}",
         "risk": f"Suggested Stop Loss: {_fmt_money(tr.get('stop_loss'))} ({tr.get('execution_hints', {}).get('risk_note', 'Standard Risk')})"
     }
+    if eval_ctx:
+        horizon = prof.get("horizon") or result.get("selected_horizon") or tr.get("horizon") or "short_term"
+        summaries["confidence_narrative"] = generate_confidence_narrative(eval_ctx, horizon)
+        summaries["gate_validation"] = generate_gate_validation_narrative(eval_ctx)
+        summaries["scoring_breakdown"] = generate_scoring_breakdown_narrative(eval_ctx)
+        sector_snapshot = _build_sector_snapshot(eval_ctx)
+        if sector_snapshot:
+            summaries["sector_narrative"] = sector_snapshot
+    return summaries

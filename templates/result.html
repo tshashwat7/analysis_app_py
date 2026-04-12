@@ -69,6 +69,25 @@
           <i class="bi bi-file-earmark-pdf me-1"></i>PDF
         </button>
     </div>
+    {% set sector_name = indicators.get('sectorName', {}).get('value') if indicators and indicators.get('sectorName') is mapping else indicators.get('sectorName') if indicators else None %}
+    {% set sector_benchmark = indicators.get('sectorBenchmark', {}).get('value') if indicators and indicators.get('sectorBenchmark') is mapping else indicators.get('sectorBenchmark') if indicators else None %}
+    {% set sector_trend_score = indicators.get('sectorTrendScore', {}).get('value') if indicators and indicators.get('sectorTrendScore') is mapping else indicators.get('sectorTrendScore') if indicators else None %}
+    {% set rs_sector_fast = indicators.get('rsVsSectorFast', {}).get('value') if indicators and indicators.get('rsVsSectorFast') is mapping else indicators.get('rsVsSectorFast') if indicators else None %}
+    {% set rs_sector_slow = indicators.get('rsVsSectorSlow', {}).get('value') if indicators and indicators.get('rsVsSectorSlow') is mapping else indicators.get('rsVsSectorSlow') if indicators else None %}
+    {% if sector_name or sector_benchmark or sector_trend_score is not none %}
+    <div class="d-flex flex-wrap gap-1 mt-2">
+      {% if sector_name %}<span class="score-pill-sm pill-muted">Sector {{ sector_name }}</span>{% endif %}
+      {% if sector_benchmark %}<span class="score-pill-sm pill-blue">{{ sector_benchmark }}</span>{% endif %}
+      {% if sector_trend_score is not none %}
+      {% if sector_trend_score >= 7 %}{% set _st_cls = 'score-pill-sm pill-green' %}
+      {% elif sector_trend_score <= -5 %}{% set _st_cls = 'score-pill-sm pill-red' %}
+      {% else %}{% set _st_cls = 'score-pill-sm pill-yellow' %}{% endif %}
+      <span class="{{ _st_cls }}">Sector Trend {{ "%.2f"|format(sector_trend_score) }}</span>
+      {% endif %}
+      {% if rs_sector_fast is not none %}<span class="score-pill-sm pill-muted">RS Fast {{ "%.2f"|format(rs_sector_fast) }}%</span>{% endif %}
+      {% if rs_sector_slow is not none %}<span class="score-pill-sm pill-muted">RS Slow {{ "%.2f"|format(rs_sector_slow) }}%</span>{% endif %}
+    </div>
+    {% endif %}
   </div>
 
   {% if error %}
@@ -214,7 +233,7 @@
           </div>
           {% endif %}
 
-          {% if summaries.confidence_narrative or summaries.setup_explanation or summaries.strategy_explanation %}
+          {% if summaries.confidence_narrative or summaries.setup_explanation or summaries.strategy_explanation or summaries.sector_narrative %}
           <div class="accordion mt-2" id="accordionStrategyFit">
             {% if summaries.confidence_narrative %}
             <div class="accordion-item">
@@ -229,7 +248,7 @@
               </div>
             </div>
             {% endif %}
-            {% if summaries.setup_explanation or summaries.strategy_explanation %}
+            {% if summaries.setup_explanation or summaries.strategy_explanation or summaries.sector_narrative %}
             <div class="accordion-item">
               <h2 class="accordion-header">
                 <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
@@ -240,6 +259,7 @@
               <div id="collapseContext" class="accordion-collapse collapse">
                 <div class="accordion-body">
                   {% if profile_report.eval_ctx %}
+                  {% if summaries.sector_narrative %}<div class="mb-2"><strong>Sector:</strong><br>{{ summaries.sector_narrative | safe }}</div>{% endif %}
                   {% if summaries.setup_explanation %}<div class="mb-2"><strong>Setup:</strong> {{
                     summaries.setup_explanation }}</div>{% endif %}
                   {% if summaries.strategy_explanation %}<div class="mb-2"><strong>Strategy:</strong> {{
