@@ -15,24 +15,97 @@ NSE_SECTOR_MAP: Dict[str, str] = {
     "information technology": "^CNXIT.NS",
     "technology": "^CNXIT.NS",
     "financial services": "^NSEBANK",
+    "financials": "^NSEBANK",
     "banks": "^NSEBANK",
     "banking": "^NSEBANK",
-    "automobile and auto components": "^CNXAUTO.NS",
-    "auto": "^CNXAUTO.NS",
-    "automotive": "^CNXAUTO.NS",
-    "healthcare": "^CNXPHARMA.NS",
-    "pharmaceuticals": "^CNXPHARMA.NS",
-    "pharma": "^CNXPHARMA.NS",
-    "consumer goods": "^CNXFMCG.NS",
-    "fast moving consumer goods": "^CNXFMCG.NS",
-    "fmcg": "^CNXFMCG.NS",
-    "realty": "^CNXREALTY.NS",
-    "real estate": "^CNXREALTY.NS",
-    "infrastructure": "^CNXINFRA.NS",
-    "capital goods": "^CNXINFRA.NS",
-    "metals & mining": "^CNXMETAL.NS",
-    "metals and mining": "^CNXMETAL.NS",
-    "metals": "^CNXMETAL.NS",
+    "capital markets": "^NSEBANK",
+    "insurance": "^NSEBANK",
+    "automobile and auto components": "^CNXAUTO",
+    "auto": "^CNXAUTO",
+    "automotive": "^CNXAUTO",
+    "healthcare": "^CNXPHARMA",
+    "pharmaceuticals": "^CNXPHARMA",
+    "pharma": "^CNXPHARMA",
+    "consumer goods": "^CNXFMCG",
+    "fast moving consumer goods": "^CNXFMCG",
+    "fmcg": "^CNXFMCG",
+    "realty": "^CNXREALTY",
+    "real estate": "^CNXREALTY",
+    "infrastructure": "^CNXINFRA",
+    "capital goods": "^CNXINFRA",
+    "construction": "^CNXINFRA",
+    "engineering & construction": "^CNXINFRA",
+    "engineering and construction": "^CNXINFRA",
+    "metals & mining": "^CNXMETAL",
+    "metals and mining": "^CNXMETAL",
+    "metals": "^CNXMETAL",
+    "construction materials": "^CNXMETAL",
+    "building materials": "^CNXMETAL",
+    # ── Energy (broad: oil, gas, power PSUs) ──────────────────────────────
+    "energy":                               "^CNXENERGY",
+    "utilities":                            "^CNXENERGY",
+    "electric utilities":                   "^CNXENERGY",
+    "independent power producers":          "^CNXENERGY",
+    "power":                                "^CNXENERGY",
+    "power generation":                     "^CNXENERGY",
+    "thermal coal":                         "^CNXENERGY",
+    # ── Oil & Gas (granular) ──────────────────────────────────────────────
+    "oil and gas":                          "NIFTY_OIL_AND_GAS.NS",
+    "oil & gas":                            "NIFTY_OIL_AND_GAS.NS",
+    "oil gas & consumable fuels":           "NIFTY_OIL_AND_GAS.NS",
+    "oil gas and consumable fuels":         "NIFTY_OIL_AND_GAS.NS",
+    "oil gas integrated":                   "NIFTY_OIL_AND_GAS.NS",
+    "oil gas refining & marketing":         "NIFTY_OIL_AND_GAS.NS",
+    "oil gas refining and marketing":       "NIFTY_OIL_AND_GAS.NS",
+    "oil gas e&p":                          "NIFTY_OIL_AND_GAS.NS",
+    "oil gas midstream":                    "NIFTY_OIL_AND_GAS.NS",
+    "oil gas drilling":                     "NIFTY_OIL_AND_GAS.NS",
+    "petroleum":                            "NIFTY_OIL_AND_GAS.NS",
+    "natural gas":                          "NIFTY_OIL_AND_GAS.NS",
+    # ── Media & Entertainment / Telecom ───────────────────────────────────
+    "media":                                "^CNXMEDIA",
+    "media & entertainment":                "^CNXMEDIA",
+    "media and entertainment":              "^CNXMEDIA",
+    "entertainment":                        "^CNXMEDIA",
+    "broadcasting":                         "^CNXMEDIA",
+    "publishing":                           "^CNXMEDIA",
+    "telecom":                              "^CNXMEDIA",
+    "telecom services":                     "^CNXMEDIA",
+    "communication services":               "^CNXMEDIA",
+    "advertising agencies":                 "^CNXMEDIA",
+    # ── Chemicals / Basic Materials ───────────────────────────────────────
+    "chemicals":                            "^CNXMETAL",
+    "specialty chemicals":                  "^CNXMETAL",
+    "basic materials":                      "^CNXMETAL",
+    "fertilizers & agricultural chemicals": "^CNXMETAL",
+    "fertilisers":                          "^CNXMETAL",
+    # ── yfinance GICS labels for existing sectors ─────────────────────────
+    "consumer cyclical":                    "^CNXAUTO",
+    "consumer defensive":                   "^CNXFMCG",
+    "industrials":                          "^CNXINFRA",
+    # ── Services ──────────────────────────────────────────────────────────
+    "services":                             "^CNXSERVICE",
+    "business services":                    "^CNXSERVICE",
+    "commercial services":                  "^CNXSERVICE",
+    # ── Consumer Durables (verify NIFTY_CONSDUR.NS on YF) ─────────────────
+    "consumer durables":                    "NIFTY_CONSDUR.NS",
+    "durables":                             "NIFTY_CONSDUR.NS",
+    "household appliances":                 "NIFTY_CONSDUR.NS",
+    # ── Consumption ───────────────────────────────────────────────────────
+    "consumption":                          "^CNXCONSUM",
+    "india consumption":                    "^CNXCONSUM",
+    "retail":                               "^CNXCONSUM",
+    # ── PSU ───────────────────────────────────────────────────────────────
+    "psu":                                  "^CNXPSE",
+    "pse":                                  "^CNXPSE",
+    "public sector":                        "^CNXPSE",
+    "public sector enterprises":            "^CNXPSE",
+    # ── Defence (verify NIFTY_INDIA_DEFENCE.NS on YF) ─────────────────────
+    "defence":                              "NIFTY_INDIA_DEFENCE.NS",
+    "defense":                              "NIFTY_INDIA_DEFENCE.NS",
+    "aerospace & defence":                  "NIFTY_INDIA_DEFENCE.NS",
+    "aerospace and defence":                "NIFTY_INDIA_DEFENCE.NS",
+    "aerospace defense":                    "NIFTY_INDIA_DEFENCE.NS",
 }
 
 
@@ -48,22 +121,49 @@ def get_sector_benchmark_symbol(sector: Optional[str]) -> Optional[str]:
     if normalized in NSE_SECTOR_MAP:
         return NSE_SECTOR_MAP[normalized]
 
+    # fuzzy fallbacks — specific before broad
+    if "oil" in normalized or "gas" in normalized or "petroleum" in normalized:
+        return "NIFTY_OIL_AND_GAS.NS"
+    if "power" in normalized or "electric" in normalized or "utilities" in normalized:
+        return "^CNXENERGY"
+    if "energy" in normalized:
+        return "^CNXENERGY"
+    if "defence" in normalized or "defense" in normalized or "aerospace" in normalized:
+        return "NIFTY_INDIA_DEFENCE.NS"
+    if "media" in normalized or "entertainment" in normalized or "broadcast" in normalized:
+        return "^CNXMEDIA"
+    if "telecom" in normalized or "communication" in normalized:
+        return "^CNXMEDIA"
+    if "chemical" in normalized or "fertiliz" in normalized or "fertilis" in normalized:
+        return "^CNXMETAL"
     if "financial" in normalized or "bank" in normalized:
+        return "^NSEBANK"
+    if "insurance" in normalized or "capital market" in normalized:
         return "^NSEBANK"
     if "tech" in normalized or "software" in normalized or normalized == "it":
         return "^CNXIT.NS"
     if "auto" in normalized:
-        return "^CNXAUTO.NS"
-    if "pharma" in normalized or "health" in normalized:
-        return "^CNXPHARMA.NS"
-    if "fmcg" in normalized or "consumer" in normalized:
-        return "^CNXFMCG.NS"
+        return "^CNXAUTO"
+    if "pharma" in normalized or "health" in normalized or "drug" in normalized:
+        return "^CNXPHARMA"
+    if "durable" in normalized:
+        return "NIFTY_CONSDUR.NS"
+    if "fmcg" in normalized or "consumer good" in normalized or "consumer defensive" in normalized:
+        return "^CNXFMCG"
+    if "consumer" in normalized:
+        return "^CNXCONSUM"
     if "real" in normalized:
         return "^CNXREALTY.NS"
-    if "infra" in normalized or "capital goods" in normalized:
-        return "^CNXINFRA.NS"
-    if "metal" in normalized or "mining" in normalized:
-        return "^CNXMETAL.NS"
+    if "infra" in normalized or "capital good" in normalized:
+        return "^CNXINFRA"
+    if "metal" in normalized or "mining" in normalized or "steel" in normalized:
+        return "^CNXMETAL"
+    if "construction material" in normalized or "building material" in normalized or "cement" in normalized:
+        return "^CNXMETAL"
+    if "service" in normalized:
+        return "^CNXSERVICE"
+    if "psu" in normalized or "pse" in normalized or "public sector" in normalized:
+        return "^CNXPSE"
 
     return None
 

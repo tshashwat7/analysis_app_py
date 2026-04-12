@@ -603,7 +603,7 @@ GATE_METRIC_REGISTRY = {
         "description": "Sector trend alignment",
         "context_paths": [("indicators", "sectorTrendScore", "value"), ("indicators", "sectorTrendScore")],
         "optional": True,
-        "fallback": 5.0
+        "fallback": 0.0
     },
 
     "rsVsSectorFast": {

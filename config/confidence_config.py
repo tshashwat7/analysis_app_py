@@ -382,6 +382,37 @@ CONFIDENCE_CONFIG = {
                             "QUALITY_ACCUMULATION"
                         ],
                         "reason": "Extremely poor fundamentals - risky even for swing"
+                    },
+                    "sector_headwind_continuation": {
+                        "gates": {"sectorTrendScore": {"max": -5.0}},
+                        "apply_to_setups": [
+                            "TREND_PULLBACK",
+                            "TREND_FOLLOWING",
+                            "MOMENTUM_BREAKOUT",
+                            "MOMENTUM_FLOW_CONTINUATION",
+                            "PATTERN_DARVAS_BREAKOUT",
+                            "PATTERN_VCP_BREAKOUT",
+                            "PATTERN_FLAG_BREAKOUT",
+                            "PATTERN_CUP_BREAKOUT"
+                        ],
+                        "confidence_penalty": -12,
+                        "reason": "Sector trend is fighting bullish continuation setup"
+                    },
+                    "sector_laggard_breakout": {
+                        "gates": {
+                            "sectorTrendScore": {"min": 4.0},
+                            "rsVsSectorFast": {"max": -2.0}
+                        },
+                        "apply_to_setups": [
+                            "MOMENTUM_BREAKOUT",
+                            "MOMENTUM_FLOW_CONTINUATION",
+                            "PATTERN_DARVAS_BREAKOUT",
+                            "PATTERN_VCP_BREAKOUT",
+                            "PATTERN_FLAG_BREAKOUT",
+                            "PATTERN_CUP_BREAKOUT"
+                        ],
+                        "confidence_penalty": -8,
+                        "reason": "Sector is healthy but stock is lagging its peers"
                     }
                     
                     # ❌ NO "speculative growth" penalty
@@ -450,6 +481,38 @@ CONFIDENCE_CONFIG = {
                         "confidence_boost": 10,
                         "apply_to_setups": ["MOMENTUM_BREAKDOWN", "MOMENTUM_FLOW_BREAKDOWN", "BEAR_TREND_FOLLOWING"],
                         "reason": "Strong bearish pattern confirmation"
+                    },
+                    "leading_stock_in_leading_sector": {
+                        "gates": {
+                            "sectorTrendScore": {"min": 7.0},
+                            "rsVsSectorFast": {"min": 2.0}
+                        },
+                        "confidence_boost": 10,
+                        "apply_to_setups": [
+                            "TREND_PULLBACK",
+                            "TREND_FOLLOWING",
+                            "MOMENTUM_BREAKOUT",
+                            "MOMENTUM_FLOW_CONTINUATION",
+                            "PATTERN_DARVAS_BREAKOUT",
+                            "PATTERN_VCP_BREAKOUT",
+                            "PATTERN_FLAG_BREAKOUT",
+                            "PATTERN_CUP_BREAKOUT"
+                        ],
+                        "reason": "Leading stock in a leading sector"
+                    },
+                    "persistent_sector_leadership": {
+                        "gates": {
+                            "rsVsSectorFast": {"min": 1.5},
+                            "rsVsSectorSlow": {"min": 1.0}
+                        },
+                        "confidence_boost": 6,
+                        "apply_to_setups": [
+                            "TREND_FOLLOWING",
+                            "TREND_PULLBACK",
+                            "QUALITY_ACCUMULATION",
+                            "MOMENTUM_FLOW_CONTINUATION"
+                        ],
+                        "reason": "Stock is consistently outperforming its sector"
                     }
                 }
             },
@@ -560,6 +623,17 @@ CONFIDENCE_CONFIG = {
                             "VALUE_TURNAROUND"
                         ],
                         "reason": "Balance sheet too weak for long-term thesis despite acceptable score"
+                    },
+                    "sector_headwind_position_trade": {
+                        "gates": {"sectorTrendScore": {"max": -4.0}},
+                        "confidence_penalty": -10,
+                        "apply_to_setups": [
+                            "QUALITY_ACCUMULATION",
+                            "VALUE_TURNAROUND",
+                            "TREND_FOLLOWING",
+                            "DEEP_VALUE_PLAY"
+                        ],
+                        "reason": "Sector trend is a headwind for a patient long thesis"
                     }
                 },
                 
@@ -640,6 +714,33 @@ CONFIDENCE_CONFIG = {
                             "VALUE_TURNAROUND"
                         ],
                         "reason": "High-quality business at attractive valuation - value compounder"
+                    },
+                    "sector_compounder_tailwind": {
+                        "gates": {
+                            "sectorTrendScore": {"min": 6.0},
+                            "rsVsSectorSlow": {"min": 2.0}
+                        },
+                        "confidence_boost": 10,
+                        "apply_to_setups": [
+                            "QUALITY_ACCUMULATION",
+                            "TREND_FOLLOWING",
+                            "VALUE_TURNAROUND"
+                        ],
+                        "reason": "Long-term thesis supported by a favorable sector trend"
+                    },
+                    "durable_sector_leadership": {
+                        "gates": {
+                            "rsVsSectorFast": {"min": 1.0},
+                            "rsVsSectorSlow": {"min": 2.5},
+                            "fund_quality_bucket": {"min": 7.0}
+                        },
+                        "confidence_boost": 8,
+                        "apply_to_setups": [
+                            "QUALITY_ACCUMULATION",
+                            "TREND_FOLLOWING",
+                            "DEEP_VALUE_PLAY"
+                        ],
+                        "reason": "Quality business is sustainably outperforming its sector"
                     }
                 }
             },

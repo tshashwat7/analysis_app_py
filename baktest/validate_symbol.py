@@ -369,8 +369,12 @@ def run(symbol: str, horizon: str, report_path: str, part: str) -> int:
     setup_logger()
 
     print(f"Fetching production data for {symbol} [{horizon}] ...")
-    indicators, patterns = compute_indicators_cached(symbol, horizon)
     fundamentals = compute_fundamentals(symbol)
+    indicators, patterns = compute_indicators_cached(
+        symbol,
+        horizon,
+        sector=fundamentals.get("sector") if isinstance(fundamentals, dict) else None,
+    )
 
     print("Building evaluation context ...")
     eval_ctx = build_evaluation_context(
@@ -404,6 +408,10 @@ def run(symbol: str, horizon: str, report_path: str, part: str) -> int:
         _write(f"Setup type:     {setup_type}", sink)
         _write(f"Pattern count:  {len(patterns or {})}", sink)
         _write(f"Indicator keys: {len(indicators or {})}", sink)
+        _write(f"  sectorTrendScore: {indicators.get('sectorTrendScore') if indicators else 'None'}", sink)
+        _write(f"  rsVsSectorFast: {indicators.get('rsVsSectorFast') if indicators else 'None'}", sink)
+        _write(f"  rsVsSectorSlow: {indicators.get('rsVsSectorSlow') if indicators else 'None'}", sink)
+        _write(f"  sectorName: {indicators.get('sectorName') if indicators else 'None'}", sink)
         _write(f"Fundamental keys: {len(fundamentals or {})}", sink)
 
         # ── Part 1: Math audit ──────────────────────────────────────────────
