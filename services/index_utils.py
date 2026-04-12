@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 # Late import to avoid circularity if data_fetch imports index_utils
 # from services.data_fetch import parse_index_csv
@@ -10,6 +10,62 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = "data"
 STOCK_TO_INDEX_MAP: Dict[str, str] = {}
+
+NSE_SECTOR_MAP: Dict[str, str] = {
+    "information technology": "^CNXIT.NS",
+    "technology": "^CNXIT.NS",
+    "financial services": "^NSEBANK",
+    "banks": "^NSEBANK",
+    "banking": "^NSEBANK",
+    "automobile and auto components": "^CNXAUTO.NS",
+    "auto": "^CNXAUTO.NS",
+    "automotive": "^CNXAUTO.NS",
+    "healthcare": "^CNXPHARMA.NS",
+    "pharmaceuticals": "^CNXPHARMA.NS",
+    "pharma": "^CNXPHARMA.NS",
+    "consumer goods": "^CNXFMCG.NS",
+    "fast moving consumer goods": "^CNXFMCG.NS",
+    "fmcg": "^CNXFMCG.NS",
+    "realty": "^CNXREALTY.NS",
+    "real estate": "^CNXREALTY.NS",
+    "infrastructure": "^CNXINFRA.NS",
+    "capital goods": "^CNXINFRA.NS",
+    "metals & mining": "^CNXMETAL.NS",
+    "metals and mining": "^CNXMETAL.NS",
+    "metals": "^CNXMETAL.NS",
+}
+
+
+def _normalize_sector_name(sector: str) -> str:
+    return str(sector or "").strip().lower()
+
+
+def get_sector_benchmark_symbol(sector: Optional[str]) -> Optional[str]:
+    normalized = _normalize_sector_name(sector)
+    if not normalized:
+        return None
+
+    if normalized in NSE_SECTOR_MAP:
+        return NSE_SECTOR_MAP[normalized]
+
+    if "financial" in normalized or "bank" in normalized:
+        return "^NSEBANK"
+    if "tech" in normalized or "software" in normalized or normalized == "it":
+        return "^CNXIT.NS"
+    if "auto" in normalized:
+        return "^CNXAUTO.NS"
+    if "pharma" in normalized or "health" in normalized:
+        return "^CNXPHARMA.NS"
+    if "fmcg" in normalized or "consumer" in normalized:
+        return "^CNXFMCG.NS"
+    if "real" in normalized:
+        return "^CNXREALTY.NS"
+    if "infra" in normalized or "capital goods" in normalized:
+        return "^CNXINFRA.NS"
+    if "metal" in normalized or "mining" in normalized:
+        return "^CNXMETAL.NS"
+
+    return None
 
 def get_cached_stocks(index_file: str) -> List[Tuple[str, str]]:
     """Helper to load stocks from a JSON file."""

@@ -359,6 +359,7 @@ def compute_indicators_cached(
     symbol: str,
     horizon: str = "short_term",
     benchmark_symbol: str = "^NSEI",
+    sector: str = None,
     force_refresh: bool = False,
     validate_data_hash: bool = False,  # NEW: explicit control
     df: pd.DataFrame = None,  # NEW: optional DataFrame for hash calculation
@@ -414,7 +415,8 @@ def compute_indicators_cached(
     indicators, patterns = compute_indicators(
         symbol=symbol,
         horizon=horizon,
-        benchmark_symbol=benchmark_symbol
+        benchmark_symbol=benchmark_symbol,
+        sector=sector,
     )
     
     # Store in cache

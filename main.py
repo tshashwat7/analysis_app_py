@@ -914,10 +914,12 @@ def run_analysis(
         # =====================================================================
         for h in horizons_to_compute:  # ✅ OPTIMIZED: Only compute what's needed
             try:
+                sector_name = fund_data.get("sector") if isinstance(fund_data, dict) else None
                 h_indicators, h_patterns = compute_indicators_cached(
                     symbol,
                     horizon=h,
                     benchmark_symbol=bench_symbol,
+                    sector=sector_name,
                     force_refresh=False
                 )
                 analysis_data["raw_indicators_by_horizon"][h] = h_indicators
@@ -1311,8 +1313,12 @@ async def analyze_multibagger(request: Request, symbol: str, index: str = "nifty
         def _fetch_mb_data(symbol):
             from services.indicator_cache import compute_indicators_cached
             from services.fundamentals import compute_fundamentals
-            indicators_local, patterns_local = compute_indicators_cached(symbol, horizon="multibagger")
             fundamentals_local = compute_fundamentals(symbol)
+            indicators_local, patterns_local = compute_indicators_cached(
+                symbol,
+                horizon="multibagger",
+                sector=fundamentals_local.get("sector") if isinstance(fundamentals_local, dict) else None,
+            )
             return indicators_local, patterns_local, fundamentals_local
 
         loop = asyncio.get_running_loop()

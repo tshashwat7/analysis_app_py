@@ -285,10 +285,13 @@ def worker_eval_single(symbol: str, meta: Dict = None) -> Dict[str, Any]:
     try:
         # 1. Fetch Data (Individually robust via _wrap_calc inside these services)
         # ✅ P0-2 FIX: Remove force_refresh=True to use Parquet cache
-        indicators, patterns = compute_indicators_cached(
-            symbol, horizon="multibagger", force_refresh=False
-        )
         fundamentals = compute_fundamentals(symbol)
+        indicators, patterns = compute_indicators_cached(
+            symbol,
+            horizon="multibagger",
+            sector=fundamentals.get("sector") if isinstance(fundamentals, dict) else None,
+            force_refresh=False
+        )
         
         # 2. Run Screener
         passed, reason = evaluate_single_screener(

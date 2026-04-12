@@ -1189,6 +1189,45 @@ SYNTHETIC_CASES: List[BacktestCase] = [
         tags=["signal", "watch", "weak_trend"],
     ),
     BacktestCase(
+        name="Architecture: strong trend without primary pattern stays WATCH",
+        description="High-confidence bullish trend should still remain WATCH until a primary entry pattern appears.",
+        horizon="short_term",
+        indicators=make_indicators(
+            adx=42.0, rvol=1.8, rsi=68.0, trendStrength=8.8,
+            atrPct=2.4, volatilityQuality=7.2, bbPercentB=0.76,
+            macdHistogram=1.4, trend_direction="BULLISH", volume_signature="surge",
+            price=2500.0, atr=35.0
+        ),
+        fundamentals=make_fundamentals(roe=23.0, roce=21.0, de_ratio=0.25, piotroski_f=8.0),
+        patterns={},
+        signal="WATCH",
+        confidence_min=70.0,
+        gate_must_fail=["STRUCTURE_GATE: GENERIC fallback with no primary pattern cannot generate BUY"],
+        tags=["signal", "watch", "architecture", "no_primary_pattern", "high_confidence"],
+    ),
+    BacktestCase(
+        name="Architecture: primary pattern unlocks BUY for strong trend",
+        description="Same quality trend should emit BUY once a primary pattern is supplied.",
+        horizon="short_term",
+        indicators=make_indicators(
+            adx=42.0, rvol=1.8, rsi=68.0, trendStrength=8.8,
+            atrPct=2.4, volatilityQuality=7.2, bbPercentB=0.76,
+            macdHistogram=1.4, trend_direction="BULLISH", volume_signature="surge",
+            price=2500.0, atr=35.0
+        ),
+        fundamentals=make_fundamentals(roe=23.0, roce=21.0, de_ratio=0.25, piotroski_f=8.0),
+        patterns={
+            "goldenCross": make_pattern("goldenCross", found=True, quality=8.2, score=84.0, price=2500.0, atr=35.0),
+            "bollingerSqueeze": make_pattern("bollingerSqueeze", found=True, quality=7.0, score=74.0, price=2500.0, atr=35.0),
+        },
+        signal="BUY",
+        confidence_min=70.0,
+        rr_min=1.5,
+        target1_gt_entry=True,
+        sl_in_atr_range=True,
+        tags=["signal", "buy", "architecture", "primary_pattern", "high_confidence"],
+    ),
+    BacktestCase(
         name="BLOCKED: execution guard suppresses entry",
         description="Strong pattern setup, but SL-distance execution guard blocks entry.",
         horizon="short_term",
@@ -1936,17 +1975,33 @@ class HistoricalCase:
     check_window: Tuple[str, str]
     expected_signals: Dict[str, int]
     description: str = ""
+    patterns: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    fundamentals: Dict[str, Any] = dataclasses.field(default_factory=dict)
     tags: List[str] = dataclasses.field(default_factory=list)
 
 
 HISTORICAL_CASES: List[HistoricalCase] = [
     HistoricalCase(
-        name="RELIANCE: short_term BUY signals during trending phase",
+        name="RELIANCE: WATCH during trend-only phase without primary pattern",
         symbol="RELIANCE.NS", horizon="short_term",
         fixture_file="RELIANCE_NS_short_term.parquet",
         check_window=("2023-09-01", "2023-12-31"),
-        expected_signals={"BUY": 1, "WATCH": 0},
-        tags=["historical", "reliance", "short_term"],
+        expected_signals={"WATCH": 1},
+        description="Golden negative case: strong trend alone should stay WATCH when no primary pattern is supplied.",
+        tags=["historical", "reliance", "short_term", "trend_only_watch"],
+    ),
+    HistoricalCase(
+        name="RELIANCE: BUY appears when primary trend patterns are supplied",
+        symbol="RELIANCE.NS", horizon="short_term",
+        fixture_file="RELIANCE_NS_short_term.parquet",
+        check_window=("2023-09-01", "2023-12-31"),
+        expected_signals={"BUY": 1},
+        description="Golden positive case: same trending window should emit BUY once primary trend-following patterns are present.",
+        patterns={
+            "goldenCross": make_pattern("goldenCross", found=True, quality=8.0, score=82.0, price=2800),
+            "ichimokuSignals": make_pattern("ichimokuSignals", found=True, quality=7.5, score=78.0, price=2800),
+        },
+        tags=["historical", "reliance", "short_term", "golden_case", "primary_pattern_buy"],
     ),
     HistoricalCase(
         name="ADANIENT: AVOID during high D/E period",
@@ -2036,10 +2091,11 @@ class HistoricalReplayEngine:
         for bar_idx in range(50, len(window)):
             bar_df = window.iloc[: bar_idx + 1]
             indicators = _build_indicators_from_ohlcv(bar_df, case.horizon)
-            fundamentals = make_fundamentals()
+            fundamentals = copy.deepcopy(case.fundamentals) if case.fundamentals else make_fundamentals()
             bt_case = BacktestCase(name=f"replay_{case.symbol}_{bar_idx}", description="",
                                    horizon=case.horizon, indicators=indicators,
-                                   fundamentals=fundamentals, symbol=case.symbol)
+                                   fundamentals=fundamentals, patterns=copy.deepcopy(case.patterns),
+                                   symbol=case.symbol)
             try:
                 result, error = self.runner.run(bt_case)
                 if result:

@@ -201,7 +201,7 @@ GATE_METRIC_REGISTRY = {
         "category": "trend",
         "validation_type": "threshold",
         "description": "Relative Strength versus Nifty (Alpha)",
-        "context_paths": [("indicators", "relStrengthNifty")],
+        "context_paths": [("indicators", "relStrengthNifty", "value"), ("indicators", "relStrengthNifty")],
         "optional": True
     },
     
@@ -591,7 +591,7 @@ GATE_METRIC_REGISTRY = {
         "category": "market",
         "validation_type": "threshold",
         "description": "Alias for relStrengthNifty",
-        "context_paths": [("indicators", "relStrengthNifty")],
+        "context_paths": [("indicators", "relStrengthNifty", "value"), ("indicators", "relStrengthNifty")],
         "optional": True,
         "fallback": 0.0
     },
@@ -601,9 +601,29 @@ GATE_METRIC_REGISTRY = {
         "category": "market",
         "validation_type": "threshold",
         "description": "Sector trend alignment",
-        "context_paths": [("indicators", "sectorTrendScore")],
+        "context_paths": [("indicators", "sectorTrendScore", "value"), ("indicators", "sectorTrendScore")],
         "optional": True,
         "fallback": 5.0
+    },
+
+    "rsVsSectorFast": {
+        "type": "numeric",
+        "category": "market",
+        "validation_type": "threshold",
+        "description": "Fast relative strength versus sector",
+        "context_paths": [("indicators", "rsVsSectorFast", "value"), ("indicators", "rsVsSectorFast")],
+        "optional": True,
+        "fallback": 0.0
+    },
+
+    "rsVsSectorSlow": {
+        "type": "numeric",
+        "category": "market",
+        "validation_type": "threshold",
+        "description": "Slow relative strength versus sector",
+        "context_paths": [("indicators", "rsVsSectorSlow", "value"), ("indicators", "rsVsSectorSlow")],
+        "optional": True,
+        "fallback": 0.0
     }
 }
 

@@ -31,6 +31,7 @@ from services.data_fetch import (
     _wrap_calc,
     get_history_for_horizon
 )
+from services.index_utils import get_sector_benchmark_symbol
 from services.analyzers.pattern_analyzer import run_pattern_analysis
 from services.fusion.pattern_fusion import merge_pattern_into_indicators
 
@@ -1024,6 +1025,104 @@ def compute_relative_strength(symbol, df, benchmark_df, horizon="short_term"):
             "relStrengthNifty": {"raw": round(rs, 2),"value": round(rs, 2),"alias": "Relative Strength (Alpha)","desc": f"{horizon.title()} Alpha: {rs:.1f}%"}}
     return _wrap_calc(_inner, "RS vs Nifty")
 
+
+def _compute_relative_strength_against_series(
+    df: pd.DataFrame,
+    reference_df: pd.DataFrame,
+    lookback: int,
+    metric_name: str,
+    desc_label: str,
+):
+    _Validator.require(df, ["Close"], min_rows=lookback, indicator=f"{metric_name}_stock")
+    _Validator.require(reference_df, ["Close"], min_rows=lookback, indicator=f"{metric_name}_reference")
+
+    if len(df) < lookback or len(reference_df) < lookback:
+        return {}
+
+    s_now, s_old = df["Close"].iloc[-1], df["Close"].iloc[-lookback]
+    r_now, r_old = reference_df["Close"].iloc[-1], reference_df["Close"].iloc[-lookback]
+
+    s_ret = _safe_float((s_now / s_old - 1) * 100)
+    r_ret = _safe_float((r_now / r_old - 1) * 100)
+    if s_ret is None or r_ret is None:
+        return {}
+
+    rs = s_ret - r_ret
+    return {
+        metric_name: {
+            "raw": round(rs, 2),
+            "value": round(rs, 2),
+            "alias": desc_label,
+            "desc": f"{desc_label}: {rs:.1f}%"
+        }
+    }
+
+
+def compute_sector_trend_score(sector_df: pd.DataFrame, horizon: str = "short_term"):
+    def _inner():
+        ema_slow_len = {"intraday": 50, "short_term": 200, "long_term": 50, "multibagger": 12}.get(horizon, 200)
+        ema_fast_len = {"intraday": 20, "short_term": 50, "long_term": 20, "multibagger": 6}.get(horizon, 50)
+
+        if sector_df is None or sector_df.empty:
+            return {"sectorTrendScore": {"value": None, "score": None, "desc": "Sector data unavailable"}}
+
+        _Validator.require(sector_df, ["Close"], min_rows=ema_slow_len, indicator="sector_trend")
+        close = sector_df["Close"].dropna()
+        if len(close) < ema_fast_len:
+            return {"sectorTrendScore": {"value": None, "score": None, "desc": "Sector data unavailable"}}
+
+        cur = close.iloc[-1]
+        ema_fast_series = ta.ema(close, ema_fast_len)
+        ema_slow_series = ta.ema(close, ema_slow_len)
+        if ema_fast_series is None:
+            return {"sectorTrendScore": {"value": None, "score": None, "desc": "Sector data unavailable"}}
+
+        ema_fast = safe_float(ema_fast_series.iloc[-1])
+        ema_slow = safe_float(ema_slow_series.iloc[-1]) if ema_slow_series is not None else None
+
+        if ema_slow:
+            diff = (cur - ema_slow) / ema_slow * 100
+            if ema_fast and cur > ema_fast > ema_slow:
+                sig, score = "Strong Uptrend", 9
+            elif cur > ema_slow:
+                sig, score = "Moderate Uptrend", 7
+            elif ema_fast and cur < ema_fast < ema_slow:
+                sig, score = "Strong Downtrend", 1
+            else:
+                sig, score = "Downtrend", 3
+        elif ema_fast:
+            diff = (cur - ema_fast) / ema_fast * 100
+            if cur > ema_fast:
+                sig, score = "Uptrend (Weak)", 6
+            else:
+                sig, score = "Downtrend", 3
+        else:
+            return {"sectorTrendScore": {"value": None, "score": None, "desc": "Sector data unavailable"}}
+
+        return {"sectorTrendScore": {"value": round(diff, 2), "score": score, "desc": sig}}
+
+    return _wrap_calc(_inner, "Sector Trend")
+
+
+def compute_relative_strength_vs_sector_fast(df: pd.DataFrame, sector_df: pd.DataFrame, horizon="short_term"):
+    def _inner():
+        lookback = {"intraday": 20, "short_term": 20, "long_term": 12, "multibagger": 12}.get(horizon, 20)
+        return _compute_relative_strength_against_series(
+            df, sector_df, lookback, "rsVsSectorFast", "Relative Strength vs Sector (Fast)"
+        )
+
+    return _wrap_calc(_inner, "RS vs Sector Fast")
+
+
+def compute_relative_strength_vs_sector_slow(df: pd.DataFrame, sector_df: pd.DataFrame, horizon="short_term"):
+    def _inner():
+        lookback = {"intraday": 60, "short_term": 60, "long_term": 52, "multibagger": 52}.get(horizon, 60)
+        return _compute_relative_strength_against_series(
+            df, sector_df, lookback, "rsVsSectorSlow", "Relative Strength vs Sector (Slow)"
+        )
+
+    return _wrap_calc(_inner, "RS vs Sector Slow")
+
 def compute_entry_price(df, price):
     def _inner():
         mid = ta.sma(df["Close"], 20).iloc[-1]
@@ -1308,6 +1407,9 @@ INDICATOR_METRIC_MAP = {
     "niftyTrendScore": {"func": compute_nifty_trend_score, "horizon": "default"},
     "gapPercent": {"func": compute_gap_percent, "horizon": "default"},
     "relStrengthNifty": {"func": compute_relative_strength, "horizon": "default"},
+    "sectorTrendScore": {"func": compute_sector_trend_score, "horizon": "default"},
+    "rsVsSectorFast": {"func": compute_relative_strength_vs_sector_fast, "horizon": "default"},
+    "rsVsSectorSlow": {"func": compute_relative_strength_vs_sector_slow, "horizon": "default"},
     # Consolidated Trend + Components
 
     "maTrendSignal": {"func": compute_dynamic_ma_trend, "horizon": "default"},
@@ -1342,6 +1444,7 @@ def compute_indicators(
     benchmark_symbol: str = "^NSEI",
     df_hash: str = None, 
     benchmark_hash: str = None,
+    sector: str = None,
 ) -> Dict[str, Dict[str, Any]]:
 
     profile = HORIZON_PROFILE_MAP.get(horizon, {})
@@ -1363,7 +1466,8 @@ def compute_indicators(
         "supertrendSignal", "psarTrend", "ttmSqueeze", "bbWidth", 
         "bbPercentB", "volSpikeRatio", "pivotPoint","regSlope",
         "maCrossSignal", # Changed maCrossSetup -> maCrossSignal
-        "wickRejection", "atrDynamic", "slAtrDynamic","ichiCloud","trueRange","hv10","stochK", "stochD","position52w","relStrengthNifty"
+        "wickRejection", "atrDynamic", "slAtrDynamic","ichiCloud","trueRange","hv10","stochK", "stochD","position52w","relStrengthNifty",
+        "sectorTrendScore", "rsVsSectorFast", "rsVsSectorSlow"
     }
     raw_metrics.update(ALWAYS_CALC)
     
@@ -1401,6 +1505,8 @@ def compute_indicators(
                 break
 
     benchmark_df = None
+    sector_df = None
+    sector_benchmark_symbol = get_sector_benchmark_symbol(sector)
     try:
         raw_bench = get_benchmark_data(horizon, benchmark_symbol)
         if raw_bench is not None and not raw_bench.empty:
@@ -1412,6 +1518,19 @@ def compute_indicators(
                 benchmark_df.index = benchmark_df.index.tz_convert("UTC")
             benchmark_df = benchmark_df.sort_index()
     except: pass
+    try:
+        if sector_benchmark_symbol:
+            raw_sector_bench = get_benchmark_data(horizon, sector_benchmark_symbol)
+            if raw_sector_bench is not None and not raw_sector_bench.empty:
+                sector_df = raw_sector_bench.copy()
+                sector_df.index = pd.to_datetime(sector_df.index)
+                if sector_df.index.tz is None:
+                    sector_df.index = sector_df.index.tz_localize("UTC")
+                else:
+                    sector_df.index = sector_df.index.tz_convert("UTC")
+                sector_df = sector_df.sort_index()
+    except Exception as e:
+        logger.debug(f"[{symbol}] Sector benchmark fetch failed for {sector_benchmark_symbol}: {e}")
 
     indicators = {}
     detectedPatterns = {}
@@ -1431,6 +1550,19 @@ def compute_indicators(
                         series = pd.concat([series, pd.Series([live_price], index=[stitch_idx])])
 
             indicators["symbol"] = {"value": symbol, "score":0, "alias":"Ticker", "desc": "Stock symbol"}
+            indicators["sectorName"] = {"value": sector, "score": 0, "alias": "Sector", "desc": "Resolved stock sector"}
+            indicators["sectorBenchmark"] = {
+                "value": sector_benchmark_symbol,
+                "score": 0,
+                "alias": "Sector Benchmark",
+                "desc": "Resolved sector benchmark symbol"
+            }
+            indicators["sectorDataAvailable"] = {
+                "value": bool(sector_df is not None and not sector_df.empty),
+                "score": 0,
+                "alias": "Sector Data Available",
+                "desc": "Whether sector benchmark data was available"
+            }
             # 1. Current Price
             if not series.empty:
                 price = float(series.iloc[-1])
@@ -1499,6 +1631,7 @@ def compute_indicators(
                 if p.name == "symbol": kwargs["symbol"] = symbol
                 elif p.name == "df": kwargs["df"] = df_local
                 elif p.name == "benchmark_df": kwargs["benchmark_df"] = benchmark_df
+                elif p.name == "sector_df": kwargs["sector_df"] = sector_df
                 elif p.name == "price": kwargs["price"] = indicators.get("price", {}).get("value")
                 elif p.name == "close": kwargs["close"] = df_local["Close"] if df_local is not None else None
                 elif p.name == "high": kwargs["high"] = df_local["High"] if df_local is not None else None
