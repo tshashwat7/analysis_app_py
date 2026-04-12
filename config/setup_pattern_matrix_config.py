@@ -107,6 +107,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"max": 1.2990000000000002}},
                     "confidence_penalty": -15,
                     "reason": "Darvas breakout needs strong volume"
+                },
+                "sector_laggard": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 4.0},
+                        "rsVsSectorFast": {"max": -2.0}
+                    },
+                    "confidence_penalty": -8,
+                    "reason": "Darvas breakout is lagging a healthy sector"
                 }
             },
             "bonuses": {
@@ -114,6 +122,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"min": 3.0}},
                     "confidence_boost": 10,
                     "reason": "Exceptional volume confirmation"
+                },
+                "sector_tailwind": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 7.0},
+                        "rsVsSectorFast": {"min": 2.0}
+                    },
+                    "confidence_boost": 8,
+                    "reason": "Breakout is backed by strong sector flow"
                 }
             }
         },
@@ -224,6 +240,26 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 }
             },
         },
+        "validation_modifiers": {
+            "penalties": {
+                "weak_sector_context": {
+                    "gates": {"sectorTrendScore": {"max": -4.0}},
+                    "confidence_penalty": -8,
+                    "reason": "VCP continuation is fighting a weak sector backdrop"
+                }
+            },
+            "bonuses": {
+                "elite_sector_leadership": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 6.5},
+                        "rsVsSectorFast": {"min": 2.5},
+                        "rsVsSectorSlow": {"min": 1.5}
+                    },
+                    "confidence_boost": 10,
+                    "reason": "VCP is occurring in a leading stock within a strong sector"
+                }
+            }
+        },
         "description": "Minervini-style volatility contraction pattern"
     },
 
@@ -267,6 +303,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rsi": {"max": 54.999}},
                     "confidence_penalty": -10,
                     "reason": "Lacking momentum for sustained breakout"
+                },
+                "sector_laggard": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 4.0},
+                        "rsVsSectorFast": {"max": -2.0}
+                    },
+                    "confidence_penalty": -6,
+                    "reason": "Cup & handle is lagging sector peers"
                 }
             },
             "bonuses": {
@@ -274,6 +318,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"min": 2.5}},
                     "confidence_boost": 15,
                     "reason": "Exceptional volume on the handle breakout"
+                },
+                "sector_tailwind": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 6.5},
+                        "rsVsSectorFast": {"min": 1.5}
+                    },
+                    "confidence_boost": 7,
+                    "reason": "Cup & handle is aligned with supportive sector flow"
                 }
             }
         },
@@ -359,6 +411,11 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"max": 0.999}},
                     "confidence_penalty": -20,
                     "reason": "Flag breakout without volume is a bull trap"
+                },
+                "sector_headwind": {
+                    "gates": {"sectorTrendScore": {"max": -5.0}},
+                    "confidence_penalty": -8,
+                    "reason": "Flag continuation is fighting sector trend"
                 }
             },
             "bonuses": {
@@ -366,6 +423,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"macdHistogram": {"min": 0.001}},
                     "confidence_boost": 10,
                     "reason": "MACD momentum fully supports continuation"
+                },
+                "sector_momentum_sync": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 7.0},
+                        "rsVsSectorFast": {"min": 2.0}
+                    },
+                    "confidence_boost": 8,
+                    "reason": "Flag breakout is synchronized with sector momentum"
                 }
             }
         },
@@ -677,6 +742,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"trendStrength": {"max": 4.999}},
                     "confidence_penalty": -15,
                     "reason": "Momentum breakout needs strong trend"
+                },
+                "sector_laggard": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 4.0},
+                        "rsVsSectorFast": {"max": -2.0}
+                    },
+                    "confidence_penalty": -8,
+                    "reason": "Momentum breakout is lagging a constructive sector"
                 }
             },
             "bonuses": {
@@ -684,6 +757,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"min": 3.0}},
                     "confidence_boost": 10,
                     "reason": "Exceptional volume confirmation"
+                },
+                "sector_tailwind": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 7.0},
+                        "rsVsSectorFast": {"min": 2.0}
+                    },
+                    "confidence_boost": 8,
+                    "reason": "Momentum breakout is reinforced by sector leadership"
                 }
             }
         },
@@ -840,6 +921,26 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                 "trendStrength": {"min": 5.5}
             }
         },
+        "validation_modifiers": {
+            "penalties": {
+                "sector_headwind": {
+                    "gates": {"sectorTrendScore": {"max": -5.0}},
+                    "confidence_penalty": -8,
+                    "reason": "Momentum flow continuation is fighting sector rotation"
+                }
+            },
+            "bonuses": {
+                "sector_flow_alignment": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 6.5},
+                        "rsVsSectorFast": {"min": 2.0},
+                        "rsVsSectorSlow": {"min": 1.0}
+                    },
+                    "confidence_boost": 8,
+                    "reason": "Institutional flow is aligned with sector leadership"
+                }
+            }
+        },
         "min_pattern_quality": 7.5,
         "min_setup_score": 65,
         "setup_type": "momentum",
@@ -892,6 +993,11 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"min": 2.0}, "price": {"max_metric": "prevClose"}},
                     "confidence_penalty": -15,
                     "reason": "Pullback has too much selling volume"
+                },
+                "sector_headwind": {
+                    "gates": {"sectorTrendScore": {"max": -4.0}},
+                    "confidence_penalty": -6,
+                    "reason": "Pullback is forming inside a weak sector tape"
                 }
             },
             "bonuses": {
@@ -899,6 +1005,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"max": 0.8}},
                     "confidence_boost": 10,
                     "reason": "Healthy, low-volume consolidation"
+                },
+                "sector_reacceleration": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 6.0},
+                        "rsVsSectorFast": {"min": 1.5}
+                    },
+                    "confidence_boost": 6,
+                    "reason": "Pullback is occurring in a sector that is still leading"
                 }
             }
         },
@@ -1109,6 +1223,11 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rsi": {"min": 80.001}},
                     "confidence_penalty": -10,
                     "reason": "Overbought — elevated mean-reversion risk"
+                },
+                "sector_headwind": {
+                    "gates": {"sectorTrendScore": {"max": -5.0}},
+                    "confidence_penalty": -8,
+                    "reason": "Trend-following setup is fighting sector flow"
                 }
             },
             "bonuses": {
@@ -1116,6 +1235,15 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"adx": {"min": 30}, "trendStrength": {"min": 7.0}},
                     "confidence_boost": 10,
                     "reason": "Strong directional trend with high quality score"
+                },
+                "sector_alignment": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 6.0},
+                        "rsVsSectorFast": {"min": 1.5},
+                        "rsVsSectorSlow": {"min": 1.0}
+                    },
+                    "confidence_boost": 7,
+                    "reason": "Trend-following setup is aligned with sector leadership"
                 }
             }
         },
@@ -1301,6 +1429,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"bbWidth": {"min": 4.001}},
                     "confidence_penalty": -12,
                     "reason": "Accumulation pattern invalidated by expanding volatility"
+                },
+                "sector_distribution": {
+                    "gates": {
+                        "sectorTrendScore": {"max": -4.0},
+                        "rsVsSectorSlow": {"max": -1.0}
+                    },
+                    "confidence_penalty": -6,
+                    "reason": "Accumulation thesis is weakening as sector capital rotates out"
                 }
             },
             "bonuses": {
@@ -1313,6 +1449,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rvol": {"min": 1.5}, "price": {"min_metric": "prevClose"}},
                     "confidence_boost": 10,
                     "reason": "Smart money accumulating"
+                },
+                "sector_base_building": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 5.0},
+                        "rsVsSectorSlow": {"min": 1.5}
+                    },
+                    "confidence_boost": 6,
+                    "reason": "Quality accumulation is happening in a supportive sector base"
                 }
             }
         },
@@ -1518,6 +1662,11 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"rsiSlope": {"max": 0}, "macdHistogram": {"max": 0}},
                     "confidence_penalty": -10,
                     "reason": "Both momentum indicators still falling — too early for entry"
+                },
+                "sector_trap_risk": {
+                    "gates": {"sectorTrendScore": {"max": -5.0}},
+                    "confidence_penalty": -6,
+                    "reason": "Turnaround is trying to bottom against a weak sector"
                 }
             },
             "bonuses": {
@@ -1525,6 +1674,14 @@ SETUP_PATTERN_MATRIX: Dict[str, Dict[str, Any]] = {
                     "gates": {"roe": {"min": 22}, "momentumStrength": {"min": 6.0}},
                     "confidence_boost": 12,
                     "reason": "High quality fundamentals with confirmed momentum recovery"
+                },
+                "sector_improving_tape": {
+                    "gates": {
+                        "sectorTrendScore": {"min": 4.0},
+                        "rsVsSectorFast": {"min": 1.0}
+                    },
+                    "confidence_boost": 5,
+                    "reason": "Turnaround is improving alongside sector flow"
                 }
             }
         },
