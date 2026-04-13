@@ -791,6 +791,81 @@ def set_cached(symbol: str, value: Dict[str, Any]):
         logger.error(f"DB Write Error {symbol}: {e}")
 
 
+def _safe_grid_val(v):
+    if v is None:
+        return None
+    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+        return None
+    return v
+
+
+def _indicator_metric_value(indicators: Dict[str, Any], key: str):
+    metric = indicators.get(key)
+    if isinstance(metric, dict):
+        if "value" in metric:
+            return metric.get("value")
+        if "raw" in metric:
+            return metric.get("raw")
+    return metric
+
+
+def _flatten_analysis_for_grid(symbol: str, analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+    full_report = analysis_data.get("full_report", {}) or {}
+    profiles = full_report.get("profiles", {}) or {}
+    best_fit_horizon = full_report.get("best_fit", "short_term")
+    winner_profile = profiles.get(best_fit_horizon, {}) or {}
+    eval_ctx = winner_profile.get("eval_ctx", {}) or {}
+    trade_plan = analysis_data.get("trade_recommendation", {}) or {}
+    indicators = analysis_data.get("indicators", {}) or {}
+
+    setup_type = eval_ctx.get("setup", {}).get("type", "GENERIC")
+    setup_meta = eval_ctx.get("setup", {}) or {}
+    pattern_validation = eval_ctx.get("pattern_validation", {}) or {}
+    setup_pattern_info = (pattern_validation.get("by_setup", {}) or {}).get(setup_type, {}) or {}
+    primary_patterns = setup_pattern_info.get("primary_found", []) or []
+
+    entry_val = trade_plan.get("entry")
+    t1_val = ((trade_plan.get("targets", {}) or {}).get("t1"))
+    profit_pct = None
+    if entry_val and t1_val:
+        try:
+            profit_pct = round(((float(t1_val) - float(entry_val)) / float(entry_val)) * 100, 2)
+        except Exception:
+            profit_pct = None
+
+    direction = (trade_plan.get("metadata", {}) or {}).get("direction", "neutral")
+    signal_text = trade_plan.get("trade_signal") or trade_plan.get("signal") or "WATCH"
+
+    return {
+        "symbol": symbol,
+        "score": int((winner_profile.get("final_score") or 0) * 10) if winner_profile.get("final_score") else 0,
+        "confidence": int(trade_plan.get("final_confidence", 0) or 0),
+        "recommendation": f"{winner_profile.get('category', 'HOLD')}--{best_fit_horizon}",
+        "profile_category": winner_profile.get("category", "HOLD"),
+        "setup_signal": setup_type,
+        "bull_signal": str(signal_text).replace("_", " "),
+        "best_strategy": setup_meta.get("best_strategy"),
+        "best_fit_horizon": best_fit_horizon,
+        "top_pattern": primary_patterns[0] if primary_patterns else None,
+        "profit_pct": profit_pct,
+        "entry_trigger": _safe_grid_val(entry_val),
+        "t1": _safe_grid_val(t1_val),
+        "rrRatio": _safe_grid_val(trade_plan.get("rrRatio")),
+        "sl_dist": _safe_grid_val((trade_plan.get("metadata", {}) or {}).get("sl_distance_pct")),
+        "intra_score": _safe_grid_val((profiles.get("intraday", {}) or {}).get("final_score")),
+        "short_score": _safe_grid_val((profiles.get("short_term", {}) or {}).get("final_score")),
+        "long_score": _safe_grid_val((profiles.get("long_term", {}) or {}).get("final_score")),
+        "multi_score": _safe_grid_val((profiles.get("multibagger", {}) or {}).get("final_score")),
+        "sectorName": _indicator_metric_value(indicators, "sectorName"),
+        "sectorBenchmark": _indicator_metric_value(indicators, "sectorBenchmark"),
+        "sectorTrendScore": _indicator_metric_value(indicators, "sectorTrendScore"),
+        "rsVsSectorFast": _indicator_metric_value(indicators, "rsVsSectorFast"),
+        "rsVsSectorSlow": _indicator_metric_value(indicators, "rsVsSectorSlow"),
+        "direction": direction,
+        "cached": False,
+    }
+
+
 def _has_usable_fundamentals(fundamentals: Dict[str, Any]) -> bool:
     """
     Guard against truthy-but-empty fundamental payloads.
@@ -1752,43 +1827,52 @@ async def analyze_post(request: Request, symbol: str = Form(...), index: str = F
 @app.post("/quick_scores")
 async def get_quick_scores(req: QuickScoresRequest, api_key: str = Depends(get_api_key)):
     """
-    Returns the scores for multiple tickers.
-    ✅ P0-4: Hydrates FULL_HORIZON_SCORES from Signal Cache if missing.
+    Dashboard endpoint for batched grid analysis.
+    Returns flat row payloads for AG Grid, using cache when available and
+    running full analysis for cache misses.
     """
     symbols = [s.strip().upper() for s in req.symbols]
     index_name = sanitize_index_name(req.index_name)
-    
-    scores = {}
+
+    results: Dict[str, Any] = {}
+    to_fetch: List[str] = []
+
     for sym in symbols:
-        # 1. Check in-memory cache first
-        if sym in FULL_HORIZON_SCORES and FULL_HORIZON_SCORES[sym]:
-            scores[sym] = FULL_HORIZON_SCORES[sym]
+        cached_row = get_cached(sym)
+        if cached_row and cached_row.get("score") is not None:
+            results[sym] = {**cached_row, "cached": True}
             continue
-            
-        # 2. ✅ P0-4: Fallback to DB to hydrate memory
-        db_data = get_cached(sym)
-        if db_data:
-             h_scores = {
-                 "intra_score": db_data.get("intra_score"),
-                 "short_score": db_data.get("short_score"),
-                 "long_score": db_data.get("long_score"),
-                 "multi_score": db_data.get("multi_score")
-             }
-             h_scores = {k: v for k, v in h_scores.items() if v is not None}
-             if h_scores:
-                 # ✅ W59 FIX: Ensure we store the properly keyed horizon_scores JSON if available
-                 FINAL_SCORES = db_data.get("horizon_scores") or h_scores
-                 FULL_HORIZON_SCORES[sym] = FINAL_SCORES
-                 scores[sym] = FINAL_SCORES
-                 continue
-                 
-        scores[sym] = {
-            "error": "Not Found",
-            "status": "pending",
-            "api_v": API_VERSION,
-            "ts": get_current_utc().isoformat()
-        }
-    return scores
+        to_fetch.append(sym)
+
+    if not to_fetch:
+        return results
+
+    def worker(sym: str):
+        try:
+            analysis_data = run_full_analysis(sym, index_name)
+            flat_output = _flatten_analysis_for_grid(sym, analysis_data)
+            return sym, flat_output
+        except Exception as e:
+            logger.exception(f"Quick score worker error {sym}: {e}")
+            return sym, {
+                "symbol": sym,
+                "score": 0,
+                "confidence": 0,
+                "recommendation": "ERROR--short_term",
+                "profile_category": "ERROR",
+                "bull_signal": "ERROR",
+                "cached": False,
+                "error": str(e),
+            }
+
+    loop = asyncio.get_running_loop()
+    tasks = [loop.run_in_executor(get_api_executor(), worker, s) for s in to_fetch]
+    worker_results = await asyncio.gather(*tasks)
+
+    for sym, out in worker_results:
+        results[sym] = out
+
+    return results
         
 @app.get("/api/v1/scores", response_class=JSONResponse)
 async def get_all_scores_v1(api_key: str = Depends(get_api_key)):

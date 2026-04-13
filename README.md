@@ -49,9 +49,11 @@
 
 ## Overview
 
-Pro Stock Analyzer v15.2 is an institutional-grade algorithmic trading signal engine targeting NSE-listed equities across four time horizons: `intraday`, `short_term`, `long_term`, and `multibagger`. The system ingests raw OHLCV data, evaluates multi-layered structural gate conditions, detects chart patterns with full lifecycle tracking, computes confidence-adjusted trade plans, and persists results with retry-safe database writes.
+Pro Stock Analyzer v15.3 is an institutional-grade algorithmic trading signal engine targeting NSE-listed equities across four time horizons: `intraday`, `short_term`, `long_term`, and `multibagger`. The system ingests raw OHLCV data, evaluates multi-layered structural gate conditions, detects chart patterns with full lifecycle tracking, computes confidence-adjusted trade plans, and persists results with retry-safe database writes.
 
 The core philosophy distinguishes stock *quality* (structural eligibility — "is this stock worth watching?") from trade *timing* (execution context — "can I enter right now?"). These are computed in two explicit, decoupled phases: a `build_evaluation_context_only` pass that produces indicators, scores, gates, confidence, and setup classification; followed by a `build_execution_context_from_evaluation` pass that layers position sizing, order model, and real-time RR validation on top of the already-computed evaluation. 
+
+**Sector-Awareness Layer**: The engine now models sector flow as the missing middle layer between stock-specific structure and the macro benchmark. In practice this means the pipeline evaluates not only stock-vs-Nifty behavior, but also sector trend alignment and stock leadership versus its own sector benchmark. This sector context is intentionally introduced as a soft confidence and setup-validation layer before any hard-gating logic.
 
 **Multibagger Pipeline Isolation**: The weekly multibagger pipeline runs independently with its own isolated extractor stack, scoring weights, and conviction-tier output. It shares zero code paths with the main day-trading pipeline's scoring logic. A specific, one-way bridge exists via `mb_main_patches.py` solely for hydrating Multibagger scores into the `signal_cache` for UI persistence.
 
@@ -196,6 +198,7 @@ The codebase has undergone a significant architectural "wash" across 9 major aud
 | **P12**| **Trade Signal Path**| Canonical Execution Schema | Single source of truth for targets; decoupled sizing failures |
 | **v15.2**| **Stability**| Session Management & Bug Fixes | Robust parallel writes; 0 NameErrors in scheduler |
 | **v15.3**| **Setup Ranking**| Pattern-Informed Setup Selection | Patterns inform ranking; normalized fit scoring; dead config keys enforced |
+| **v15.4**| **Sector Awareness**| Sector benchmarks, sector-relative strength, setup-aware confidence | Middle-layer market flow now informs confidence, validation, and UI narratives |
 
 ---
 
@@ -250,11 +253,40 @@ Five related issues in `_classify_setup()` and `_calculate_setup_fit_quality()` 
 - **`PATTERN_STRIKE_REVERSAL` missing multiplier:** Only `PATTERN_*` setup without `pattern_presence_multiplier`, silently behaving as indicator-led. Fixed: `1.15` added, consistent with `PATTERN_GOLDEN_CROSS`.
 - **Cross-reference validation added:** `validate_extractor_state()` in `QueryOptimizedExtractor` now checks (1) all `PATTERN_*` setups have `pattern_presence_multiplier > 1.0` (warning), and (2) all `preferred_setups` / `avoid_setups` strings in `strategy_matrix_config.py` exist in `SETUP_PATTERN_MATRIX` (hard error). Both checks run at every server startup via `ConfigResolver.__init__()`.
 
+#### ✅ v15.4 — Sector-Aware Confidence & Setup Validation (RESOLVED)
+
+Sector context is now modeled as a first-class architectural layer instead of an external exclusion list.
+
+- **Sector benchmark resolution added:** `services/index_utils.py` now maps stock sectors to NSE sector benchmarks with robust aliases and fuzzy fallbacks.
+- **New middle-layer indicators:** `services/indicators.py` now emits `sectorTrendScore`, `rsVsSectorFast`, and `rsVsSectorSlow`, along with sector metadata such as `sectorName`, `sectorBenchmark`, and `sectorDataAvailable`.
+- **Resolver-safe integration:** `config/master_config.py` registers all sector metrics through `GATE_METRIC_REGISTRY` using dual `context_paths`, so sector metrics flow through the same extraction and gate stack as all other indicators.
+- **Soft activation only:** sector influence was intentionally introduced through confidence and setup `validation_modifiers`, not through hard gates, to avoid collapsing valid trades during neutral or missing-data conditions.
+- **Setup-aware sector nudges:** continuation and breakout setups now react more strongly to sector tailwinds/headwinds than value or turnaround setups, preserving strategy-specific semantics.
+- **Presentation visibility:** sector context is surfaced in validation reports, confidence narratives, and the main UI header, while unresolved symbols and ETFs degrade gracefully with null-safe rendering.
+
 ---
 
 ## Data Architecture — Phase 0
 
 Before a single config gate is evaluated, the system must produce clean, adjusted, horizon-aware OHLCV data and a rich indicator set. Phase 0 is the nervous system that makes this happen silently and efficiently for every symbol across every pipeline invocation.
+
+---
+
+### Sector-Aware Indicators
+
+Sector-awareness now acts as the middle layer between idiosyncratic stock structure and macro benchmark regime.
+
+- `sectorTrendScore`
+  - Measures the trend state of the resolved sector benchmark
+  - Used as a soft tailwind/headwind signal
+- `rsVsSectorFast`
+  - Short-window outperformance of the stock versus its sector benchmark
+  - Used to reward near-term sector leadership and penalize laggards in continuation setups
+- `rsVsSectorSlow`
+  - Medium-window outperformance versus sector benchmark
+  - Used to confirm durable leadership for trend-following and accumulation setups
+
+The sector benchmark is resolved from the stock's fundamental `sector` field using `services/index_utils.py`. Missing sector data is treated as neutral and must not hard-break the evaluation pipeline.
 
 ---
 

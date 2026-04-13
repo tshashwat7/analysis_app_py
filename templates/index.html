@@ -10,13 +10,13 @@
 
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-enterprise/dist/ag-grid-enterprise.min.js"></script>
-<link href="{{ url_for('static', path='css/index.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', path='css/index.css') }}" rel="stylesheet">
 </head>
 
 <body>
     <h1>📈 NSE Stock Analyzer</h1>
 
-    <!-- ✅ NEW: Macro Metrics Widget -->
+    <!-- ✅ Macro Metrics Widget -->
     <div id="macroWidget"
         style="text-align:center; padding: 10px; background: #fff; margin: 0 auto 15px auto; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); max-width: 800px; display: none; gap: 15px; justify-content: center; flex-wrap: wrap;">
     </div>
@@ -39,15 +39,15 @@
         </select>
         <button id="loadBtn" onclick="loadIndex()">🔄 Load Index</button>
 
-        <!-- ✅ NEW: Fetch Corp Actions (separate pool) -->
-        <button id="fetchCorpBtn" onclick="fetchCorpActions()" style="background:#0ea5e9;">📋 Fetch Corp
-            Actions</button>
+        <!-- Fetch Corp Actions (separate pool) -->
+        <button id="fetchCorpBtn" onclick="fetchCorpActions()" style="background:#0ea5e9;">📋 Fetch Corp Actions</button>
 
-        <!-- ✅ NEW: Confidence floor filter -->
+        <!-- Confidence floor filter -->
         <label style="margin-left:12px;font-weight:600;">Conf ≥</label>
         <input type="number" id="confFloor" min="0" max="100" step="5"
             style="width:60px;text-align:center;font-weight:700;" oninput="if(gridApi) gridApi.onFilterChanged()">
-        <!-- ✅ NEW: Profit % sort shortcut -->
+        
+        <!-- Profit % sort shortcut -->
         <button
             onclick="if(gridApi) gridApi.applyColumnState({state:[{colId:'profit_pct',sort:'desc'}],defaultState:{sort:null}})"
             style="background:#16a34a;">📈 Sort Profit %</button>
@@ -78,13 +78,10 @@
     <script>
         let gridApi;
         let isAutoAnalysisActive = false;
-
-        // ── Corp actions readiness state ──────────────────────────────────
         let _corpActionsReady = false;
-        let isPageAnalyzing = false;      // Lock to prevent self-triggering loops
-        let lastAnalyzedPage = -1;        // Track which page we finished
+        let isPageAnalyzing = false;
+        let lastAnalyzedPage = -1;
 
-        // --- 1. Global Helpers ---
         function setStatus(t) {
             const el = document.getElementById("status");
             if (el) el.innerText = t;
@@ -94,16 +91,7 @@
             if (el) el.style.width = p + "%";
         }
 
-        // --- 2. Column Definitions ---
-        // Groups:
-        //   A. Identity    — Ticker (pinned), Company Name
-        //   B. Profile     — Rec, Horizon, Signal, Exec Gate, Score, Align, Conf%
-        //   C. Trade Setup — Pattern, Setup, Strategy, Profit%, T1, R:R, Risk
-        //   D. Events      — Corp Actions (upcoming dividends / splits / bonus)
-        //   E. Hidden      — raw scores, fitting_strategies, profile_category
         const columnDefs = [
-
-            // ── A. IDENTITY ───────────────────────────────────────────────────
             {
                 field: "symbol",
                 headerName: "Ticker",
@@ -113,9 +101,6 @@
                 filter: 'agTextColumnFilter',
                 cellRenderer: p => `<a href="/analyze?symbol=${p.value}" class="ticker-link" target="_blank">${p.value}</a>`
             },
-
-
-            // ── B. PROFILE & SIGNAL ───────────────────────────────────────────
             {
                 field: "recommendation", headerName: "Rec.", width: 115, flex: 0, sortable: true,
                 filter: 'agSetColumnFilter',
@@ -175,14 +160,12 @@
                 filter: 'agSetColumnFilter',
                 filterValueGetter: p => {
                     if (!p.data) return "OK";
-                    const profCat = p.data.profile_category || (p.data.recommendation || "").split("--")[0];
+                    const profCat = p.data.recommendation?.split("--")[0];
                     return (profCat === 'BUY' && p.data.bull_signal === 'HOLD') ? "Blocked" : "OK";
                 },
                 cellRenderer: p => {
-                    if (!p.data) return '';
-                    const profCat = p.data.profile_category || (p.data.recommendation || "").split("--")[0];
-                    const sig = p.data.bull_signal || 'HOLD';
-                    if (profCat === 'BUY' && sig === 'HOLD') {
+                    const profCat = p.data.recommendation?.split("--")[0];
+                    if (profCat === 'BUY' && p.data.bull_signal === 'HOLD') {
                         return `<span title="Profile BUY but execution gated — click ticker for details"
                                       style="background:#fef3c7;color:#92400e;padding:2px 6px;
                                              border-radius:10px;font-size:10px;font-weight:700;cursor:help;">⛔ Gate</span>`;
@@ -196,37 +179,8 @@
                 cellClass: p => p.value >= 70 ? 'score-buy' : p.value < 40 ? 'score-sell' : 'score-hold'
             },
             {
-                headerName: "Align", width: 115, flex: 0,
-                filter: 'agSetColumnFilter',
-                filterValueGetter: params => {
-                    if (!params.data) return "N/A";
-                    const i = (params.data.intra_score || 0) >= 7 ? 1 : 0;
-                    const s = (params.data.short_score || 0) >= 7 ? 1 : 0;
-                    const l = (params.data.long_score || 0) >= 7 ? 1 : 0;
-                    const count = i + s + l;
-                    if (count === 3) return "3/3 (Full Align)";
-                    if (count === 2) return "2/3 (Strong)";
-                    if (count === 1) return "1/3 (Weak)";
-                    return "0/3 (No Align)";
-                },
-                filterParams: {
-                    buttons: ['reset', 'apply'], closeOnApply: true,
-                    comparator: (a, b) => (parseInt(b.charAt(0)) || 0) - (parseInt(a.charAt(0)) || 0)
-                },
-                cellRenderer: params => {
-                    if (!params.data) return '';
-                    const i = (params.data.intra_score || 0) >= 7;
-                    const s = (params.data.short_score || 0) >= 7;
-                    const l = (params.data.long_score || 0) >= 7;
-                    const dot = active => `<span style="font-size:16px;margin:0 1px;color:${active ? '#22c55e' : '#e5e7eb'};">●</span>`;
-                    const tip = `Intra: ${params.data.intra_score || '-'} | Short: ${params.data.short_score || '-'} | Long: ${params.data.long_score || '-'}`;
-                    return `<div title="${tip}" style="cursor:help;letter-spacing:-2px;">${dot(i)}${dot(s)}${dot(l)}</div>`;
-                }
-            },
-            {
                 field: "confidence", headerName: "Conf %", width: 110, flex: 0, sortable: true,
                 filter: 'agNumberColumnFilter',
-                tooltipValueGetter: p => `Confidence: ${p.value || 0}%`,
                 cellRenderer: params => {
                     const val = params.value || 0;
                     const color = val > 70 ? '#22c55e' : val > 40 ? '#facc15' : '#ef4444';
@@ -236,62 +190,60 @@
                         </span>`;
                 }
             },
-
-            // ── C. TRADE SETUP ────────────────────────────────────────────────
+            {
+                field: "sectorName", headerName: "Sector", width: 160, flex: 0, sortable: true,
+                filter: 'agSetColumnFilter',
+                cellRenderer: p => {
+                    if (!p.value) return '<span style="color:#ccc">-</span>';
+                    return `<span style="color:#64748b;font-size:11px;font-weight:600;">${p.value}</span>`;
+                }
+            },
+            {
+                field: "sectorTrendScore", headerName: "Sec. Trend", width: 115, flex: 0, sortable: true,
+                filter: 'agNumberColumnFilter',
+                cellRenderer: p => {
+                    if (p.value === null || p.value === undefined) return '-';
+                    const color = p.value >= 0 ? '#16a34a' : '#dc2626';
+                    const bg = p.value >= 0 ? '#f0fdf4' : '#fef2f2';
+                    return `<span style="background:${bg};color:${color};padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;">${p.value.toFixed(1)}</span>`;
+                }
+            },
+            {
+                field: "rsVsSectorFast", headerName: "RS vs Sec.", width: 115, flex: 0, sortable: true,
+                filter: 'agNumberColumnFilter',
+                cellRenderer: p => {
+                    if (p.value === null || p.value === undefined) return '-';
+                    const color = p.value >= 0 ? '#16a34a' : '#dc2626';
+                    return `<span style="color:${color};font-weight:700;font-size:11px;">${p.value > 0 ? '+' : ''}${p.value.toFixed(1)}%</span>`;
+                }
+            },
             {
                 field: "top_pattern", headerName: "Pattern", width: 165, flex: 0,
                 filter: 'agSetColumnFilter',
                 cellRenderer: p => {
                     if (!p.value) return '<span style="color:#ccc">-</span>';
-                    let color = "gray", bg = "#f3f4f6";
                     const v = p.value.toLowerCase();
+                    let color = "#1e40af", bg = "#dbeafe";
                     if (v.includes("gold") || v.includes("cup") || v.includes("vcp")) {
                         color = "#166534"; bg = "#dcfce7";
                     } else if (v.includes("death") || v.includes("top")) {
                         color = "#991b1b"; bg = "#fee2e2";
-                    } else if (v.includes("squeeze")) {
-                        color = "#854d0e"; bg = "#fef9c3";
-                    } else {
-                        color = "#1e40af"; bg = "#dbeafe";
                     }
-                    return `<span style="background:${bg};color:${color};padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;border:1px solid rgba(0,0,0,0.05)">${p.value}</span>`;
-                }
-            },
-            {
-                field: "setup_signal", headerName: "Setup", width: 165, flex: 0, sortable: true,
-                filter: 'agSetColumnFilter',
-                cellRenderer: p => {
-                    const val = (p.value || "").toString();
-                    if (!val || val === "N/A") return '<span style="color:#ccc">-</span>';
-                    if (val.includes("SQUEEZE")) return `<span style="background:#d1fae5;color:#065f46;padding:2px 6px;border-radius:4px;font-size:11px;">🚀 ${val}</span>`;
-                    if (val.includes("TREND")) return `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:4px;font-size:11px;">📈 ${val}</span>`;
-                    if (val.includes("DIP") || val.includes("PULLBACK")) return `<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:4px;font-size:11px;">📉 ${val}</span>`;
-                    return `<span style="font-size:11px;color:#666">${val}</span>`;
+                    return `<span style="background:${bg};color:${color};padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;">${p.value}</span>`;
                 }
             },
             {
                 field: "best_strategy", headerName: "Top Strategy", width: 165, flex: 0, sortable: true,
                 filter: 'agSetColumnFilter',
-                filterParams: { buttons: ['reset', 'apply'], closeOnApply: true },
-                tooltipValueGetter: p => `Fits: ${p.data.fitting_strategies || 'None'}`,
                 cellRenderer: p => {
                     const s = p.value;
-                    if (!s || s === "N/A" || s === "unknown") return '<span class="strat-none">-</span>';
-                    let cls = "strat-none", icon = "";
-                    if (s.includes("swing")) { cls = "strat-swing"; icon = "🌊"; }
-                    else if (s.includes("day")) { cls = "strat-day"; icon = "⚡"; }
-                    else if (s.includes("trend")) { cls = "strat-trend"; icon = "📈"; }
-                    else if (s.includes("momentum")) { cls = "strat-momentum"; icon = "🚀"; }
-                    else if (s.includes("value")) { cls = "strat-value"; icon = "💰"; }
-                    else if (s.includes("income")) { cls = "strat-income"; icon = "💵"; }
-                    else if (s.includes("position")) { cls = "strat-position"; icon = "🏛️"; }
-                    return `<span class="strat-badge ${cls}">${icon} ${s.replace("_", " ").toUpperCase()}</span>`;
+                    if (!s || s === "N/A" || s === "unknown") return '-';
+                    return `<span class="strat-badge">${s.toUpperCase()}</span>`;
                 }
             },
             {
                 field: "profit_pct", headerName: "Profit %", width: 145, flex: 0, sortable: true,
                 filter: 'agNumberColumnFilter',
-                sort: 'desc',
                 valueGetter: p => {
                     if (p.data.profit_pct !== null && p.data.profit_pct !== undefined) return p.data.profit_pct;
                     const e = parseFloat(p.data.entry_trigger), t = parseFloat(p.data.t1);
@@ -299,118 +251,29 @@
                     return null;
                 },
                 cellRenderer: p => {
-                    if (p.value === null || p.value === undefined) return '<span style="color:#ccc">-</span>';
+                    if (p.value === null || p.value === undefined) return '-';
                     const pct = parseFloat(p.value);
-                    const color = pct >= 15 ? '#16a34a' : pct >= 7 ? '#2563eb' : pct >= 0 ? '#6b7280' : '#dc2626';
-                    const icon = pct >= 15 ? '🔥' : pct >= 7 ? '📈' : pct < 0 ? '📉' : '';
-                    return `<span style="color:${color};font-weight:700;">${icon} ${pct.toFixed(1)}%</span>`;
-                },
-                comparator: (a, b) => (a ?? -Infinity) - (b ?? -Infinity)
-            },
-            {
-                field: "t1", headerName: "T1 ₹", width: 115, flex: 0, sortable: true,
-                filter: 'agNumberColumnFilter',
-                valueFormatter: p => p.value ? "₹" + parseFloat(p.value).toLocaleString('en-IN', { maximumFractionDigits: 1 }) : "-"
-            },
-            {
-                field: "rrRatio", headerName: "R:R", width: 115, flex: 0, sortable: true,
-                filter: 'agNumberColumnFilter',
-                cellClass: p => p.value >= 2.0 ? 'buy-cell' : 'hold-cell',
-                valueFormatter: p => p.value ? p.value + "R" : "-"
-            },
-            {
-                field: "sl_dist", headerName: "Risk", width: 115, flex: 0,
-                cellStyle: { color: '#dc2626', fontWeight: '500', fontSize: '12px' }
-            },
-
-            // ── D. EVENTS (Corp Actions) ──────────────────────────────────────
-            {
-                field: "corp_action",
-                headerName: "Events",
-                width: 185,
-                flex: 0,
-                sortable: true,
-                filter: 'agSetColumnFilter',
-                filterParams: {
-                    valueFormatter: p => {
-                        if (!p.value) return "None";
-                        const v = p.value.toLowerCase();
-                        if (v.includes("div")) return "Dividend";
-                        if (v.includes("bonus")) return "Bonus";
-                        if (v.includes("split")) return "Split";
-                        return "Other";
-                    },
-                    buttons: ['reset', 'apply'], closeOnApply: true,
-                },
-                filterValueGetter: p => {
-                    const v = (p.data.corp_action || "").toLowerCase();
-                    if (!v) return "None";
-                    if (v.includes("div")) return "Dividend";
-                    if (v.includes("bonus")) return "Bonus";
-                    if (v.includes("split")) return "Split";
-                    return "Other";
-                },
-                tooltipValueGetter: p => {
-                    if (p.data.corp_action) return p.data.corp_action;
-                    return _corpActionsReady ? "No upcoming actions" : "Click Fetch Corp Actions above";
-                },
-                cellRenderer: p => {
-                    const raw = p.value || "";
-                    if (!raw || raw === "-") {
-                        // Distinguish: not-yet-fetched vs confirmed-no-actions
-                        if (!_corpActionsReady) {
-                            return '<span title="Click Fetch Corp Actions above" style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:10px;font-size:10px;cursor:help;">⏳</span>';
-                        }
-                        return '<span style="color:#d1d5db;font-size:11px;">—</span>';
-                    }
-                    const v = raw.toLowerCase();
-                    let bg, color, icon, label;
-                    if (v.includes("div")) {
-                        bg = "#dcfce7"; color = "#166534"; icon = "💰";
-                        const amt = raw.match(/Rs([\d.]+)/i);
-                        const exd = raw.match(/Ex:(\d{4}-\d{2}-\d{2})/);
-                        label = "Div" + (amt ? ` ₹${amt[1]}` : "") + (exd ? ` · ${exd[1]}` : "");
-                    } else if (v.includes("bonus")) {
-                        bg = "#dbeafe"; color = "#1e40af"; icon = "🎁";
-                        const ratio = raw.match(/Bonus\s+([\d:]+)/i);
-                        const exd = raw.match(/Ex:(\d{4}-\d{2}-\d{2})/);
-                        label = "Bonus" + (ratio ? ` ${ratio[1]}` : "") + (exd ? ` · ${exd[1]}` : "");
-                    } else if (v.includes("split")) {
-                        bg = "#ffedd5"; color = "#9a3412"; icon = "✂️";
-                        const ratio = raw.match(/Split\s+([\d.:]+)/i);
-                        const exd = raw.match(/Ex:(\d{4}-\d{2}-\d{2})/);
-                        label = "Split" + (ratio ? ` ${ratio[1]}` : "") + (exd ? ` · ${exd[1]}` : "");
-                    } else {
-                        bg = "#f3f4f6"; color = "#374151"; icon = "📋";
-                        label = raw.replace(/\[.*?\]/g, "").trim();
-                    }
-                    return `<span title="${raw}"
-                                  style="background:${bg};color:${color};padding:2px 7px;
-                                         border-radius:10px;font-size:11px;font-weight:600;
-                                         white-space:nowrap;border:1px solid rgba(0,0,0,0.06);">
-                                ${icon} ${label}
-                            </span>`;
+                    const color = pct >= 0 ? '#16a34a' : '#dc2626';
+                    return `<span style="color:${color};font-weight:700;">${p.value > 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
                 }
             },
             {
-                field: "name",
-                headerName: "Company Name",
-                width: 235,
-                flex: 0,
-                filter: 'agTextColumnFilter',
-                cellStyle: { fontSize: '12px' }
+                field: "rrRatio", headerName: "R:R", width: 115, flex: 0, sortable: true,
+                valueFormatter: p => p.value ? p.value + "R" : "-"
             },
-
-            // ── E. HIDDEN (used by filters / renderers only) ──────────────────
-            { field: "intra_score", hide: true },
-            { field: "short_score", hide: true },
-            { field: "long_score", hide: true },
-            { field: "multi_score", hide: true },
-            { field: "fitting_strategies", hide: true },
-            { field: "profile_category", hide: true },
+            {
+                field: "corp_action", headerName: "Events", width: 185, flex: 0, sortable: true,
+                cellRenderer: p => {
+                    const raw = p.value || "";
+                    if (!raw || raw === "-") return '<span style="color:#d1d5db;font-size:11px;">—</span>';
+                    return `<span style="background:#f3f4f6;color:#374151;padding:2px 7px;border-radius:10px;font-size:11px;">${raw}</span>`;
+                }
+            },
+            {
+                field: "name", headerName: "Company Name", width: 235, flex: 0, filter: 'agTextColumnFilter'
+            }
         ];
 
-        // --- 3. Grid Options ---
         const gridOptions = {
             columnDefs: columnDefs,
             theme: "legacy",
@@ -423,7 +286,6 @@
             getRowId: params => params.data.symbol,
             enableBrowserTooltips: true,
             onPaginationChanged: onPageChange,
-            // ✅ NEW: External confidence floor filter
             isExternalFilterPresent: () => {
                 const floor = parseInt(document.getElementById('confFloor')?.value) || 0;
                 return floor > 0;
@@ -434,32 +296,24 @@
             }
         };
 
-        // --- 4. Initialize ---
         document.addEventListener('DOMContentLoaded', () => {
             const gridDiv = document.querySelector('#myGrid');
             gridApi = agGrid.createGrid(gridDiv, gridOptions);
-            loadMacroMetrics(); // Fetch on load
+            loadMacroMetrics();
         });
 
-        // --- ✅ NEW: Load Macro Metrics from WorldBank ---
         async function loadMacroMetrics() {
             try {
                 const response = await fetch('/api/macro_metrics');
                 if (!response.ok) throw new Error('Failed to fetch macro metrics');
-
                 const data = await response.json();
                 const widget = document.getElementById('macroWidget');
-
                 if (Object.keys(data).length > 0 && !data.error) {
                     let html = '';
                     for (const [key, info] of Object.entries(data)) {
                         let colorStr = "#333";
-                        if (info.value === "N/A") {
-                            colorStr = "#999";
-                        } else if (key.includes("Growth")) {
-                            colorStr = info.value > 0 ? "#16a34a" : "#dc2626";
-                        }
-
+                        if (info.value === "N/A") colorStr = "#999";
+                        else if (key.includes("Growth")) colorStr = info.value > 0 ? "#16a34a" : "#dc2626";
                         html += `
                             <div style="display:flex; flex-direction:column; align-items:center; min-width:90px;">
                                 <span style="font-size:11px; color:#666; font-weight:600; text-transform:uppercase;">${key.replace(" (%)", "").replace(" ($)", "")}</span>
@@ -470,29 +324,38 @@
                     widget.innerHTML = html;
                     widget.style.display = 'flex';
                 }
-            } catch (err) {
-                console.error("Macro metrics error:", err);
+            } catch (err) { console.error("Macro metrics error:", err); }
+        }
+
+        function onPageChange() {
+            if (isAutoAnalysisActive && !isPageAnalyzing) {
+                const currentPage = gridApi.paginationGetCurrentPage();
+                if (currentPage !== lastAnalyzedPage) analyzeCurrentView();
             }
         }
 
-        // --- 5. Pagination Event Handler ---
-        function onPageChange() {
-            if (isAutoAnalysisActive) {
-                if (!isPageAnalyzing) {
-                    const currentPage = gridApi.paginationGetCurrentPage();
-                    if (currentPage !== lastAnalyzedPage) {
-                        analyzeCurrentView();
-                    }
+        const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        async function fetchQuickScoreBatch(batch, index_name, maxRetries = 3) {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const resp = await fetch("/quick_scores", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ symbols: batch, index_name: index_name })
+                    });
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    return await resp.json();
+                } catch (err) {
+                    console.error(`Batch failed (attempt ${attempt}/${maxRetries}):`, err);
+                    if (attempt === maxRetries) throw err;
+                    await wait(1200 * attempt);
                 }
             }
         }
 
-        // --- 6. Concurrent Batch Analysis ---
-        const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
         async function analyzeCurrentView() {
-            if (!gridApi) return;
-            if (isPageAnalyzing) return;
+            if (!gridApi || isPageAnalyzing) return;
             isPageAnalyzing = true;
 
             const index_name = document.getElementById("indexSelect").value;
@@ -503,92 +366,90 @@
             const endRow = startRow + pageSize;
 
             const symbolsToAnalyze = [];
-            gridApi.forEachNodeAfterFilterAndSort((node) => {
-                if (node.rowIndex >= startRow && node.rowIndex < endRow) {
-                    if (node.data.score === null || node.data.score === undefined) {
-                        symbolsToAnalyze.push(node.data.symbol);
-                    }
+            let remainingUnanalyzed = 0;
+            let firstUnanalyzedIndex = -1;
+
+            gridApi.forEachNodeAfterFilterAndSort((node, idx) => {
+                const needsAnalysis = node.data.score === null || node.data.score === undefined;
+                if (needsAnalysis) {
+                    remainingUnanalyzed += 1;
+                    if (firstUnanalyzedIndex === -1) firstUnanalyzedIndex = idx;
+                    if (idx >= startRow && idx < endRow) symbolsToAnalyze.push(node.data.symbol);
                 }
             });
 
             if (symbolsToAnalyze.length === 0) {
-                setStatus(`Page ${currentPage + 1} is up to date.`);
+                if (remainingUnanalyzed > 0 && firstUnanalyzedIndex !== -1) {
+                    const targetPage = Math.floor(firstUnanalyzedIndex / pageSize);
+                    setStatus(`Jumping to Page ${targetPage + 1}...`);
+                    lastAnalyzedPage = currentPage;
+                    isPageAnalyzing = false;
+                    gridApi.paginationGoToPage(targetPage);
+                    return;
+                }
+                setStatus(`Scan complete.`);
                 setProgress(100);
                 lastAnalyzedPage = currentPage;
-                handleAutoNavigation(currentPage, totalPages);
+                handleAutoNavigation(currentPage, totalPages, remainingUnanalyzed);
                 isPageAnalyzing = false;
                 return;
             }
 
             const BATCH_SIZE = 5;
+            let completedCount = 0;
+            const totalOnPage = symbolsToAnalyze.length;
+            setStatus(`0/${totalOnPage} on Page ${currentPage + 1}...`);
+            setProgress(5);
+
             const batches = [];
             for (let i = 0; i < symbolsToAnalyze.length; i += BATCH_SIZE) {
                 batches.push(symbolsToAnalyze.slice(i, i + BATCH_SIZE));
             }
 
-            let completedCount = 0;
-            const total = symbolsToAnalyze.length;
-            setStatus(`0/${total} Analyzed on Page ${currentPage + 1}...`);
-            setProgress(5);
-
             const tasks = batches.map(async (batch) => {
-                const MAX_RETRIES = 3;
-                for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                    try {
-                        const resp = await fetch("/quick_scores", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ symbols: batch, index_name: index_name })
-                        });
-
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                        const map = await resp.json();
-
-                        const updates = [];
-                        for (const s of batch) {
-                            if (map[s]) {
-                                const node = gridApi.getRowNode(s);
-                                if (node && node.data) {
-                                    updates.push({
-                                        ...node.data,
-                                        ...map[s],
-                                        name: node.data.name,
-                                        corp_action: node.data.corp_action
-                                    });
-                                }
+                try {
+                    const map = await fetchQuickScoreBatch(batch, index_name);
+                    const updates = [];
+                    for (const s of batch) {
+                        if (map[s]) {
+                            const node = gridApi.getRowNode(s);
+                            if (node && node.data) {
+                                updates.push({
+                                    ...node.data,
+                                    ...map[s],
+                                    name: node.data.name,
+                                    corp_action: node.data.corp_action
+                                });
                             }
                         }
-                        if (updates.length > 0) gridApi.applyTransaction({ update: updates });
-
-                        completedCount += batch.length;
-                        const percent = Math.floor((completedCount / total) * 100);
-                        setStatus(`${completedCount}/${total} Analyzed...`);
-                        setProgress(percent);
-                        break;
-                    } catch (err) {
-                        console.error(`Batch failed (Attempt ${attempt}):`, err);
-                        if (attempt < MAX_RETRIES) await wait(2000);
                     }
+                    if (updates.length > 0) gridApi.applyTransaction({ update: updates });
+                } catch (err) {
+                    console.error("Batch permanently failed:", batch, err);
+                } finally {
+                    completedCount += batch.length;
+                    setProgress(Math.max(5, Math.floor((completedCount / totalOnPage) * 100)));
+                    setStatus(`${completedCount}/${totalOnPage} on Page ${currentPage + 1}...`);
                 }
             });
 
             await Promise.all(tasks);
+
             setStatus(`Page ${currentPage + 1} Complete.`);
             setProgress(100);
             lastAnalyzedPage = currentPage;
-            handleAutoNavigation(currentPage, totalPages);
+            handleAutoNavigation(currentPage, totalPages, Math.max(0, remainingUnanalyzed - symbolsToAnalyze.length));
             isPageAnalyzing = false;
         }
 
-        // --- 7. Auto-Nav & Controls ---
-        async function handleAutoNavigation(currentPage, totalPages) {
+        async function handleAutoNavigation(currentPage, totalPages, remainingUnanalyzed) {
             if (!isAutoAnalysisActive) return;
-            if (currentPage < totalPages - 1) {
-                await wait(1000);
-                lastAnalyzedPage = currentPage;
-                gridApi.paginationGoToNextPage();
+            if (remainingUnanalyzed > 0) {
+                await wait(800);
+                if (currentPage < totalPages - 1) gridApi.paginationGoToNextPage();
+                else gridApi.paginationGoToFirstPage();
             } else {
-                setStatus("Analysis Complete: All pages scanned.");
+                setStatus("Market Scan Complete!");
                 stopAutoAnalyze();
                 alert("Full Market Scan Complete! 🚀");
             }
@@ -601,129 +462,89 @@
             document.getElementById("stopBtn").disabled = false;
             document.getElementById("loadBtn").disabled = true;
             document.getElementById("startBtn").innerText = "Running...";
-            document.getElementById("startBtn").style.background = "#e2e8f0";
-            document.getElementById("startBtn").style.color = "#333";
             lastAnalyzedPage = -1;
+            gridApi.paginationGoToFirstPage();
             analyzeCurrentView();
         }
 
         function stopAutoAnalyze() {
             isAutoAnalysisActive = false;
-            const startBtn = document.getElementById("startBtn");
-            startBtn.disabled = false;
-            startBtn.innerText = "Start Auto Analysis";
-            startBtn.style.background = "#007bff";
-            startBtn.style.color = "white";
+            const btn = document.getElementById("startBtn");
+            btn.disabled = false;
+            btn.innerText = "Start Auto Analysis";
+            btn.style.background = "#007bff";
             document.getElementById("stopBtn").disabled = true;
             document.getElementById("loadBtn").disabled = false;
-            setStatus("Auto-Analysis Stopped / Finished.");
+            setStatus("Stopped.");
             setProgress(0);
         }
 
         async function loadIndex() {
             const idx = document.getElementById("indexSelect").value;
-            setStatus(`Loading ${idx.toUpperCase()} tickers...`);
-            setProgress(0);
+            setStatus(`Loading ${idx}...`);
             document.getElementById("loadBtn").disabled = true;
-
             if (isAutoAnalysisActive) stopAutoAnalyze();
-
             try {
                 const res = await fetch(`/load_index/${idx}`);
                 const j = await res.json();
-
                 if (j.error) {
                     setStatus(`Error: ${j.error}`);
-                    document.getElementById("loadBtn").disabled = false;
-                    return;
-                }
-
-                // corp_actions included directly in load_index response if cache is ready
-                const corpMap = j.corp_actions || {};
-                if (j.corp_actions_ready) {
-                    _corpActionsReady = true;
-                }
-
-                const rowData = j.tickers.map(t => ({
-                    symbol: t,
-                    name: j.pairs ? j.pairs[t] : t,
-                    score: null,
-                    best_strategy: null,
-                    recommendation: "--",
-                    bull_signal: "--",
-                    profile_category: null,
-                    setup_signal: null,
-                    best_fit_horizon: null,
-                    profit_pct: null,
-                    t1: null,
-                    corp_action: corpMap[t] || ""   // pre-populated from cache if available
-                }));
-
-                gridApi.setGridOption('rowData', rowData);
-
-                lastAnalyzedPage = -1;
-                setProgress(100);
-
-                const corpCount = Object.keys(corpMap).length;
-                if (corpCount > 0) {
-                    setStatus(`Loaded ${rowData.length} tickers (${corpCount} with upcoming events). Ready to analyze.`);
-                } else if (!_corpActionsReady) {
-                    setStatus(`Loaded ${rowData.length} tickers. Click 'Fetch Corp Actions' to load events.`);
                 } else {
-                    setStatus(`Loaded ${rowData.length} tickers. Ready to analyze.`);
+                    _corpActionsReady = j.corp_actions_ready;
+                    const rowData = j.tickers.map(t => ({
+                        symbol: t,
+                        name: j.pairs ? j.pairs[t] : t,
+                        score: null,
+                        confidence: 0,
+                        recommendation: "--",
+                        bull_signal: "--",
+                        profile_category: null,
+                        setup_signal: null,
+                        best_strategy: null,
+                        fitting_strategies: null,
+                        best_fit_horizon: null,
+                        top_pattern: null,
+                        profit_pct: null,
+                        entry_trigger: null,
+                        t1: null,
+                        rrRatio: null,
+                        sl_dist: null,
+                        intra_score: null,
+                        short_score: null,
+                        long_score: null,
+                        sectorName: null,
+                        sectorBenchmark: null,
+                        sectorTrendScore: null,
+                        rsVsSectorFast: null,
+                        rsVsSectorSlow: null,
+                        corp_action: (j.corp_actions || {})[t] || ""
+                    }));
+                    gridApi.setGridOption('rowData', rowData);
+                    gridApi.paginationGoToFirstPage();
+                    setStatus(`Loaded ${rowData.length} tickers.`);
+                    document.getElementById("startBtn").disabled = false;
                 }
-                document.getElementById("startBtn").disabled = false;
-
-            } catch (err) {
-                console.error(err);
-                setStatus("Failed to load index");
-            }
+            } catch (err) { setStatus("Load failed."); }
             document.getElementById("loadBtn").disabled = false;
         }
 
-        // ── Fetch Corp Actions (manual, separate pool) ──────────────────
         async function fetchCorpActions() {
             const btn = document.getElementById('fetchCorpBtn');
-            const banner = document.getElementById('corpActionsBanner');
             btn.disabled = true;
-            btn.innerText = '⏳ Fetching...';
-            banner.className = 'loading';
-            banner.innerText = '⏳ Fetching corp actions from NSE/BSE... this may take a minute.';
-
             try {
                 const res = await fetch('/api/fetch_corp_actions', { method: 'POST' });
                 const data = await res.json();
-
-                if (data.status === 'cooldown') {
-                    banner.className = 'ready';
-                    banner.innerText = `↩ Already fetched recently. ${data.minutes_left}m cooldown left.`;
-                } else if (data.status === 'ok') {
+                if (data.status === 'ok') {
                     _corpActionsReady = true;
-                    banner.className = 'ready';
-                    banner.innerText = `✅ Corp actions ready — ${data.count} tickers with upcoming events.`;
-
-                    // Update grid if loaded — re-fetch corp actions for current tickers
                     if (gridApi) {
                         const tickers = [];
-                        gridApi.forEachNode(n => { if (n.data) tickers.push(n.data.symbol); });
-                        if (tickers.length > 0) {
-                            await populateCorporateActions(tickers);
-                        }
-                        // Refresh cells so ⏳ → — or badge
+                        gridApi.forEachNode(n => tickers.push(n.data.symbol));
+                        await populateCorporateActions(tickers);
                         gridApi.refreshCells({ columns: ['corp_action'], force: true });
                     }
-                } else {
-                    banner.className = 'loading';
-                    banner.innerText = `❌ Fetch failed: ${data.message || 'Unknown error'}`;
                 }
-            } catch (e) {
-                console.error('Fetch corp actions error:', e);
-                banner.className = 'loading';
-                banner.innerText = '❌ Network error fetching corp actions.';
-            }
-
+            } catch (e) { console.error(e); }
             btn.disabled = false;
-            btn.innerText = '📋 Fetch Corp Actions';
         }
 
         async function populateCorporateActions(tickers) {
@@ -732,27 +553,20 @@
             for (let i = 0; i < tickers.length; i += CHUNK_SIZE) {
                 const chunk = tickers.slice(i, i + CHUNK_SIZE);
                 try {
-                    fetch('/corporate_action_summary', {
+                    const res = await fetch('/corporate_action_summary', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ tickers: chunk })
-                    })
-                        .then(res => res.json())
-                        .then(summary => {
-                            if (!summary) return;
-                            const rowsToUpdate = [];
-                            for (const [sym, info] of Object.entries(summary)) {
-                                if (info && info !== "-") {
-                                    const node = gridApi.getRowNode(sym);
-                                    if (node && node.data) {
-                                        rowsToUpdate.push({ ...node.data, corp_action: info });
-                                    }
-                                }
-                            }
-                            if (rowsToUpdate.length > 0) gridApi.applyTransaction({ update: rowsToUpdate });
-                        });
-                    await new Promise(r => setTimeout(r, 200));
-                } catch (e) { console.error("Corp Action Error:", e); }
+                    });
+                    const summary = await res.json();
+                    const updates = [];
+                    for (const [sym, info] of Object.entries(summary)) {
+                        const node = gridApi.getRowNode(sym);
+                        if (node) updates.push({ ...node.data, corp_action: info });
+                    }
+                    if (updates.length > 0) gridApi.applyTransaction({ update: updates });
+                    await wait(200);
+                } catch (e) { }
             }
         }
     </script>
