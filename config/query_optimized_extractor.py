@@ -602,9 +602,37 @@ class QueryOptimizedExtractor:
                 "block_entry": block_entry
             }
         
+        # 5. NEW: Score Excellence Rewards
+        score_rewards = universal.get("score_excellence_rewards", {})
+        results["score_excellence_rewards"] = {}
+        for reward_name, reward_cfg in score_rewards.items():
+            applies, adj, reason, block = self.evaluate_confidence_modifier(
+                reward_cfg, eval_data, setup_type
+            )
+            results["score_excellence_rewards"][reward_name] = {
+                "applies": applies,
+                "adjustment": adj,
+                "reason": reason,
+                "block_entry": block
+            }
+
+        # 6. NEW: Structural Integrity Guards (Pattern presence)
+        structural_guards = universal.get("structural_integrity_guards", {})
+        results["structural_integrity_guards"] = {}
+        for guard_name, guard_cfg in structural_guards.items():
+            applies, adj, reason, block = self.evaluate_confidence_modifier(
+                guard_cfg, eval_data, setup_type
+            )
+            results["structural_integrity_guards"][guard_name] = {
+                "applies": applies,
+                "adjustment": adj,
+                "reason": reason,
+                "block_entry": block
+            }
+
         # Combine block_entry flags (OR logic)
         final_block = False
-        for cat in ["volume_modifiers", "divergence_penalties", "trend_strength_bands"]:
+        for cat in ["volume_modifiers", "divergence_penalties", "trend_strength_bands", "structural_integrity_guards"]:
             for res in results.get(cat, {}).values():
                 if res.get("applies") and res.get("block_entry"):
                     final_block = True
@@ -653,6 +681,8 @@ class QueryOptimizedExtractor:
             >>> print(adj_data["block_entry"])  # True
         """
         total_additive = 0.0
+        scaled_structural = 0.0
+        unscaled_conditional = 0.0
         multipliers = []
         breakdown = []
         block_entry = evaluation_results.get("block_entry", False)
@@ -667,14 +697,24 @@ class QueryOptimizedExtractor:
             # elif category == "adx_penalties":  # This never executes!
             #     ...
                         
-            if category in ["volume_modifiers", "trend_strength_bands"]:
-                # These are additive
+            if category in ["volume_modifiers", "trend_strength_bands", "score_excellence_rewards", "structural_integrity_guards"]:
+                # These are additive, but only some belong to the divergence-scaled bucket.
                 for mod_name, result in modifiers.items():
                     if result["applies"] and result["adjustment"] is not None:
-                        total_additive += result["adjustment"]
-                        self.logger.info(f"[CONF_DIAG] Added {category}.{mod_name}: {result['adjustment']}, total_additive now: {total_additive}")
+                        adjustment = result["adjustment"]
+                        total_additive += adjustment
+                        if category in ["volume_modifiers", "trend_strength_bands", "structural_integrity_guards"]:
+                            scaled_structural += adjustment
+                            bucket_name = "scaled_structural"
+                        else:
+                            unscaled_conditional += adjustment
+                            bucket_name = "unscaled_conditional"
+                        self.logger.info(
+                            f"[CONF_DIAG] Added {category}.{mod_name}: {adjustment}, "
+                            f"total_additive now: {total_additive}, bucket={bucket_name}"
+                        )
                         breakdown.append(
-                            f"{category}.{mod_name}: {result['adjustment']:+.1f} ({result['reason']})"
+                            f"{category}.{mod_name}: {adjustment:+.1f} ({result['reason']})"
                         )
             
             elif category == "divergence_penalties":
@@ -699,64 +739,47 @@ class QueryOptimizedExtractor:
                 # Penalties and bonuses are additive
                 for penalty_name, result in modifiers.get("penalties", {}).items():
                     if result["applies"] and result["adjustment"] is not None:
-                        total_additive += result["adjustment"]
-                        self.logger.info(f"[CONF_DIAG] Added penalty.{penalty_name}: {result['adjustment']}, total_additive now: {total_additive}")
+                        adjustment = result["adjustment"]
+                        total_additive += adjustment
+                        unscaled_conditional += adjustment
+                        self.logger.info(
+                            f"[CONF_DIAG] Added penalty.{penalty_name}: {adjustment}, "
+                            f"total_additive now: {total_additive}, bucket=unscaled_conditional"
+                        )
                         breakdown.append(
-                            f"penalty.{penalty_name}: {result['adjustment']:+.1f} ({result['reason']})"
+                            f"penalty.{penalty_name}: {adjustment:+.1f} ({result['reason']})"
                         )
                 
                 for bonus_name, result in modifiers.get("bonuses", {}).items():
                     if result["applies"] and result["adjustment"] is not None:
-                        total_additive += result["adjustment"]
-                        self.logger.info(f"[CONF_DIAG] Added bonus.{bonus_name}: {result['adjustment']}, total_additive now: {total_additive}")
+                        adjustment = result["adjustment"]
+                        total_additive += adjustment
+                        unscaled_conditional += adjustment
+                        self.logger.info(
+                            f"[CONF_DIAG] Added bonus.{bonus_name}: {adjustment}, "
+                            f"total_additive now: {total_additive}, bucket=unscaled_conditional"
+                        )
                         breakdown.append(
-                            f"bonus.{bonus_name}: {result['adjustment']:+.1f} ({result['reason']})"
+                            f"bonus.{bonus_name}: {adjustment:+.1f} ({result['reason']})"
                         )
 
-        # Apply multipliers (if any) ONLY to structural adjustments (non-conditional bonuses)
+        final_multiplier = min(multipliers) if multipliers else 1.0
+        final_adjustment = (scaled_structural * final_multiplier) + unscaled_conditional
+
         if multipliers:
-            # Use most severe multiplier (lowest value)
-            final_multiplier = min(multipliers)
-            
-            # Recalculate to only scale volume and trend
-            scaled_structural = 0.0
-            unscaled_conditional = 0.0
-            
-            for category, modifiers in evaluation_results.items():
-                if category in ["volume_modifiers", "trend_strength_bands"]:
-                    for mod_name, result in modifiers.items():
-                        if result["applies"] and result["adjustment"] is not None:
-                            scaled_structural += result["adjustment"]
-                            self.logger.info(f"[CONF_DIAG] Recalc Added {category}.{mod_name}: {result['adjustment']}, scaled_structural now: {scaled_structural}")
-                elif category == "conditional_adjustments":
-                    for name, result in modifiers.get("penalties", {}).items():
-                        if result["applies"] and result["adjustment"] is not None:
-                            unscaled_conditional += result["adjustment"]
-                            self.logger.info(f"[CONF_DIAG] Recalc Added penalty.{name}: {result['adjustment']}, unscaled_conditional now: {unscaled_conditional}")
-                    for name, result in modifiers.get("bonuses", {}).items():
-                        if result["applies"] and result["adjustment"] is not None:
-                            unscaled_conditional += result["adjustment"]
-                            self.logger.info(f"[CONF_DIAG] Recalc Added bonus.{name}: {result['adjustment']}, unscaled_conditional now: {unscaled_conditional}")
-            
-            # Note: if scaled_structural = 0, this results in final_multiplier doing nothing, 
-            # and only conditional bonuses/penalties being applied. This is expected behavior (Issue D).
-            final_scaled_total = (scaled_structural * final_multiplier) + unscaled_conditional
             breakdown.append(f"Final multiplier (Structural only): ×{final_multiplier}")
-            
-            return {
-                "adjustment": final_scaled_total,
-                "breakdown": breakdown,
-                "multiplier": final_multiplier,
-                "block_entry": block_entry
-            }
-        else:
-            self.logger.info(f"[CONF_DIAG] Returning total_additive: {total_additive}")
-            return {
-                "adjustment": total_additive,
-                "breakdown": breakdown,
-                "multiplier": 1.0,
-                "block_entry": block_entry
-            }
+
+        self.logger.info(
+            f"[CONF_DIAG] Final confidence adjustment: {final_adjustment} "
+            f"(scaled_structural={scaled_structural}, "
+            f"unscaled_conditional={unscaled_conditional}, multiplier={final_multiplier})"
+        )
+        return {
+            "adjustment": final_adjustment,
+            "breakdown": breakdown,
+            "multiplier": final_multiplier,
+            "block_entry": block_entry
+        }
    
     # ========================================================================
     # GATE QUERIES (Most Important for Resolver)

@@ -1,8 +1,8 @@
-# 📈 Pro Stock Analyzer v15.3
+# 📈 Pro Stock Analyzer v15.4
 
 > **Institutional-Grade Algorithmic Trading Signal Engine for NSE (India)**
 
-![Version](https://img.shields.io/badge/version-15.3-blue)
+![Version](https://img.shields.io/badge/version-15.4-blue)
 ![Market](https://img.shields.io/badge/market-NSE%20India-orange)
 ![Stack](https://img.shields.io/badge/stack-Python%20%7C%20FastAPI%20%7C%20SQLite-green)
 ![Status](https://img.shields.io/badge/status-Production-brightgreen)
@@ -49,7 +49,7 @@
 
 ## Overview
 
-Pro Stock Analyzer v15.3 is an institutional-grade algorithmic trading signal engine targeting NSE-listed equities across four time horizons: `intraday`, `short_term`, `long_term`, and `multibagger`. The system ingests raw OHLCV data, evaluates multi-layered structural gate conditions, detects chart patterns with full lifecycle tracking, computes confidence-adjusted trade plans, and persists results with retry-safe database writes.
+Pro Stock Analyzer v15.4 is an institutional-grade algorithmic trading signal engine targeting NSE-listed equities across four time horizons: `intraday`, `short_term`, `long_term`, and `multibagger`. The system ingests raw OHLCV data, evaluates multi-layered structural gate conditions, detects chart patterns with full lifecycle tracking, computes confidence-adjusted trade plans, and persists results with retry-safe database writes.
 
 The core philosophy distinguishes stock *quality* (structural eligibility — "is this stock worth watching?") from trade *timing* (execution context — "can I enter right now?"). These are computed in two explicit, decoupled phases: a `build_evaluation_context_only` pass that produces indicators, scores, gates, confidence, and setup classification; followed by a `build_execution_context_from_evaluation` pass that layers position sizing, order model, and real-time RR validation on top of the already-computed evaluation. 
 
@@ -176,7 +176,7 @@ Setups are ranked using a `70/30` blend of importance and current-state fit:
 
 ## Version History & Changelog
 
-This section consolidates the architectural wash and the later resolved release notes so the progression from v15.1 through v15.5 is visible in one place.
+This section consolidates the architectural wash and the later resolved release notes so the progression from v15.1 through v15.4 is visible in one place.
 
 ### v15.1 Wash
 
@@ -202,7 +202,7 @@ The codebase has undergone a significant architectural "wash" across 9 major aud
 
 ---
 
-### v15.3-v15.5 Resolved Issues
+### v15.3-v15.4 Resolved Issues
 
 #### ✅ W64 — Decoupled Conflict Penalty (RESOLVED)
 
@@ -1776,7 +1776,13 @@ main.py                               # FastAPI app + lifespan
 
 ### Testing Patterns
 
-The system does not ship with a test suite but the following isolated components are pure functions suitable for unit testing:
+The repository now ships with lightweight but real validation tooling. The current committed validation surface includes:
+
+- `baktest/backtest_synthetic.py` for synthetic regression checks across signal, confidence, geometry, and architecture rules
+- `baktest/run_validation_suite.py` for full-pipeline validation orchestration
+- `tests/robustness/verify_invariants.py` for invariant-style robustness checks
+
+In addition to those executable validation assets, the following isolated components remain good candidates for focused unit testing:
 
 - `gate_evaluator.evaluate_gates()` — no dependencies
 - `config_extractor.ConfigExtractor` — requires only the config dicts
@@ -1800,4 +1806,4 @@ For integration testing, initialize `ConfigResolver` with `MASTER_CONFIG` for th
 
 ---
 
-*Pro Stock Analyzer v15.3 — NSE India — Quantitative Trading System*
+*Pro Stock Analyzer v15.4 — NSE India — Quantitative Trading System*

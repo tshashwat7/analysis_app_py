@@ -156,6 +156,28 @@ CONFIDENCE_CONFIG = {
                     "confidence_penalty": -10,
                     "reason": "Weak trend - sideways risk"
                 }
+            },
+
+            "score_excellence_rewards": {
+                "technical_excellence": {
+                    "gates": {"technicalScore": {"min": 8.0}},
+                    "confidence_boost": 15,
+                    "reason": "Exceptional technical setup strength"
+                },
+                "fundamental_excellence": {
+                    "gates": {"fundamentalScore": {"min": 7.5}},
+                    "confidence_boost": 10,
+                    "reason": "High-quality fundamental tailwind"
+                }
+            },
+
+            "structural_integrity_guards": {
+                "no_primary_pattern_penalty": {
+                    "gates": {"primaryPatternCount": {"max": 0}},
+                    "confidence_penalty": -20,
+                    "exclude_setups": ["GENERIC", "MOMENTUM_FLOW_CONTINUATION"],
+                    "reason": "Missing primary pattern for structural setup"
+                }
             }
         },
         

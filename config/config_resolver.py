@@ -2303,6 +2303,8 @@ class ConfigResolver:
         # ✅ S14 FIX: Include primary pattern in the confluence count
         primary_found = pv.get("primary_found", [])
         confirming_found = pv.get("confirming_found", [])
+        flat_data["primaryPatternCount"] = len(primary_found)
+        flat_data["primaryPatternName"] = primary_found[0] if primary_found else None
         flat_data["patternCount"] = len(primary_found) + len(confirming_found)
         
         # V15.0 Audit Fix: Inject conflict metrics for Step 8 modifier logic
@@ -2313,7 +2315,12 @@ class ConfigResolver:
         divergence_ctx = ctx.get("divergence", {})
         # ✅ BUG 2 PIVOT: Staying with camelCase per user project standard
         # Standardized key for consistency with query_optimized_extractor line 508.
-        flat_data["divergenceType"] = divergence_ctx.get("divergenceType") or "none"
+        flat_data["divergenceType"] = (
+            divergence_ctx.get("divergenceType")
+            or flat_data.get("divergenceType")
+            or ctx.get("indicators", {}).get("divergenceType")
+            or "none"
+        )
 
         # Inject individual pattern scores (Medium finding)
         # Rationale: Confidence bonuses like 'bearish_conviction' reference pattern names directly.
@@ -3332,9 +3339,9 @@ class ConfigResolver:
             confirming = setup_patterns.get("CONFIRMING", [])
             conflicting = setup_patterns.get("CONFLICTING", [])
 
-            primary_found = [p for p in detected if p in primary]
-            confirming_found = [p for p in detected if p in confirming]
-            conflicting_found = [p for p in detected if p in conflicting]
+            primary_found = [p for p in detected if p in primary and detected[p].get("found", True)]
+            confirming_found = [p for p in detected if p in confirming and detected[p].get("found", True)]
+            conflicting_found = [p for p in detected if p in conflicting and detected[p].get("found", True)]
 
             # ── Quality-weighted net pattern score ──────────────────
             # Old: flat +50 for any primary (score 2.0 == score 9.5), flat +10 per
